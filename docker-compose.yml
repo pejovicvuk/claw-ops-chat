@@ -8,8 +8,8 @@ services:
       - /root/.claude/.credentials.json:/root/.claude/.credentials.json:ro
       # Claude Code session persistence (read-write)
       - /root/.claude/projects:/root/.claude/projects
-      # Host filesystem access for Claude Code tools
-      - /root:/workspace
+      # Host filesystem access for Claude Code tools (mapped to same path for session consistency)
+      - /root:/root
       # Bitbucket skill (read-only)
       - ./skills/bitbucket:/opt/skills/bitbucket:ro
     ports:

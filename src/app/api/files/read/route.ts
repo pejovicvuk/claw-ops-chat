@@ -1,21 +1,28 @@
 import { readFile, stat } from "fs/promises";
-import { resolve } from "path";
-import { homedir } from "os";
-import { extractBearerToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { extractToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { safePath, SafePathError } from "@/lib/safe-path";
 
 const MAX_SIZE = 1024 * 1024; // 1MB
 
 export async function GET(request: Request) {
-  const token = extractBearerToken(request);
+  const token = extractToken(request);
   if (!token || !validateToken(token)) return unauthorized();
 
   const url = new URL(request.url);
-  let filePath = url.searchParams.get("path");
-  if (!filePath) {
+  const rawPath = url.searchParams.get("path");
+  if (!rawPath) {
     return Response.json({ error: "path parameter required" }, { status: 400 });
   }
-  if (filePath.startsWith("~")) filePath = filePath.replace("~", homedir());
-  filePath = resolve(filePath);
+
+  let filePath: string;
+  try {
+    filePath = await safePath(rawPath);
+  } catch (err) {
+    if (err instanceof SafePathError) {
+      return Response.json({ error: "Access denied" }, { status: 403 });
+    }
+    return Response.json({ error: "Invalid path" }, { status: 400 });
+  }
 
   try {
     const s = await stat(filePath);

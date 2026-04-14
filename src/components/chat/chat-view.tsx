@@ -1,7 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { FiArrowLeft, FiShield, FiChevronDown, FiTerminal, FiFile, FiEdit } from "react-icons/fi";
 import { useClaudeChat } from "@/lib/use-claude-chat";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
@@ -9,6 +9,8 @@ import { fetchSessionMessages } from "@/lib/api";
 import { StatusIndicator } from "./status-indicator";
 import { MessageBubble } from "./message-bubble";
 import { ChatInput } from "./chat-input";
+
+const MODE_STORAGE_KEY = "claw-chat-mode:v1";
 
 const MODE_LABELS: Record<string, string> = {
   default: "Default",
@@ -64,7 +66,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
   const [loadingHistory, setLoadingHistory] = useState(!!resumeSessionId);
   const [permissionMode, setMode] = useState<string>(() => {
     if (typeof window === "undefined") return "default";
-    return localStorage.getItem("claw-chat-mode:v1") || "default";
+    return localStorage.getItem(MODE_STORAGE_KEY) || "default";
   });
   const [effortLevel, setEffortLevel] = useState<string | null>(null);
   const [showModeMenu, setShowModeMenu] = useState(false);
@@ -72,7 +74,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
   const bridgeSyncedRef = useRef(false);
 
   useEffect(() => {
-    try { localStorage.setItem("claw-chat-mode:v1", permissionMode); } catch {}
+    try { localStorage.setItem(MODE_STORAGE_KEY, permissionMode); } catch {}
   }, [permissionMode]);
 
   useEffect(() => {
@@ -111,6 +113,15 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     userScrolledUpRef.current = !atBottom;
   };
+
+  /** Memoized sorted merge of chat messages and info messages. */
+  const sortedMessages = useMemo(() => {
+    const infoAsMsgs = infoMessages.map((m) => ({
+      ...m, role: "system" as const, type: "text" as const, _isInfo: true,
+    }));
+    return [...messages.map((m) => ({ ...m, _isInfo: false })), ...infoAsMsgs]
+      .sort((a, b) => a.timestamp - b.timestamp);
+  }, [messages, infoMessages]);
 
   return (
     <div
@@ -232,30 +243,23 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
               </p>
             </div>
           )}
-          {(() => {
-            const infoAsMsgs = infoMessages.map((m) => ({
-              ...m, role: "system" as const, type: "text" as const, _isInfo: true,
-            }));
-            const all = [...messages.map((m) => ({ ...m, _isInfo: false })), ...infoAsMsgs]
-              .sort((a, b) => a.timestamp - b.timestamp);
-            return all.map((msg) =>
-              msg._isInfo ? (
-                <div key={msg.id} className="animate-msg-in flex justify-center px-4 py-1.5">
-                  <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
-                    {msg.content}
-                  </span>
-                </div>
-              ) : (
-                <div key={msg.id} className="animate-msg-in">
-                  <MessageBubble
-                    message={msg}
-                    onPermissionRespond={respondPermission}
-                    onQuestionRespond={respondQuestion}
-                  />
-                </div>
-              ),
-            );
-          })()}
+          {sortedMessages.map((msg) =>
+            msg._isInfo ? (
+              <div key={msg.id} className="animate-msg-in flex justify-center px-4 py-1.5">
+                <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
+                  {msg.content}
+                </span>
+              </div>
+            ) : (
+              <div key={msg.id} className="animate-msg-in">
+                <MessageBubble
+                  message={msg}
+                  onPermissionRespond={respondPermission}
+                  onQuestionRespond={respondQuestion}
+                />
+              </div>
+            ),
+          )}
           {(status === "thinking" || status === "tool_running") && (
             <div className="animate-msg-in flex items-center gap-2 px-5 py-2">
               <span className="thinking-dots flex items-center gap-0.5">

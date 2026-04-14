@@ -1,4 +1,4 @@
-import { validateToken } from "@/lib/auth-server";
+import { validateToken, makeSessionCookie } from "@/lib/auth-server";
 
 export async function POST(request: Request) {
   const body = await request.json();
@@ -12,5 +12,12 @@ export async function POST(request: Request) {
     return Response.json({ error: "Invalid token" }, { status: 401 });
   }
 
-  return Response.json({ ok: true });
+  // Set httpOnly cookie so the token is no longer exposed to client-side JS
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Set-Cookie": makeSessionCookie(token),
+    },
+  });
 }

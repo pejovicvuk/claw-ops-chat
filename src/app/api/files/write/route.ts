@@ -1,22 +1,28 @@
 import { writeFile } from "fs/promises";
-import { resolve } from "path";
-import { homedir } from "os";
-import { extractBearerToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { extractToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { safePath, SafePathError } from "@/lib/safe-path";
 
 export async function POST(request: Request) {
-  const token = extractBearerToken(request);
+  const token = extractToken(request);
   if (!token || !validateToken(token)) return unauthorized();
 
   const body = await request.json();
-  let filePath = body?.path;
+  const rawPath = body?.path;
   const content = body?.content;
 
-  if (!filePath || typeof content !== "string") {
+  if (!rawPath || typeof content !== "string") {
     return Response.json({ error: "path and content required" }, { status: 400 });
   }
 
-  if (filePath.startsWith("~")) filePath = filePath.replace("~", homedir());
-  filePath = resolve(filePath);
+  let filePath: string;
+  try {
+    filePath = await safePath(rawPath);
+  } catch (err) {
+    if (err instanceof SafePathError) {
+      return Response.json({ error: "Access denied" }, { status: 403 });
+    }
+    return Response.json({ error: "Invalid path" }, { status: 400 });
+  }
 
   try {
     await writeFile(filePath, content, "utf-8");

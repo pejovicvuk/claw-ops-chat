@@ -16,6 +16,13 @@ services:
       - "${PORT:-3100}:${PORT:-3100}"
     init: true
     restart: unless-stopped
+    # Security: drop unnecessary capabilities
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    # Security: read-only root filesystem where possible
+    read_only: false
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://127.0.0.1:${PORT:-3100}/chat/api/health"]
       interval: 30s

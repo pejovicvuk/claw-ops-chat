@@ -4,6 +4,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getToken } from "@/lib/auth";
 import type { ChatMessage, ClaudeStatus, ActiveToolInfo } from "@/lib/types";
 
+/** Max reconnection delay in ms. */
+const MAX_RECONNECT_DELAY = 30_000;
+/** Base reconnection delay in ms. */
+const BASE_RECONNECT_DELAY = 1_000;
+
 export function useClaudeChat(sessionId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ClaudeStatus>("disconnected");
@@ -12,6 +17,10 @@ export function useClaudeChat(sessionId: string | null) {
   const wsRef = useRef<WebSocket | null>(null);
   const currentAssistantRef = useRef<string | null>(null);
   const currentThinkingRef = useRef<string | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Track whether the hook is intentionally closing (unmount/session change). */
+  const intentionalCloseRef = useRef(false);
 
   /* ── Pre-populate messages (for loading history) ── */
   const setInitialMessages = useCallback((msgs: ChatMessage[]) => {
@@ -248,8 +257,15 @@ export function useClaudeChat(sessionId: string | null) {
   const connect = useCallback(() => {
     if (!sessionId) return;
 
+    // Clear any pending reconnect timer
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
     wsRef.current?.close();
     wsRef.current = null;
+    intentionalCloseRef.current = false;
     setStatus("connecting");
 
     const token = getToken();
@@ -259,9 +275,16 @@ export function useClaudeChat(sessionId: string | null) {
     }
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    // Token is still passed as query param for backward compatibility;
+    // the server also reads the httpOnly cookie.
     const wsUrl = `${proto}//${window.location.host}/chat/ws/chat?token=${encodeURIComponent(token)}&session=${encodeURIComponent(sessionId)}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
+
+    ws.onopen = () => {
+      // Reset reconnection counter on successful connect
+      reconnectAttemptRef.current = 0;
+    };
 
     ws.onmessage = (event) => {
       try {
@@ -270,22 +293,39 @@ export function useClaudeChat(sessionId: string | null) {
           handleEvent(msg);
         }
       } catch {
-        // ignore
+        // ignore malformed messages
       }
     };
 
     ws.onclose = () => {
       if (wsRef.current === ws) {
-        setStatus("disconnected");
         wsRef.current = null;
+        setStatus("disconnected");
+
+        // Auto-reconnect with exponential backoff (unless intentionally closed)
+        if (!intentionalCloseRef.current) {
+          scheduleReconnect();
+        }
       }
     };
 
     ws.onerror = () => {
-      setStatus("disconnected");
-      wsRef.current = null;
+      // onclose will fire after onerror, so reconnection is handled there
     };
   }, [sessionId, handleEvent]);
+
+  /* ── Exponential backoff reconnection ── */
+  const scheduleReconnect = useCallback(() => {
+    const attempt = reconnectAttemptRef.current;
+    const delay = Math.min(BASE_RECONNECT_DELAY * Math.pow(2, attempt), MAX_RECONNECT_DELAY);
+    // Add jitter (0-25% of delay)
+    const jitter = Math.random() * delay * 0.25;
+
+    reconnectTimerRef.current = setTimeout(() => {
+      reconnectAttemptRef.current = attempt + 1;
+      connect();
+    }, delay + jitter);
+  }, [connect]);
 
   /* ── Send user message ── */
   const sendMessage = useCallback(
@@ -312,7 +352,7 @@ export function useClaudeChat(sessionId: string | null) {
 
       sendToServer({ type: "message", text: trimmed });
     },
-    [status, sendToServer, sessionId],
+    [status, sendToServer],
   );
 
   /* ── Permission response ── */
@@ -364,6 +404,7 @@ export function useClaudeChat(sessionId: string | null) {
 
   /* ── Reconnect ── */
   const reconnect = useCallback(() => {
+    reconnectAttemptRef.current = 0;
     connect();
   }, [connect]);
 
@@ -373,9 +414,31 @@ export function useClaudeChat(sessionId: string | null) {
     const id = requestAnimationFrame(() => connect());
     return () => {
       cancelAnimationFrame(id);
+      intentionalCloseRef.current = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
       wsRef.current?.close();
       wsRef.current = null;
     };
+  }, [sessionId, connect]);
+
+  /* ── Reconnect on page visibility change ── */
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (
+        document.visibilityState === "visible" &&
+        !wsRef.current &&
+        sessionId &&
+        !intentionalCloseRef.current
+      ) {
+        reconnectAttemptRef.current = 0;
+        connect();
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [sessionId, connect]);
 
   return {

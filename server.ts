@@ -14,6 +14,23 @@ const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT || "3100", 10);
 const CLAW_CHAT_TOKEN = process.env.CLAW_CHAT_TOKEN;
 
+/** Allowed origins for WebSocket connections. Auto-populated from ALLOWED_ORIGINS env or defaults. */
+const ALLOWED_ORIGINS = new Set(
+  (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean),
+);
+
+/** Permission/question response timeout in ms (default: 5 minutes). */
+const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "300000", 10);
+
+/** Heartbeat interval in ms (default: 30 seconds). */
+const HEARTBEAT_INTERVAL_MS = 30_000;
+
+/** Maximum WebSocket messages per second per session (default: 20). */
+const WS_RATE_LIMIT = parseInt(process.env.WS_RATE_LIMIT || "20", 10);
+
+/** Session cleanup delay after all clients disconnect (default: 60s). */
+const SESSION_CLEANUP_MS = 60_000;
+
 if (!CLAW_CHAT_TOKEN) {
   console.error("FATAL: CLAW_CHAT_TOKEN environment variable is required");
   process.exit(1);
@@ -35,6 +52,26 @@ interface ChatSession {
   effort: string | null;
   requestCounter: number;
   accumulatedText: string;
+  /** Rate limiting: message timestamps in the current sliding window. */
+  messageTimestamps: number[];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Cookie parsing                                                     */
+/* ------------------------------------------------------------------ */
+
+const COOKIE_NAME = "claw-session";
+
+function extractTokenFromCookies(cookieHeader: string | undefined): string | null {
+  if (!cookieHeader) return null;
+  const prefix = `${COOKIE_NAME}=`;
+  for (const part of cookieHeader.split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return decodeURIComponent(trimmed.slice(prefix.length));
+    }
+  }
+  return null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -59,6 +96,7 @@ class SessionManager {
         effort: null,
         requestCounter: 0,
         accumulatedText: "",
+        messageTimestamps: [],
       };
       this.sessions.set(sessionId, session);
     }
@@ -84,26 +122,65 @@ class SessionManager {
       this.send(ws, { type: "status", status: "thinking" });
     }
 
+    // Heartbeat: detect dead connections
+    let alive = true;
+    const heartbeat = setInterval(() => {
+      if (!alive) {
+        ws.terminate();
+        return;
+      }
+      alive = false;
+      ws.ping();
+    }, HEARTBEAT_INTERVAL_MS);
+
+    ws.on("pong", () => {
+      alive = true;
+    });
+
     ws.on("message", (data) => {
       try {
+        // Rate limiting
+        if (!this.checkRateLimit(session)) {
+          this.send(ws, { type: "error", message: "Rate limit exceeded. Slow down." });
+          return;
+        }
+
         const msg = JSON.parse(data.toString());
         this.handleMessage(session, ws, msg);
       } catch {
-        // ignore malformed messages
+        console.warn(`[session=${sessionId}] Malformed WebSocket message`);
       }
     });
 
     ws.on("close", () => {
+      clearInterval(heartbeat);
       session.clients.delete(ws);
       // Clean up empty sessions after a delay
       if (session.clients.size === 0) {
         setTimeout(() => {
           if (session.clients.size === 0 && !session.isProcessing) {
+            // Reject any pending requests before cleanup
+            for (const [id, resolver] of session.pendingRequests) {
+              resolver({ allow: false, message: "All clients disconnected" });
+              session.pendingRequests.delete(id);
+            }
             this.sessions.delete(session.id);
           }
-        }, 60000);
+        }, SESSION_CLEANUP_MS);
       }
     });
+  }
+
+  /** Sliding-window rate limiter. Returns false if the message should be rejected. */
+  private checkRateLimit(session: ChatSession): boolean {
+    const now = Date.now();
+    // Remove timestamps older than 1 second
+    session.messageTimestamps = session.messageTimestamps.filter((t) => now - t < 1000);
+    if (session.messageTimestamps.length >= WS_RATE_LIMIT) {
+      return false;
+    }
+    session.messageTimestamps.push(now);
+    return true;
   }
 
   private handleMessage(session: ChatSession, _ws: WebSocket, msg: Record<string, unknown>) {
@@ -349,10 +426,13 @@ class SessionManager {
       }
     } catch (err) {
       session.accumulatedText = "";
+      const safeMessage = err instanceof Error ? err.message : "Unknown error";
+      // Don't leak stack traces or internal paths to clients
       this.broadcast(session, {
         type: "error",
-        message: err instanceof Error ? err.message : "Unknown error",
+        message: safeMessage.includes("/") ? "Internal server error" : safeMessage,
       });
+      console.error(`[session=${session.id}] Query error:`, err);
     }
 
     session.isProcessing = false;
@@ -364,9 +444,23 @@ class SessionManager {
     }
   }
 
+  /**
+   * Wait for a client response (permission or question answer) with timeout.
+   * Auto-denies if no response is received within RESPONSE_TIMEOUT_MS.
+   */
   private waitForResponse(session: ChatSession, id: string): Promise<Record<string, unknown>> {
     return new Promise((resolve) => {
-      session.pendingRequests.set(id, resolve);
+      const timer = setTimeout(() => {
+        session.pendingRequests.delete(id);
+        console.warn(`[session=${session.id}] Response timeout for request ${id}`);
+        this.broadcast(session, { type: "status", status: "thinking" });
+        resolve({ allow: false, message: "Response timed out", answers: {} });
+      }, RESPONSE_TIMEOUT_MS);
+
+      session.pendingRequests.set(id, (response) => {
+        clearTimeout(timer);
+        resolve(response);
+      });
     });
   }
 
@@ -401,6 +495,31 @@ function validateToken(token: string): boolean {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Origin validation                                                  */
+/* ------------------------------------------------------------------ */
+
+function isOriginAllowed(origin: string | undefined): boolean {
+  // In dev mode, allow all origins
+  if (dev) return true;
+
+  // No origin header — could be a same-origin request or non-browser client
+  if (!origin) return true;
+
+  // Check explicit allowlist
+  if (ALLOWED_ORIGINS.size > 0) {
+    return ALLOWED_ORIGINS.has(origin);
+  }
+
+  // Default: allow same-host origins (any port)
+  try {
+    const url = new URL(origin);
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1" || origin.includes(".viksi.ai");
+  } catch {
+    return false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Start                                                              */
 /* ------------------------------------------------------------------ */
 
@@ -428,7 +547,20 @@ app.prepare().then(() => {
       return;
     }
 
-    const token = qs.token as string;
+    // Origin validation — prevent cross-site WebSocket hijacking
+    const origin = req.headers.origin;
+    if (!isOriginAllowed(origin)) {
+      console.warn(`[ws] Rejected connection from disallowed origin: ${origin}`);
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    // Authenticate: try cookie first, then query string token (for backward compat)
+    const cookieToken = extractTokenFromCookies(req.headers.cookie);
+    const queryToken = qs.token as string | undefined;
+    const token = cookieToken || queryToken;
+
     if (!token || !validateToken(token)) {
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();

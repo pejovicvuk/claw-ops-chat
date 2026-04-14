@@ -1,16 +1,24 @@
 import { readdir, stat } from "fs/promises";
-import { join, resolve } from "path";
-import { homedir } from "os";
-import { extractBearerToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { join } from "path";
+import { extractToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { safePath, SafePathError } from "@/lib/safe-path";
 
 export async function GET(request: Request) {
-  const token = extractBearerToken(request);
+  const token = extractToken(request);
   if (!token || !validateToken(token)) return unauthorized();
 
   const url = new URL(request.url);
-  let dirPath = url.searchParams.get("path") || "~";
-  if (dirPath === "~") dirPath = homedir();
-  dirPath = resolve(dirPath);
+  const rawPath = url.searchParams.get("path") || "~";
+
+  let dirPath: string;
+  try {
+    dirPath = await safePath(rawPath);
+  } catch (err) {
+    if (err instanceof SafePathError) {
+      return Response.json({ error: "Access denied" }, { status: 403 });
+    }
+    return Response.json({ error: "Invalid path" }, { status: 400 });
+  }
 
   try {
     const entries = await readdir(dirPath, { withFileTypes: true });

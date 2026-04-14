@@ -53,11 +53,32 @@ export async function uploadFile(dirPath: string, file: File): Promise<void> {
   if (!res.ok) throw new Error("Failed to upload file");
 }
 
-export function downloadFile(path: string): void {
-  const token = typeof window !== "undefined"
-    ? sessionStorage.getItem("claw-chat-token:v1") || ""
-    : "";
-  window.open(`${BASE}/api/files/download?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`);
+/**
+ * Download a file. Uses authenticated fetch + blob URL instead of
+ * exposing the auth token in a query string via window.open().
+ */
+export async function downloadFile(path: string): Promise<void> {
+  const res = await authFetch(`${BASE}/api/files/download?path=${encodeURIComponent(path)}`);
+  if (!res.ok) throw new Error("Failed to download file");
+
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+
+  // Extract filename from Content-Disposition header or fall back to path basename
+  let filename = path.split("/").pop() || "download";
+  const disposition = res.headers.get("Content-Disposition");
+  if (disposition) {
+    const match = disposition.match(/filename="([^"]+)"/);
+    if (match) filename = match[1];
+  }
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 export async function deleteFile(path: string): Promise<void> {

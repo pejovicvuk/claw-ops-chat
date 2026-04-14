@@ -7,7 +7,9 @@
     "dev:next": "next dev",
     "build": "next build && tsc server.ts --outDir . --esModuleInterop --module commonjs --target ES2020 --skipLibCheck",
     "start": "node server.js",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.107",
@@ -31,6 +33,7 @@
     "eslint-config-next": "16.2.3",
     "tailwindcss": "^4",
     "tsx": "^4.21.0",
-    "typescript": "^5"
+    "typescript": "file:../../tmp/typescript-5.9.3.tgz",
+    "vitest": "^4.1.4"
   }
 }

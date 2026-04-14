@@ -64,17 +64,21 @@ export async function GET(
         const entry = JSON.parse(line);
 
         // User messages: {type: "user", message: {role: "user", content: "string"}}
+        // Skip tool_result arrays and slash commands
         if (entry.type === "user" && entry.message?.role === "user") {
-          const text = extractText(entry.message.content);
-          if (text) {
-            messages.push({
-              id: `hist-${counter++}`,
-              role: "user",
-              type: "text",
-              content: text,
-              timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : 0,
-            });
-          }
+          const raw = entry.message.content;
+          // Skip if content is an array (tool results, not real user messages)
+          if (Array.isArray(raw)) continue;
+          const text = typeof raw === "string" ? raw : "";
+          // Skip slash commands
+          if (!text || text.startsWith("/")) continue;
+          messages.push({
+            id: `hist-${counter++}`,
+            role: "user",
+            type: "text",
+            content: text,
+            timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : 0,
+          });
         }
 
         // Assistant messages: {type: "assistant", message: {role: "assistant", content: [{type: "text", text: "..."}, ...]}}

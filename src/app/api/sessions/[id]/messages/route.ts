@@ -63,15 +63,27 @@ export async function GET(
       try {
         const entry = JSON.parse(line);
 
-        // User messages: {type: "user", message: {role: "user", content: "string"}}
-        // Skip tool_result arrays and slash commands
+        // User messages — two formats:
+        //   CLI: {type: "user", message: {role: "user", content: "plain string"}}
+        //   SDK: {type: "user", message: {role: "user", content: [{type: "text", text: "..."}, ...]}}
+        // Skip: tool_result-only arrays, slash commands, XML command tags
         if (entry.type === "user" && entry.message?.role === "user") {
           const raw = entry.message.content;
-          // Skip if content is an array (tool results, not real user messages)
-          if (Array.isArray(raw)) continue;
-          const text = typeof raw === "string" ? raw : "";
-          // Skip slash commands
-          if (!text || text.startsWith("/")) continue;
+          let text = "";
+          if (typeof raw === "string") {
+            text = raw;
+          } else if (Array.isArray(raw)) {
+            // Extract text blocks, skip if only tool_results
+            const textParts: string[] = [];
+            for (const block of raw) {
+              if (block.type === "text" && typeof block.text === "string") {
+                textParts.push(block.text);
+              }
+            }
+            text = textParts.join("\n");
+          }
+          // Skip empty, slash commands, and XML command tags
+          if (!text || text.startsWith("/") || text.startsWith("<")) continue;
           messages.push({
             id: `hist-${counter++}`,
             role: "user",

@@ -391,7 +391,7 @@ app.prepare().then(() => {
   server.on("upgrade", (req: IncomingMessage, socket, head) => {
     const { pathname, query: qs } = parse(req.url || "/", true);
 
-    if (pathname !== "/ws/chat") {
+    if (pathname !== "/ws/chat" && pathname !== "/chat/ws/chat") {
       // Pass to Next.js for HMR and other internal WebSockets
       nextUpgradeHandler(req, socket, head);
       return;

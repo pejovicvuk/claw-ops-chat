@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  basePath: "/chat",
   reactStrictMode: true,
   poweredByHeader: false,
   headers: async () => [

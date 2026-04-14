@@ -259,7 +259,7 @@ export function useClaudeChat(sessionId: string | null) {
     }
 
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${proto}//${window.location.host}/ws/chat?token=${encodeURIComponent(token)}&session=${encodeURIComponent(sessionId)}`;
+    const wsUrl = `${proto}//${window.location.host}/chat/ws/chat?token=${encodeURIComponent(token)}&session=${encodeURIComponent(sessionId)}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

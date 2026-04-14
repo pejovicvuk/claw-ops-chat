@@ -128,6 +128,7 @@ class SessionManager {
             return "";
         };
         const queryOptions = {
+            cwd: process.env.CLAUDE_CWD || "/root",
             includePartialMessages: true,
             canUseTool: async (toolName, input) => {
                 // Handle AskUserQuestion

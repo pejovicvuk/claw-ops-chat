@@ -151,6 +151,7 @@ class SessionManager {
     };
 
     const queryOptions: Record<string, unknown> = {
+      cwd: process.env.CLAUDE_CWD || "/root",
       includePartialMessages: true,
       canUseTool: async (toolName: string, input: Record<string, unknown>) => {
         // Handle AskUserQuestion

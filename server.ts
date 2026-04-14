@@ -199,7 +199,32 @@ class SessionManager {
     }
 
     try {
-      for await (const message of query(queryParams as Parameters<typeof query>[0])) {
+      let messageStream;
+      try {
+        messageStream = query(queryParams as Parameters<typeof query>[0]);
+        // Try to get the first message to detect resume failures early
+        const first = await (messageStream as AsyncIterableIterator<unknown>).next();
+        if (!first.done) {
+          // Process the first message
+          const msg = first.value as Record<string, unknown>;
+          if (msg.type === "system" && msg.subtype === "init") {
+            session.claudeSessionId = msg.session_id as string;
+            this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
+          }
+        }
+      } catch (resumeErr) {
+        // Resume failed — retry without resume
+        const errMsg = resumeErr instanceof Error ? resumeErr.message : "";
+        if (errMsg.includes("No conversation found") || errMsg.includes("session")) {
+          delete (queryParams.options as Record<string, unknown>).resume;
+          session.claudeSessionId = null;
+          messageStream = query(queryParams as Parameters<typeof query>[0]);
+        } else {
+          throw resumeErr;
+        }
+      }
+
+      for await (const message of messageStream!) {
         const msg = message as Record<string, unknown>;
 
         // Session init

@@ -171,7 +171,33 @@ class SessionManager {
             queryParams.options.resume = resumeId;
         }
         try {
-            for await (const message of (0, claude_agent_sdk_1.query)(queryParams)) {
+            let messageStream;
+            try {
+                messageStream = (0, claude_agent_sdk_1.query)(queryParams);
+                // Try to get the first message to detect resume failures early
+                const first = await messageStream.next();
+                if (!first.done) {
+                    // Process the first message
+                    const msg = first.value;
+                    if (msg.type === "system" && msg.subtype === "init") {
+                        session.claudeSessionId = msg.session_id;
+                        this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
+                    }
+                }
+            }
+            catch (resumeErr) {
+                // Resume failed — retry without resume
+                const errMsg = resumeErr instanceof Error ? resumeErr.message : "";
+                if (errMsg.includes("No conversation found") || errMsg.includes("session")) {
+                    delete queryParams.options.resume;
+                    session.claudeSessionId = null;
+                    messageStream = (0, claude_agent_sdk_1.query)(queryParams);
+                }
+                else {
+                    throw resumeErr;
+                }
+            }
+            for await (const message of messageStream) {
                 const msg = message;
                 // Session init
                 if (msg.type === "system" && msg.subtype === "init") {

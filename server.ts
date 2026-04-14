@@ -385,11 +385,15 @@ app.prepare().then(() => {
 
   const wss = new WebSocketServer({ noServer: true });
 
+  // Let Next.js handle its own upgrade requests (HMR etc.)
+  const nextUpgradeHandler = app.getUpgradeHandler();
+
   server.on("upgrade", (req: IncomingMessage, socket, head) => {
     const { pathname, query: qs } = parse(req.url || "/", true);
 
     if (pathname !== "/ws/chat") {
-      socket.destroy();
+      // Pass to Next.js for HMR and other internal WebSockets
+      nextUpgradeHandler(req, socket, head);
       return;
     }
 

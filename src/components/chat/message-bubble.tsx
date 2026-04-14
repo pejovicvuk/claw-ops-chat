@@ -158,15 +158,16 @@ export function MessageBubble({ message, onPermissionRespond, onQuestionRespond 
 }
 
 function AssistantTextContent({ content }: { content: string }) {
-  if (!hasBoxDrawing(content)) {
+  const text = typeof content === "string" ? content : String(content ?? "");
+  if (!hasBoxDrawing(text)) {
     return (
       <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {content}
+        {text}
       </Markdown>
     );
   }
 
-  const lines = content.split("\n");
+  const lines = text.split("\n");
   const segments: Array<{ type: "text" | "box"; content: string }> = [];
   let current: { type: "text" | "box"; lines: string[] } | null = null;
 

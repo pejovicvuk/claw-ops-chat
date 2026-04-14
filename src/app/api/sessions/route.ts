@@ -9,6 +9,19 @@ interface SessionEntry {
   timestamp: number;
 }
 
+/** Extract plain text from a Claude Code message content field */
+function extractText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      if (block.type === "text" && typeof block.text === "string") {
+        return block.text;
+      }
+    }
+  }
+  return "";
+}
+
 export async function GET(request: Request) {
   const token = extractBearerToken(request);
   if (!token || !validateToken(token)) return unauthorized();
@@ -40,10 +53,8 @@ export async function GET(request: Request) {
           for (const line of lines) {
             try {
               const entry = JSON.parse(line);
-              if (entry.type === "human" || entry.role === "user") {
-                const text = typeof entry.message === "string"
-                  ? entry.message
-                  : entry.message?.content || entry.content || "";
+              if (entry.type === "user" && entry.message?.role === "user") {
+                const text = extractText(entry.message.content);
                 if (text) {
                   display = text.slice(0, 100);
                   break;

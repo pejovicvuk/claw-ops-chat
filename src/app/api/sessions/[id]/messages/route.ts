@@ -11,6 +11,21 @@ interface MessageEntry {
   timestamp: number;
 }
 
+/** Extract plain text from a Claude Code message content field */
+function extractText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const textParts: string[] = [];
+    for (const block of content) {
+      if (block.type === "text" && typeof block.text === "string") {
+        textParts.push(block.text);
+      }
+    }
+    return textParts.join("\n");
+  }
+  return "";
+}
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -48,32 +63,30 @@ export async function GET(
       try {
         const entry = JSON.parse(line);
 
-        if (entry.type === "human" || entry.role === "user") {
-          const text = typeof entry.message === "string"
-            ? entry.message
-            : entry.message?.content || entry.content || "";
+        // User messages: {type: "user", message: {role: "user", content: "string"}}
+        if (entry.type === "user" && entry.message?.role === "user") {
+          const text = extractText(entry.message.content);
           if (text) {
             messages.push({
               id: `hist-${counter++}`,
               role: "user",
               type: "text",
               content: text,
-              timestamp: entry.timestamp || 0,
+              timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : 0,
             });
           }
         }
 
-        if (entry.type === "assistant" || entry.role === "assistant") {
-          const text = typeof entry.message === "string"
-            ? entry.message
-            : entry.message?.content || entry.content || "";
+        // Assistant messages: {type: "assistant", message: {role: "assistant", content: [{type: "text", text: "..."}, ...]}}
+        if (entry.type === "assistant" && entry.message?.role === "assistant") {
+          const text = extractText(entry.message.content);
           if (text) {
             messages.push({
               id: `hist-${counter++}`,
               role: "assistant",
               type: "text",
               content: text,
-              timestamp: entry.timestamp || 0,
+              timestamp: entry.timestamp ? new Date(entry.timestamp).getTime() : 0,
             });
           }
         }

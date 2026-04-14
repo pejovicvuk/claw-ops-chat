@@ -48,8 +48,13 @@ export function ChatLayout({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [currentBrowserPath, setCurrentBrowserPath] = useState("~");
 
-  // Session ID to use for WebSocket connection (either existing or new)
-  const sessionId = selectedSessionId || "new-" + Date.now();
+  // Stable session ID — only changes when user explicitly picks a session or clicks New Chat.
+  const [sessionId, setSessionId] = useState(() => selectedSessionId || "new-" + Date.now());
+
+  // Update when user picks a different session or clicks New Chat
+  useEffect(() => {
+    setSessionId(selectedSessionId || "new-" + Date.now());
+  }, [selectedSessionId]);
 
   const handleCopyPath = useCallback((path: string) => {
     const atPath = `@${path}`;

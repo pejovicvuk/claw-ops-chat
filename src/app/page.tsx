@@ -65,7 +65,8 @@ export default function ChatPage() {
   }, []);
 
   const handleSessionCreated = useCallback((claudeSessionId: string) => {
-    setSelectedSessionId(claudeSessionId);
+    // Save for persistence but don't re-key the active ChatView
+    try { localStorage.setItem(STORAGE_KEY, claudeSessionId); } catch {}
     loadSessions();
   }, [loadSessions]);
 

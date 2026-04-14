@@ -138,8 +138,13 @@ export function MessageBubble({ message, onPermissionRespond, onQuestionRespond 
     );
   }
 
-  if (message.type === "tool_use") return <ToolUseIndicator message={message} />;
-  if (message.type === "tool_result") return <ToolResultBlock message={message} />;
+  /* Tool use indicators — hidden to reduce noise */
+  if (message.type === "tool_use") return null;
+  /* Tool results — only show errors */
+  if (message.type === "tool_result") {
+    if (!(message.isError ?? false)) return null;
+    return <ToolResultBlock message={message} />;
+  }
   if (message.type === "thinking") return <ThinkingBlock message={message} />;
   if (message.type === "permission_request") return <PermissionRequestBlock message={message} onRespond={onPermissionRespond} />;
   if (message.type === "ask_question") return <AskQuestionBlock message={message} onRespond={onQuestionRespond} />;
@@ -259,7 +264,7 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
 }
 
 function ThinkingBlock({ message }: { message: ChatMessage }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
 
   if (!message.content) return null;
 

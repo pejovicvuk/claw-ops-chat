@@ -148,13 +148,23 @@ export function ChatLayout({
             onSessionCreated={onSessionCreated}
             headerless
             fileButton={
-              <button
-                type="button"
-                onClick={() => setFilesPanelOpen(true)}
-                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-              >
-                <FiFolder size={18} />
-              </button>
+              <div className="flex items-center">
+                <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUpload} />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                >
+                  <FiUpload size={17} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilesPanelOpen(true)}
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                >
+                  <FiFolder size={18} />
+                </button>
+              </div>
             }
           />
         </div>

@@ -13,6 +13,7 @@ export function useClaudeChat(sessionId: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ClaudeStatus>("disconnected");
   const [activeTool, setActiveTool] = useState<ActiveToolInfo | null>(null);
+  const [claudeSessionId, setClaudeSessionId] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const currentAssistantRef = useRef<string | null>(null);
@@ -58,6 +59,7 @@ export function useClaudeChat(sessionId: string | null) {
       }
 
       if (type === "session_init") {
+        setClaudeSessionId(evt.sessionId as string);
         return;
       }
 
@@ -446,6 +448,7 @@ export function useClaudeChat(sessionId: string | null) {
     messages,
     status,
     activeTool,
+    claudeSessionId,
     sendMessage,
     respondPermission,
     respondQuestion,

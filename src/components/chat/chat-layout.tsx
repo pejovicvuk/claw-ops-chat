@@ -21,6 +21,7 @@ interface ChatLayoutProps {
   onRefreshSessions: () => void;
   sessionsLoading: boolean;
   runningSessionIds?: Set<string>;
+  onSessionCreated?: (claudeSessionId: string) => void;
 }
 
 export function ChatLayout({
@@ -31,6 +32,7 @@ export function ChatLayout({
   onRefreshSessions,
   sessionsLoading,
   runningSessionIds,
+  onSessionCreated,
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
   const { viewportHeight } = useVisualViewport();
@@ -138,6 +140,7 @@ export function ChatLayout({
             key={sessionId}
             sessionId={sessionId}
             resumeSessionId={selectedSessionId}
+            onSessionCreated={onSessionCreated}
             headerless
             fileButton={
               <button
@@ -244,6 +247,7 @@ export function ChatLayout({
             key={sessionId}
             sessionId={sessionId}
             resumeSessionId={selectedSessionId}
+            onSessionCreated={onSessionCreated}
             headerless
           />
         </main>

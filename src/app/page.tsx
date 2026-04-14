@@ -64,6 +64,11 @@ export default function ChatPage() {
     setSelectedSessionId(sessionId);
   }, []);
 
+  const handleSessionCreated = useCallback((claudeSessionId: string) => {
+    setSelectedSessionId(claudeSessionId);
+    loadSessions();
+  }, [loadSessions]);
+
   if (!ready) {
     return (
       <div className="flex h-dvh items-center justify-center bg-canvas-bg">
@@ -81,6 +86,7 @@ export default function ChatPage() {
         onNewChat={handleNewChat}
         onRefreshSessions={loadSessions}
         sessionsLoading={sessionsLoading}
+        onSessionCreated={handleSessionCreated}
       />
     </div>
   );

@@ -55,10 +55,12 @@ interface ChatViewProps {
   onBack?: () => void;
   headerless?: boolean;
   fileButton?: ReactNode;
+  onSessionCreated?: (claudeSessionId: string) => void;
 }
 
-export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileButton }: ChatViewProps) {
-  const { messages, status, activeTool, sendMessage, respondPermission, respondQuestion, setPermissionMode, setEffort, reconnect, setInitialMessages } = useClaudeChat(sessionId);
+export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileButton, onSessionCreated }: ChatViewProps) {
+  const { messages, status, activeTool, claudeSessionId, sendMessage, respondPermission, respondQuestion, setPermissionMode, setEffort, reconnect, setInitialMessages } = useClaudeChat(sessionId);
+  const notifiedSessionRef = useRef<string | null>(null);
   const { viewportHeight } = useVisualViewport();
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -76,6 +78,14 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
   useEffect(() => {
     try { localStorage.setItem(MODE_STORAGE_KEY, permissionMode); } catch {}
   }, [permissionMode]);
+
+  /* Notify parent when SDK creates a new session (so page can update selected session) */
+  useEffect(() => {
+    if (claudeSessionId && claudeSessionId !== notifiedSessionRef.current) {
+      notifiedSessionRef.current = claudeSessionId;
+      onSessionCreated?.(claudeSessionId);
+    }
+  }, [claudeSessionId, onSessionCreated]);
 
   useEffect(() => {
     if (status === "idle" && !bridgeSyncedRef.current) {

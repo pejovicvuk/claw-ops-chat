@@ -1,0 +1,24 @@
+services:
+  claw-chat:
+    build: .
+    container_name: claw-chat
+    env_file: .env
+    volumes:
+      # Claude Code auth (read-only)
+      - /root/.claude/.credentials.json:/root/.claude/.credentials.json:ro
+      # Claude Code session persistence (read-write)
+      - /root/.claude/projects:/root/.claude/projects
+      # Host filesystem access for Claude Code tools
+      - /root:/workspace
+      # Bitbucket skill (read-only)
+      - ./skills/bitbucket:/opt/skills/bitbucket:ro
+    ports:
+      - "${PORT:-3100}:${PORT:-3100}"
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:${PORT:-3100}/chat/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s

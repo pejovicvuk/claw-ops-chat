@@ -16,7 +16,8 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/auth/verify", {
+      const base = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
+      const res = await fetch(`${base}/api/auth/verify`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: token.trim() }),

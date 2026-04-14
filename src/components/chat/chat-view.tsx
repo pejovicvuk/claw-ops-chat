@@ -123,6 +123,14 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
       .sort((a, b) => a.timestamp - b.timestamp);
   }, [messages, infoMessages]);
 
+  /** Find the ID of the latest tool_use message (for live activity indicator). */
+  const latestToolUseId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type === "tool_use") return messages[i].id;
+    }
+    return null;
+  }, [messages]);
+
   return (
     <div
       className="flex flex-1 flex-col"
@@ -254,6 +262,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
               <div key={msg.id} className="animate-msg-in">
                 <MessageBubble
                   message={msg}
+                  isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
                   onPermissionRespond={respondPermission}
                   onQuestionRespond={respondQuestion}
                 />
@@ -268,7 +277,9 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                 <span className="thinking-dot h-1.5 w-1.5 rounded-full bg-purple-400" />
               </span>
               <span className="text-[11px] text-canvas-muted">
-                {status === "tool_running" ? "Working..." : "Thinking..."}
+                {status === "tool_running" && activeTool
+                  ? `Running ${activeTool.name}...`
+                  : "Thinking..."}
               </span>
             </div>
           )}
@@ -284,14 +295,20 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
           const permDesc = pending.content || getPermDescForModal(toolName, pending.permissionInput);
           return (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
-              <div className="mx-4 w-full max-w-sm rounded-xl border border-orange-500/30 bg-canvas-bg p-4 shadow-2xl">
-                <div className="mb-3 flex items-center gap-2">
-                  <PermIcon size={16} className="shrink-0 text-orange-400" />
-                  <span className="text-[13px] font-semibold text-canvas-fg">Permission required</span>
+              <div className="animate-modal-in mx-4 w-full max-w-sm rounded-xl border border-orange-500/30 bg-canvas-bg p-5 shadow-2xl">
+                <div className="mb-4 flex items-center gap-3">
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/10">
+                    <PermIcon size={18} className="text-orange-400" />
+                  </div>
+                  <div>
+                    <p className="text-[14px] font-semibold text-canvas-fg">{permLabel}</p>
+                    <p className="text-[11px] text-canvas-muted">Claude wants to use this tool</p>
+                  </div>
                 </div>
-                <p className="mb-1 text-[13px] text-canvas-fg">{permLabel}</p>
                 {permDesc && (
-                  <p className="mb-4 break-all font-mono text-[11px] text-canvas-muted">{permDesc}</p>
+                  <div className="mb-4 rounded-lg bg-canvas-surface-hover p-3">
+                    <p className="break-all font-mono text-[11px] leading-relaxed text-canvas-muted">{permDesc}</p>
+                  </div>
                 )}
                 <div className="space-y-2">
                   <div className="flex gap-2">
@@ -324,7 +341,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                     }}
                     className="w-full rounded-lg border border-green-600/30 bg-green-600/10 px-3 py-2 text-[12px] font-medium text-green-400 active:bg-green-600/20"
                   >
-                    Allow all {toolName} this session
+                    Always allow {toolName} this session
                   </button>
                 </div>
               </div>

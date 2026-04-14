@@ -254,7 +254,27 @@ class SessionManager {
           return { behavior: "allow", updatedInput: input };
         }
 
-        // Request permission from connected clients
+        // Mode-aware auto-approval
+        const SAFE_TOOLS = new Set(["Read", "Glob", "Grep", "Agent", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"]);
+        const EDIT_TOOLS = new Set(["Write", "Edit"]);
+        const mode = session.permissionMode;
+
+        if (mode === "acceptEdits") {
+          // Auto-allow safe tools + edit tools, ask for Bash and others
+          if (SAFE_TOOLS.has(toolName) || EDIT_TOOLS.has(toolName)) {
+            return { behavior: "allow", updatedInput: input };
+          }
+        } else if (mode === "plan") {
+          // Read-only: allow safe tools, deny everything else
+          if (SAFE_TOOLS.has(toolName)) {
+            return { behavior: "allow", updatedInput: input };
+          }
+          if (EDIT_TOOLS.has(toolName) || toolName === "Bash") {
+            return { behavior: "deny", message: "Plan mode: no edits or commands allowed" };
+          }
+        }
+
+        // Default mode (or tools not auto-handled above): ask the user
         const id = `req-${++session.requestCounter}`;
         const description = getToolDescription(toolName, input);
         this.broadcast(session, { type: "permission_request", id, toolName, input, description });
@@ -270,8 +290,6 @@ class SessionManager {
         }
         return { behavior: "deny", message: response.message || "User denied this action" };
       },
-      permissionMode: session.permissionMode,
-      allowDangerouslySkipPermissions: session.permissionMode === "bypassPermissions",
       ...(session.effort ? { effort: session.effort } : {}),
     };
 

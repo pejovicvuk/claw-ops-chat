@@ -111,11 +111,12 @@ const markdownComponents = {
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  isLatestToolUse?: boolean;
   onPermissionRespond?: (id: string, allow: boolean, allowSession?: boolean) => void;
   onQuestionRespond?: (id: string, answers: Record<string, string>) => void;
 }
 
-export function MessageBubble({ message, onPermissionRespond, onQuestionRespond }: MessageBubbleProps) {
+export function MessageBubble({ message, isLatestToolUse, onPermissionRespond, onQuestionRespond }: MessageBubbleProps) {
   if (message.type === "error") {
     return (
       <div className="flex justify-center px-4 py-1.5">
@@ -138,8 +139,11 @@ export function MessageBubble({ message, onPermissionRespond, onQuestionRespond 
     );
   }
 
-  /* Tool use indicators — hidden to reduce noise */
-  if (message.type === "tool_use") return null;
+  /* Tool use — only show the latest one (live activity indicator) */
+  if (message.type === "tool_use") {
+    if (!isLatestToolUse) return null;
+    return <ToolUseIndicator message={message} />;
+  }
   /* Tool results — only show errors */
   if (message.type === "tool_result") {
     if (!(message.isError ?? false)) return null;
@@ -264,7 +268,7 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
 }
 
 function ThinkingBlock({ message }: { message: ChatMessage }) {
-  const [collapsed, setCollapsed] = useState(true);
+  const [collapsed, setCollapsed] = useState(false);
 
   if (!message.content) return null;
 

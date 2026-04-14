@@ -16,9 +16,35 @@ const crypto_1 = require("crypto");
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT || "3100", 10);
 const CLAW_CHAT_TOKEN = process.env.CLAW_CHAT_TOKEN;
+/** Allowed origins for WebSocket connections. Auto-populated from ALLOWED_ORIGINS env or defaults. */
+const ALLOWED_ORIGINS = new Set((process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean));
+/** Permission/question response timeout in ms (default: 5 minutes). */
+const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "300000", 10);
+/** Heartbeat interval in ms (default: 30 seconds). */
+const HEARTBEAT_INTERVAL_MS = 30000;
+/** Maximum WebSocket messages per second per session (default: 20). */
+const WS_RATE_LIMIT = parseInt(process.env.WS_RATE_LIMIT || "20", 10);
+/** Session cleanup delay after all clients disconnect (default: 60s). */
+const SESSION_CLEANUP_MS = 60000;
 if (!CLAW_CHAT_TOKEN) {
     console.error("FATAL: CLAW_CHAT_TOKEN environment variable is required");
     process.exit(1);
+}
+/* ------------------------------------------------------------------ */
+/*  Cookie parsing                                                     */
+/* ------------------------------------------------------------------ */
+const COOKIE_NAME = "claw-session";
+function extractTokenFromCookies(cookieHeader) {
+    if (!cookieHeader)
+        return null;
+    const prefix = `${COOKIE_NAME}=`;
+    for (const part of cookieHeader.split(";")) {
+        const trimmed = part.trim();
+        if (trimmed.startsWith(prefix)) {
+            return decodeURIComponent(trimmed.slice(prefix.length));
+        }
+    }
+    return null;
 }
 /* ------------------------------------------------------------------ */
 /*  Session Manager                                                    */
@@ -42,6 +68,7 @@ class SessionManager {
                 effort: null,
                 requestCounter: 0,
                 accumulatedText: "",
+                messageTimestamps: [],
             };
             this.sessions.set(sessionId, session);
         }
@@ -63,26 +90,61 @@ class SessionManager {
         if (session.isProcessing) {
             this.send(ws, { type: "status", status: "thinking" });
         }
+        // Heartbeat: detect dead connections
+        let alive = true;
+        const heartbeat = setInterval(() => {
+            if (!alive) {
+                ws.terminate();
+                return;
+            }
+            alive = false;
+            ws.ping();
+        }, HEARTBEAT_INTERVAL_MS);
+        ws.on("pong", () => {
+            alive = true;
+        });
         ws.on("message", (data) => {
             try {
+                // Rate limiting
+                if (!this.checkRateLimit(session)) {
+                    this.send(ws, { type: "error", message: "Rate limit exceeded. Slow down." });
+                    return;
+                }
                 const msg = JSON.parse(data.toString());
                 this.handleMessage(session, ws, msg);
             }
             catch {
-                // ignore malformed messages
+                console.warn(`[session=${sessionId}] Malformed WebSocket message`);
             }
         });
         ws.on("close", () => {
+            clearInterval(heartbeat);
             session.clients.delete(ws);
             // Clean up empty sessions after a delay
             if (session.clients.size === 0) {
                 setTimeout(() => {
                     if (session.clients.size === 0 && !session.isProcessing) {
+                        // Reject any pending requests before cleanup
+                        for (const [id, resolver] of session.pendingRequests) {
+                            resolver({ allow: false, message: "All clients disconnected" });
+                            session.pendingRequests.delete(id);
+                        }
                         this.sessions.delete(session.id);
                     }
-                }, 60000);
+                }, SESSION_CLEANUP_MS);
             }
         });
+    }
+    /** Sliding-window rate limiter. Returns false if the message should be rejected. */
+    checkRateLimit(session) {
+        const now = Date.now();
+        // Remove timestamps older than 1 second
+        session.messageTimestamps = session.messageTimestamps.filter((t) => now - t < 1000);
+        if (session.messageTimestamps.length >= WS_RATE_LIMIT) {
+            return false;
+        }
+        session.messageTimestamps.push(now);
+        return true;
     }
     handleMessage(session, _ws, msg) {
         const type = msg.type;
@@ -151,7 +213,26 @@ class SessionManager {
                 if (session.sessionAllowedTools.has(toolName)) {
                     return { behavior: "allow", updatedInput: input };
                 }
-                // Request permission from connected clients
+                // Mode-aware auto-approval
+                const SAFE_TOOLS = new Set(["Read", "Glob", "Grep", "Agent", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"]);
+                const EDIT_TOOLS = new Set(["Write", "Edit"]);
+                const mode = session.permissionMode;
+                if (mode === "acceptEdits") {
+                    // Auto-allow safe tools + edit tools, ask for Bash and others
+                    if (SAFE_TOOLS.has(toolName) || EDIT_TOOLS.has(toolName)) {
+                        return { behavior: "allow", updatedInput: input };
+                    }
+                }
+                else if (mode === "plan") {
+                    // Read-only: allow safe tools, deny everything else
+                    if (SAFE_TOOLS.has(toolName)) {
+                        return { behavior: "allow", updatedInput: input };
+                    }
+                    if (EDIT_TOOLS.has(toolName) || toolName === "Bash") {
+                        return { behavior: "deny", message: "Plan mode: no edits or commands allowed" };
+                    }
+                }
+                // Default mode (or tools not auto-handled above): ask the user
                 const id = `req-${++session.requestCounter}`;
                 const description = getToolDescription(toolName, input);
                 this.broadcast(session, { type: "permission_request", id, toolName, input, description });
@@ -166,8 +247,6 @@ class SessionManager {
                 }
                 return { behavior: "deny", message: response.message || "User denied this action" };
             },
-            permissionMode: session.permissionMode,
-            allowDangerouslySkipPermissions: session.permissionMode === "bypassPermissions",
             ...(session.effort ? { effort: session.effort } : {}),
         };
         const queryParams = { prompt: text, options: queryOptions };
@@ -314,10 +393,13 @@ class SessionManager {
         }
         catch (err) {
             session.accumulatedText = "";
+            const safeMessage = err instanceof Error ? err.message : "Unknown error";
+            // Don't leak stack traces or internal paths to clients
             this.broadcast(session, {
                 type: "error",
-                message: err instanceof Error ? err.message : "Unknown error",
+                message: safeMessage.includes("/") ? "Internal server error" : safeMessage,
             });
+            console.error(`[session=${session.id}] Query error:`, err);
         }
         session.isProcessing = false;
         // Process queued messages
@@ -326,9 +408,22 @@ class SessionManager {
             this.handleUserMessage(session, next.text);
         }
     }
+    /**
+     * Wait for a client response (permission or question answer) with timeout.
+     * Auto-denies if no response is received within RESPONSE_TIMEOUT_MS.
+     */
     waitForResponse(session, id) {
         return new Promise((resolve) => {
-            session.pendingRequests.set(id, resolve);
+            const timer = setTimeout(() => {
+                session.pendingRequests.delete(id);
+                console.warn(`[session=${session.id}] Response timeout for request ${id}`);
+                this.broadcast(session, { type: "status", status: "thinking" });
+                resolve({ allow: false, message: "Response timed out", answers: {} });
+            }, RESPONSE_TIMEOUT_MS);
+            session.pendingRequests.set(id, (response) => {
+                clearTimeout(timer);
+                resolve(response);
+            });
         });
     }
     broadcast(session, event) {
@@ -361,6 +456,29 @@ function validateToken(token) {
     }
 }
 /* ------------------------------------------------------------------ */
+/*  Origin validation                                                  */
+/* ------------------------------------------------------------------ */
+function isOriginAllowed(origin) {
+    // In dev mode, allow all origins
+    if (dev)
+        return true;
+    // No origin header — could be a same-origin request or non-browser client
+    if (!origin)
+        return true;
+    // Check explicit allowlist
+    if (ALLOWED_ORIGINS.size > 0) {
+        return ALLOWED_ORIGINS.has(origin);
+    }
+    // Default: allow same-host origins (any port)
+    try {
+        const url = new URL(origin);
+        return url.hostname === "localhost" || url.hostname === "127.0.0.1" || origin.includes(".viksi.ai");
+    }
+    catch {
+        return false;
+    }
+}
+/* ------------------------------------------------------------------ */
 /*  Start                                                              */
 /* ------------------------------------------------------------------ */
 const app = (0, next_1.default)({ dev });
@@ -381,7 +499,18 @@ app.prepare().then(() => {
             nextUpgradeHandler(req, socket, head);
             return;
         }
-        const token = qs.token;
+        // Origin validation — prevent cross-site WebSocket hijacking
+        const origin = req.headers.origin;
+        if (!isOriginAllowed(origin)) {
+            console.warn(`[ws] Rejected connection from disallowed origin: ${origin}`);
+            socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+            socket.destroy();
+            return;
+        }
+        // Authenticate: try cookie first, then query string token (for backward compat)
+        const cookieToken = extractTokenFromCookies(req.headers.cookie);
+        const queryToken = qs.token;
+        const token = cookieToken || queryToken;
         if (!token || !validateToken(token)) {
             socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
             socket.destroy();

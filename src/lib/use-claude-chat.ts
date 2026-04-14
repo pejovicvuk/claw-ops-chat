@@ -138,6 +138,7 @@ export function useClaudeChat(sessionId: string | null) {
 
       if (type === "content_block_stop") {
         setActiveTool(null);
+        setStatus("thinking");
         return;
       }
 

@@ -430,6 +430,15 @@ class SessionManager {
 
         // Result — turn complete
         if (msg.type === "result") {
+          // If resume failed, retry without resume
+          if (msg.is_error && typeof msg.result === "string" && msg.result.includes("No conversation found")) {
+            session.claudeSessionId = null;
+            // Retry the query without resume
+            delete (queryParams.options as Record<string, unknown>).resume;
+            session.isProcessing = false;
+            this.handleUserMessage(session, text);
+            return;
+          }
           session.claudeSessionId = msg.session_id as string;
           session.accumulatedText = "";
           this.broadcast(session, {

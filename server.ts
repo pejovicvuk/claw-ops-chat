@@ -54,6 +54,10 @@ interface ChatSession {
   accumulatedText: string;
   /** Rate limiting: message timestamps in the current sliding window. */
   messageTimestamps: number[];
+  /** Event history for reconnecting clients. */
+  eventHistory: Record<string, unknown>[];
+  /** Last activity timestamp (for idle cleanup). */
+  lastActivity: number;
 }
 
 /* ------------------------------------------------------------------ */
@@ -97,6 +101,8 @@ class SessionManager {
         requestCounter: 0,
         accumulatedText: "",
         messageTimestamps: [],
+        eventHistory: [],
+        lastActivity: Date.now(),
       };
       this.sessions.set(sessionId, session);
     }
@@ -118,6 +124,14 @@ class SessionManager {
     if (session.claudeSessionId) {
       this.send(ws, { type: "session_init", sessionId: session.claudeSessionId });
     }
+
+    // Replay event history for reconnecting clients
+    if (session.eventHistory.length > 0) {
+      for (const event of session.eventHistory) {
+        this.send(ws, event);
+      }
+    }
+
     if (session.isProcessing) {
       this.send(ws, { type: "status", status: "thinking" });
     }
@@ -155,18 +169,17 @@ class SessionManager {
     ws.on("close", () => {
       clearInterval(heartbeat);
       session.clients.delete(ws);
-      // Clean up empty sessions after a delay
-      if (session.clients.size === 0) {
+      // Sessions stay alive even with 0 clients — work continues in background.
+      // Only cleanup idle sessions (not processing, no clients) after 30 minutes.
+      if (session.clients.size === 0 && !session.isProcessing) {
         setTimeout(() => {
           if (session.clients.size === 0 && !session.isProcessing) {
-            // Reject any pending requests before cleanup
-            for (const [id, resolver] of session.pendingRequests) {
-              resolver({ allow: false, message: "All clients disconnected" });
-              session.pendingRequests.delete(id);
+            // Check if truly idle for a while
+            if (Date.now() - session.lastActivity > 30 * 60 * 1000) {
+              this.sessions.delete(session.id);
             }
-            this.sessions.delete(session.id);
           }
-        }, SESSION_CLEANUP_MS);
+        }, 30 * 60 * 1000);
       }
     });
   }
@@ -448,6 +461,8 @@ class SessionManager {
             isError: msg.is_error || false,
             permissionDenials: msg.permission_denials || [],
           });
+          // Clear event history after turn completes — JSONL has the persisted record
+          session.eventHistory = [];
           continue;
         }
       }
@@ -492,6 +507,17 @@ class SessionManager {
   }
 
   private broadcast(session: ChatSession, event: Record<string, unknown>) {
+    session.lastActivity = Date.now();
+
+    // Save to history for reconnecting clients (skip transient status events)
+    if (event.type !== "status") {
+      session.eventHistory.push(event);
+      // Cap history to prevent unbounded growth (keep last 500 events)
+      if (session.eventHistory.length > 500) {
+        session.eventHistory = session.eventHistory.slice(-500);
+      }
+    }
+
     const data = JSON.stringify(event);
     for (const client of session.clients) {
       if (client.readyState === WebSocket.OPEN) {

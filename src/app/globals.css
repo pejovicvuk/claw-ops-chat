@@ -3,21 +3,35 @@
 /* ── Design Tokens ── */
 
 :root {
-  --canvas-bg: #ffffff;
-  --canvas-fg: #0a0a0a;
-  --canvas-border: rgba(0, 0, 0, 0.08);
-  --canvas-surface: rgba(255, 255, 255, 0.473);
-  --canvas-surface-hover: rgba(0, 0, 0, 0.03);
+  --canvas-bg: #f2f2f2;
+  --canvas-fg: #1a1a1a;
+  --canvas-border: rgba(0, 0, 0, 0.06);
+  --canvas-surface: rgba(255, 255, 255, 0.65);
+  --canvas-surface-hover: rgba(0, 0, 0, 0.04);
   --canvas-muted: #737373;
+  --accent: #E8553A;
+  --accent-hover: #D44A32;
+  --user-bubble: #2c2c2e;
+  --user-bubble-fg: #ffffff;
+  --glass-bg: rgba(255, 255, 255, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.35);
+  --glass-blur: 20px;
 }
 
 .dark {
-  --canvas-bg: #0a0a0a;
-  --canvas-fg: #fafafa;
-  --canvas-border: rgba(255, 255, 255, 0.08);
-  --canvas-surface: rgba(10, 10, 10, 0.72);
-  --canvas-surface-hover: rgba(255, 255, 255, 0.04);
-  --canvas-muted: #a3a3a3;
+  --canvas-bg: #111111;
+  --canvas-fg: #f0f0f0;
+  --canvas-border: rgba(255, 255, 255, 0.07);
+  --canvas-surface: rgba(30, 30, 30, 0.72);
+  --canvas-surface-hover: rgba(255, 255, 255, 0.05);
+  --canvas-muted: #999999;
+  --accent: #E8553A;
+  --accent-hover: #F06A52;
+  --user-bubble: #2c2c2e;
+  --user-bubble-fg: #f0f0f0;
+  --glass-bg: rgba(30, 30, 30, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur: 20px;
 }
 
 /* ── Tailwind Theme Inline ── */
@@ -29,6 +43,8 @@
   --color-canvas-surface: var(--canvas-surface);
   --color-canvas-surface-hover: var(--canvas-surface-hover);
   --color-canvas-muted: var(--canvas-muted);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
 }
 
 /* ── Base Resets ── */
@@ -79,6 +95,23 @@ html:not(.dark) {
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid var(--canvas-border);
+}
+
+/* ── Glassmorphism ── */
+
+.glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+}
+
+.glass-input {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
 }
 
 /* ── Scrollbar ── */
@@ -183,12 +216,21 @@ html:not(.dark) {
 /* ── Session sidebar slide-in (mobile) ── */
 
 @keyframes sidebarSlideIn {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(0); }
+  from { transform: translateX(-100%); opacity: 0.8; }
+  to { transform: translateX(0); opacity: 1; }
+}
+
+@keyframes sidebarSlideOut {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(-100%); opacity: 0.8; }
 }
 
 .animate-sidebar-in {
-  animation: sidebarSlideIn 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: sidebarSlideIn 300ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.animate-sidebar-out {
+  animation: sidebarSlideOut 250ms cubic-bezier(0.4, 0, 0.2, 1) both;
 }
 
 /* ── File panel fill ── */
@@ -214,12 +256,12 @@ html:not(.dark) {
 /* ── Chat message fade-in ── */
 
 @keyframes messageFadeIn {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 .animate-msg-in {
-  animation: messageFadeIn 200ms ease-out both;
+  animation: messageFadeIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 /* ── Sidebar/panel smooth transitions ── */

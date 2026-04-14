@@ -89,7 +89,7 @@ const markdownComponents = {
     <li className="my-0.5">{children}</li>
   ),
   a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a href={href} className="text-blue-400 underline" target="_blank" rel="noopener noreferrer">{children}</a>
+    <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">{children}</a>
   ),
   table: ({ children }: { children?: React.ReactNode }) => (
     <div className="my-2 overflow-x-auto rounded-md border border-canvas-border">
@@ -130,8 +130,14 @@ export function MessageBubble({ message, isLatestToolUse, onPermissionRespond, o
   if (message.role === "user") {
     return (
       <div className="flex justify-end px-4 py-1.5">
-        <div className="max-w-[85%] rounded-2xl rounded-br-md bg-[#1f6feb] px-3.5 py-2.5">
-          <p className="whitespace-pre-wrap text-[14px] leading-relaxed text-white">
+        <div
+          className="max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2.5"
+          style={{ backgroundColor: "var(--user-bubble)" }}
+        >
+          <p
+            className="whitespace-pre-wrap text-[14px] leading-relaxed"
+            style={{ color: "var(--user-bubble-fg)" }}
+          >
             {message.content}
           </p>
         </div>
@@ -218,8 +224,8 @@ function ToolUseIndicator({ message }: { message: ChatMessage }) {
   return (
     <div className="px-4 py-0.5">
       <div className="flex items-center gap-1.5 px-1 text-[11px] text-canvas-muted">
-        <Icon size={11} className="shrink-0 text-purple-400/60" />
-        <span className="text-purple-400/70">{label}</span>
+        <Icon size={11} className="shrink-0 opacity-60" style={{ color: "var(--accent)" }} />
+        <span className="opacity-70" style={{ color: "var(--accent)" }}>{label}</span>
         {desc && (
           <span className="line-clamp-1 min-w-0 flex-1 font-mono text-[10px] opacity-50">
             {desc}
@@ -280,14 +286,14 @@ function ThinkingBlock({ message }: { message: ChatMessage }) {
         className="flex items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-canvas-surface-hover"
       >
         {collapsed ? (
-          <FiChevronRight size={10} className="shrink-0 text-purple-400/60" />
+          <FiChevronRight size={10} className="shrink-0 text-accent/60" />
         ) : (
-          <FiChevronDown size={10} className="shrink-0 text-purple-400/60" />
+          <FiChevronDown size={10} className="shrink-0 text-accent/60" />
         )}
         <span className="text-[11px] text-canvas-muted">Thinking...</span>
       </button>
       {!collapsed && (
-        <div className="ml-2 max-h-[300px] overflow-y-auto rounded-md border-l-2 border-purple-400/30 bg-canvas-surface-hover/50 px-3 py-2">
+        <div className="ml-2 max-h-[300px] overflow-y-auto rounded-md border-l-2 border-accent/30 bg-canvas-surface-hover/50 px-3 py-2">
           <p className="whitespace-pre-wrap text-[11px] italic leading-relaxed text-canvas-muted">
             {message.content}
           </p>
@@ -346,7 +352,7 @@ function AskQuestionBlock({
 
   return (
     <div className="px-4 py-1.5">
-      <div className="rounded-lg border border-blue-500/30 bg-canvas-surface-hover px-3.5 py-3">
+      <div className="rounded-lg border border-accent/30 bg-canvas-surface-hover px-3.5 py-3">
         {questions.map((q) => (
           <div key={q.question} className="mb-3 last:mb-0">
             <p className="text-[13px] font-medium text-canvas-fg mb-2">
@@ -363,12 +369,12 @@ function AskQuestionBlock({
                     disabled={!!resolved}
                     className={`flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left transition-colors ${
                       isSelected
-                        ? "border-blue-500 bg-blue-500/10"
+                        ? "border-accent bg-accent/10"
                         : "border-canvas-border bg-canvas-bg active:bg-canvas-surface-hover"
                     } ${resolved ? "opacity-60" : ""}`}
                   >
                     <div className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${
-                      isSelected ? "border-blue-500 bg-blue-500" : "border-gray-600"
+                      isSelected ? "border-accent bg-accent" : "border-gray-600"
                     }`} />
                     <div className="min-w-0">
                       <p className="text-[12px] font-medium text-canvas-fg">{opt.label}</p>
@@ -387,7 +393,7 @@ function AskQuestionBlock({
           <button
             type="button"
             onClick={handleSubmit}
-            className="mt-2 w-full rounded-lg bg-[#1f6feb] px-3 py-2 text-[13px] font-medium text-white active:opacity-80"
+            className="mt-2 w-full rounded-xl bg-accent px-3 py-2.5 text-[13px] font-medium text-white active:opacity-80 transition-opacity duration-150"
           >
             Submit
           </button>

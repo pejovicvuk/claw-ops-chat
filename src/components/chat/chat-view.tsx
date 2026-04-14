@@ -168,18 +168,18 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
       )}
 
       {/* Mode & Effort bar */}
-      <div className="relative flex shrink-0 items-center gap-3 border-b border-canvas-border px-3 py-1.5">
+      <div className="relative flex shrink-0 items-center gap-3 px-3 py-1.5" style={{ borderBottom: "1px solid var(--canvas-border)" }}>
         <button
           type="button"
           onClick={() => setShowModeMenu((v) => !v)}
-          className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] text-canvas-muted hover:bg-canvas-surface-hover"
+          className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
         >
           <FiShield size={11} />
           <span>{MODE_LABELS[permissionMode] ?? "Default"}</span>
           <FiChevronDown size={10} />
         </button>
 
-        <div className="flex items-center gap-0.5 rounded-md bg-canvas-surface-hover p-0.5">
+        <div className="flex items-center gap-0.5 rounded-full bg-canvas-surface-hover p-0.5">
           {EFFORT_OPTIONS.map((opt) => {
             const isActive = (opt.value === "" && !effortLevel) || opt.value === effortLevel;
             return (
@@ -191,9 +191,9 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                   setEffortLevel(val);
                   setEffort(val);
                 }}
-                className={`rounded px-2 py-0.5 text-[10px] font-medium transition-colors ${
+                className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium transition-all duration-200 ${
                   isActive
-                    ? "bg-canvas-bg text-canvas-fg"
+                    ? "bg-canvas-bg text-canvas-fg shadow-sm"
                     : "text-canvas-muted hover:text-canvas-fg"
                 }`}
               >
@@ -210,7 +210,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
         )}
 
         {showModeMenu && (
-          <div className="absolute left-3 top-full z-50 mt-1 rounded-lg border border-canvas-border bg-canvas-bg py-1 shadow-lg">
+          <div className="absolute left-3 top-full z-50 mt-1 rounded-xl border border-canvas-border bg-canvas-bg py-1 shadow-xl animate-modal-in">
             {MODE_OPTIONS.map((opt) => (
               <button
                 key={opt.value}
@@ -227,7 +227,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                   setPermissionMode(opt.value);
                   setShowModeMenu(false);
                 }}
-                className={`flex w-full items-start gap-2 px-3 py-2 text-left hover:bg-canvas-surface-hover ${
+                className={`flex w-full items-start gap-2 px-3.5 py-2.5 text-left transition-colors duration-150 hover:bg-canvas-surface-hover ${
                   permissionMode === opt.value ? "bg-canvas-surface-hover" : ""
                 }`}
               >
@@ -280,11 +280,11 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
             ),
           )}
           {(status === "thinking" || status === "tool_running") && (
-            <div className="animate-msg-in flex items-center gap-2 px-5 py-2">
-              <span className="thinking-dots flex items-center gap-0.5">
-                <span className="thinking-dot h-1.5 w-1.5 rounded-full bg-purple-400" />
-                <span className="thinking-dot h-1.5 w-1.5 rounded-full bg-purple-400" />
-                <span className="thinking-dot h-1.5 w-1.5 rounded-full bg-purple-400" />
+            <div className="animate-msg-in flex items-center gap-2.5 px-5 py-2">
+              <span className="thinking-dots flex items-center gap-1">
+                <span className="thinking-dot h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "var(--accent)" }} />
+                <span className="thinking-dot h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "var(--accent)" }} />
+                <span className="thinking-dot h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "var(--accent)" }} />
               </span>
               <span className="text-[11px] text-canvas-muted">
                 {status === "tool_running" && activeTool
@@ -296,7 +296,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
           <div ref={bottomRef} />
         </div>
 
-        {/* Permission modal */}
+        {/* Permission modal — slides up from bottom on mobile */}
         {(() => {
           const pending = messages.find((m) => m.type === "permission_request" && !m.permissionResolved);
           if (!pending) return null;
@@ -304,11 +304,11 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
           const { icon: PermIcon, label: permLabel } = getToolDisplayForPermission(toolName);
           const permDesc = pending.content || getPermDescForModal(toolName, pending.permissionInput);
           return (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/20 backdrop-blur-[2px]">
-              <div className="animate-modal-in mx-4 w-full max-w-sm rounded-xl border border-orange-500/30 bg-canvas-bg p-5 shadow-2xl">
+            <div className="absolute inset-0 z-10 flex items-end sm:items-center justify-center bg-black/25 backdrop-blur-[3px]">
+              <div className="animate-sheet-up sm:animate-modal-in mx-0 sm:mx-4 w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl bg-canvas-bg p-5 shadow-2xl" style={{ borderTop: "1px solid var(--canvas-border)" }}>
                 <div className="mb-4 flex items-center gap-3">
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-500/10">
-                    <PermIcon size={18} className="text-orange-400" />
+                  <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ backgroundColor: "color-mix(in srgb, var(--accent) 12%, transparent)" }}>
+                    <PermIcon size={18} style={{ color: "var(--accent)" }} />
                   </div>
                   <div>
                     <p className="text-[14px] font-semibold text-canvas-fg">{permLabel}</p>
@@ -316,7 +316,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                   </div>
                 </div>
                 {permDesc && (
-                  <div className="mb-4 rounded-lg bg-canvas-surface-hover p-3">
+                  <div className="mb-4 rounded-xl bg-canvas-surface-hover p-3">
                     <p className="break-all font-mono text-[11px] leading-relaxed text-canvas-muted">{permDesc}</p>
                   </div>
                 )}
@@ -325,14 +325,15 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                     <button
                       type="button"
                       onClick={() => respondPermission(pending.permissionId!, true)}
-                      className="flex-1 rounded-lg bg-green-600 px-3 py-2.5 text-[13px] font-medium text-white active:bg-green-700"
+                      className="flex-1 rounded-xl py-3 text-[14px] font-semibold text-white active:opacity-80 transition-opacity duration-150"
+                      style={{ backgroundColor: "var(--accent)" }}
                     >
                       Allow
                     </button>
                     <button
                       type="button"
                       onClick={() => respondPermission(pending.permissionId!, false)}
-                      className="flex-1 rounded-lg border border-canvas-border bg-canvas-surface-hover px-3 py-2.5 text-[13px] font-medium text-canvas-fg active:bg-canvas-border"
+                      className="flex-1 rounded-xl border border-canvas-border bg-canvas-surface-hover py-3 text-[14px] font-semibold text-canvas-fg active:bg-canvas-border transition-colors duration-150"
                     >
                       Deny
                     </button>
@@ -349,11 +350,18 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                         timestamp: Date.now(),
                       }]);
                     }}
-                    className="w-full rounded-lg border border-green-600/30 bg-green-600/10 px-3 py-2 text-[12px] font-medium text-green-400 active:bg-green-600/20"
+                    className="w-full rounded-xl py-2.5 text-[12px] font-medium transition-colors duration-150 active:opacity-70"
+                    style={{
+                      backgroundColor: "color-mix(in srgb, var(--accent) 10%, transparent)",
+                      color: "var(--accent)",
+                      border: "1px solid color-mix(in srgb, var(--accent) 20%, transparent)",
+                    }}
                   >
                     Always allow {toolName} this session
                   </button>
                 </div>
+                {/* Safe area padding for bottom */}
+                <div style={{ height: "env(safe-area-inset-bottom, 0px)" }} />
               </div>
             </div>
           );

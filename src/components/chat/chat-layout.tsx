@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiMenu, FiX, FiFolder, FiCheck, FiChevronsLeft, FiMessageSquare, FiUpload } from "react-icons/fi";
+import { FiMessageCircle, FiX, FiFolder, FiCheck, FiChevronsLeft, FiMessageSquare, FiUpload } from "react-icons/fi";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
 import { Z_INDEX } from "@/lib/z-index";
@@ -119,25 +119,81 @@ export function ChatLayout({
     />
   ));
 
+  /* ── Swipe-right to open sidebar (mobile) ── */
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const swipeOverlayRef = useRef<HTMLDivElement>(null);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    // Only track swipes starting from left edge (first 30px)
+    if (touch.clientX < 30) {
+      touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+    }
+  }, []);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current || sidebarOpen) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchStartRef.current.x;
+    const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+    // If mostly horizontal and moved enough
+    if (dx > 10 && dx > dy * 1.5 && swipeOverlayRef.current) {
+      const progress = Math.min(dx / 280, 1);
+      swipeOverlayRef.current.style.opacity = String(progress * 0.3);
+      swipeOverlayRef.current.style.pointerEvents = "none";
+      swipeOverlayRef.current.style.display = "block";
+    }
+  }, [sidebarOpen]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (!touchStartRef.current) return;
+    const touch = e.changedTouches[0];
+    const dx = touch.clientX - touchStartRef.current.x;
+    const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+    const elapsed = Date.now() - touchStartRef.current.time;
+
+    // Swipe detected: mostly horizontal, >60px distance or fast flick
+    if (dx > 60 && dx > dy * 1.5 && elapsed < 500) {
+      setSidebarOpen(true);
+    }
+
+    touchStartRef.current = null;
+    if (swipeOverlayRef.current) {
+      swipeOverlayRef.current.style.display = "none";
+      swipeOverlayRef.current.style.opacity = "0";
+    }
+  }, []);
+
   /* ── MOBILE ── */
 
   if (isMobile) {
     return (
-      <div className="flex flex-col" style={{ height: viewportHeight, overflow: "hidden" }}>
+      <div
+        className="flex flex-col"
+        style={{ height: viewportHeight, overflow: "hidden" }}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        {/* Swipe hint overlay */}
         <div
-          className="surface-overlay sticky top-0 z-20 flex shrink-0 items-center gap-2 px-3 py-2.5"
-          style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 10px)" }}
+          ref={swipeOverlayRef}
+          className="fixed inset-0 bg-black/30 hidden"
+          style={{ zIndex: Z_INDEX.MODAL - 1, opacity: 0, transition: "opacity 100ms" }}
+        />
+
+        {/* Floating hamburger bubble — glassmorphism */}
+        <div
+          className="fixed left-3 z-30"
+          style={{ top: "max(env(safe-area-inset-top, 0px), 12px)" }}
         >
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover"
+            className="glass flex h-10 w-10 items-center justify-center rounded-full shadow-lg transition-transform duration-200 active:scale-90"
           >
-            <FiMenu size={18} />
+            <FiMessageCircle size={18} className="text-canvas-fg" />
           </button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-[14px] font-semibold text-canvas-fg">Claude</p>
-          </div>
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col">
@@ -153,14 +209,14 @@ export function ChatLayout({
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg transition-colors duration-150"
                 >
                   <FiUpload size={17} />
                 </button>
                 <button
                   type="button"
                   onClick={() => setFilesPanelOpen(true)}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg transition-colors duration-150"
                 >
                   <FiFolder size={18} />
                 </button>
@@ -171,13 +227,33 @@ export function ChatLayout({
 
         {sidebarOpen && (
           <>
-            <div className="fixed inset-0 bg-black/30 backdrop-blur-[2px]" style={{ zIndex: Z_INDEX.MODAL }} onClick={() => setSidebarOpen(false)} />
-            <div className="animate-sidebar-in fixed inset-y-0 left-0 w-[280px] border-r border-canvas-border bg-canvas-bg shadow-xl" style={{ zIndex: Z_INDEX.MODAL + 1 }}>
+            <div
+              className="fixed inset-0 bg-black/30 backdrop-blur-[3px]"
+              style={{ zIndex: Z_INDEX.MODAL, transition: "opacity 300ms ease" }}
+              onClick={() => setSidebarOpen(false)}
+            />
+            <div
+              className="animate-sidebar-in fixed inset-y-0 left-0 w-[300px] bg-canvas-bg shadow-2xl"
+              style={{
+                zIndex: Z_INDEX.MODAL + 1,
+                borderRight: "1px solid var(--canvas-border)",
+              }}
+            >
               <div className="flex h-full flex-col">
-                <div className="flex items-center justify-between border-b border-canvas-border px-3 py-2.5">
-                  <span className="text-[13px] font-semibold text-canvas-fg">Chats</span>
-                  <button type="button" onClick={() => setSidebarOpen(false)} className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover">
-                    <FiX size={15} />
+                <div
+                  className="flex items-center justify-between px-4 py-3"
+                  style={{
+                    paddingTop: "max(env(safe-area-inset-top, 0px), 16px)",
+                    borderBottom: "1px solid var(--canvas-border)",
+                  }}
+                >
+                  <span className="text-[15px] font-semibold text-canvas-fg">Conversations</span>
+                  <button
+                    type="button"
+                    onClick={() => setSidebarOpen(false)}
+                    className="flex h-8 w-8 items-center justify-center rounded-full text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
+                  >
+                    <FiX size={16} />
                   </button>
                 </div>
                 <SessionList
@@ -204,7 +280,7 @@ export function ChatLayout({
         {fileEditors}
 
         {copiedPath && (
-          <div className="fixed left-1/2 top-20 -translate-x-1/2 flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 shadow-lg" style={{ zIndex: Z_INDEX.TOAST }}>
+          <div className="fixed left-1/2 top-20 -translate-x-1/2 flex items-center gap-1.5 rounded-full bg-green-600 px-3 py-1.5 shadow-lg" style={{ zIndex: Z_INDEX.TOAST }}>
             <FiCheck size={12} className="text-white" />
             <span className="text-[11px] font-medium text-white">Path copied</span>
           </div>

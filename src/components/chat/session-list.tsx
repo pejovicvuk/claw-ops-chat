@@ -49,7 +49,7 @@ export function SessionList({
           <button
             type="button"
             onClick={onNewChat}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-[#1f6feb] hover:bg-canvas-surface-hover"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-accent hover:bg-canvas-surface-hover"
           >
             <FiPlus size={15} />
           </button>
@@ -69,7 +69,7 @@ export function SessionList({
             <button
               type="button"
               onClick={onNewChat}
-              className="mt-3 rounded-md bg-[#1f6feb] px-3 py-1.5 text-[12px] font-medium text-white active:opacity-80"
+              className="mt-3 rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white active:opacity-80"
             >
               Start a chat
             </button>

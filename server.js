@@ -50,6 +50,11 @@ class SessionManager {
     connect(ws, sessionId) {
         const session = this.getOrCreateSession(sessionId);
         session.clients.add(ws);
+        // If sessionId looks like a UUID, set it as the claudeSessionId for resume
+        const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        if (!session.claudeSessionId && UUID_RE.test(sessionId)) {
+            session.claudeSessionId = sessionId;
+        }
         // Send current state to the new client
         this.send(ws, { type: "ready" });
         if (session.claudeSessionId) {
@@ -83,12 +88,11 @@ class SessionManager {
         const type = msg.type;
         if (type === "message") {
             const text = msg.text;
-            const resumeId = msg.sessionId;
             if (session.isProcessing) {
-                session.messageQueue.push({ text, resumeId });
+                session.messageQueue.push({ text });
             }
             else {
-                this.handleUserMessage(session, text, resumeId);
+                this.handleUserMessage(session, text);
             }
             return;
         }
@@ -111,7 +115,7 @@ class SessionManager {
             return;
         }
     }
-    async handleUserMessage(session, text, resumeClaudeSessionId) {
+    async handleUserMessage(session, text) {
         session.isProcessing = true;
         session.accumulatedText = "";
         let toolInputAccum = "";
@@ -128,7 +132,7 @@ class SessionManager {
             return "";
         };
         const queryOptions = {
-            cwd: process.env.CLAUDE_CWD || "/root",
+            cwd: process.env.CLAUDE_CWD || "/workspace",
             includePartialMessages: true,
             canUseTool: async (toolName, input) => {
                 // Handle AskUserQuestion
@@ -167,7 +171,7 @@ class SessionManager {
             ...(session.effort ? { effort: session.effort } : {}),
         };
         const queryParams = { prompt: text, options: queryOptions };
-        const resumeId = resumeClaudeSessionId || session.claudeSessionId;
+        const resumeId = session.claudeSessionId;
         if (resumeId) {
             queryParams.options.resume = resumeId;
         }
@@ -319,7 +323,7 @@ class SessionManager {
         // Process queued messages
         if (session.messageQueue.length > 0) {
             const next = session.messageQueue.shift();
-            this.handleUserMessage(session, next.text, next.resumeId);
+            this.handleUserMessage(session, next.text);
         }
     }
     waitForResponse(session, id) {

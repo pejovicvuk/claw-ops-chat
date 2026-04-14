@@ -310,7 +310,7 @@ export function useClaudeChat(sessionId: string | null) {
       setActiveTool(null);
       setStatus("thinking");
 
-      sendToServer({ type: "message", text: trimmed, sessionId });
+      sendToServer({ type: "message", text: trimmed });
     },
     [status, sendToServer, sessionId],
   );

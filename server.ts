@@ -28,7 +28,7 @@ interface ChatSession {
   clients: Set<WebSocket>;
   claudeSessionId: string | null;
   isProcessing: boolean;
-  messageQueue: Array<{ text: string; resumeId?: string }>;
+  messageQueue: Array<{ text: string }>;
   pendingRequests: Map<string, (response: Record<string, unknown>) => void>;
   sessionAllowedTools: Set<string>;
   permissionMode: string;
@@ -69,6 +69,12 @@ class SessionManager {
     const session = this.getOrCreateSession(sessionId);
     session.clients.add(ws);
 
+    // If sessionId looks like a UUID, set it as the claudeSessionId for resume
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!session.claudeSessionId && UUID_RE.test(sessionId)) {
+      session.claudeSessionId = sessionId;
+    }
+
     // Send current state to the new client
     this.send(ws, { type: "ready" });
     if (session.claudeSessionId) {
@@ -105,11 +111,10 @@ class SessionManager {
 
     if (type === "message") {
       const text = msg.text as string;
-      const resumeId = msg.sessionId as string | undefined;
       if (session.isProcessing) {
-        session.messageQueue.push({ text, resumeId });
+        session.messageQueue.push({ text });
       } else {
-        this.handleUserMessage(session, text, resumeId);
+        this.handleUserMessage(session, text);
       }
       return;
     }
@@ -136,7 +141,7 @@ class SessionManager {
     }
   }
 
-  private async handleUserMessage(session: ChatSession, text: string, resumeClaudeSessionId?: string) {
+  private async handleUserMessage(session: ChatSession, text: string) {
     session.isProcessing = true;
     session.accumulatedText = "";
     let toolInputAccum = "";
@@ -194,7 +199,7 @@ class SessionManager {
     };
 
     const queryParams: Record<string, unknown> = { prompt: text, options: queryOptions };
-    const resumeId = resumeClaudeSessionId || session.claudeSessionId;
+    const resumeId = session.claudeSessionId;
     if (resumeId) {
       (queryParams.options as Record<string, unknown>).resume = resumeId;
     }
@@ -355,7 +360,7 @@ class SessionManager {
     // Process queued messages
     if (session.messageQueue.length > 0) {
       const next = session.messageQueue.shift()!;
-      this.handleUserMessage(session, next.text, next.resumeId);
+      this.handleUserMessage(session, next.text);
     }
   }
 

@@ -1,58 +1,48 @@
-# Next Session Prompt: UI Polish for claw-ops-chat
+# Next Session: Connections Management in claw-ops-fe
 
 Copy-paste this into your next Claude Code session:
 
 ---
 
-I'm working on the UI polish for claw-ops-chat — a Next.js 16 web chat interface for Claude Code. The app is at `/root/claw-ops-chat`, deployed via Docker at `https://claw-agents-16gb.viksi.ai/chat/`. It ships tomorrow.
+I'm working on claw-ops-fe (`/root/claw-ops-fe`) — a Next.js 16 server management dashboard. When a user clicks on a server node on the canvas, a server dashboard panel opens. I need to add a **Connections** tab to this panel where users can manage their service integrations.
 
-## What the app does
-It's a mobile-first chat UI where employees talk to Claude Code running on their server. Think of it as Claude Code in a browser. It has a 3-panel layout (session sidebar | chat | file browser), permission modes (Default/Accept Edits/Plan), effort levels, file upload, and session persistence.
+## What exists already
 
-## Current state
-The functionality works — messages stream, permissions prompt correctly, sessions persist, files upload. But the UI needs polish before shipping. The design uses CSS custom properties (`--canvas-bg`, `--canvas-fg`, etc.) with light/dark mode via `next-themes`.
+The canvas already shows small icons around each server node for detected services:
 
-## What needs UI work
+- **GitHub node** (`src/components/servers/github-node.tsx`) — 44px circle, detects `gh auth status` via SSH. Dashboard panel at `src/components/servers/github-dashboard-panel.tsx` shows account info, token management, git config.
+- **Claude Code node** (`src/components/servers/claude-node.tsx`) — 44px orange circle, detects `claude --version` and `claude auth status`. Dashboard panel at `src/components/servers/claude-dashboard-panel.tsx` shows version, auth status, disk usage, projects.
+- **Detection hooks**: `src/lib/use-github-accounts.ts` and `src/lib/use-claude-accounts.ts` — poll each ONLINE server via SSH commands, cache results in localStorage.
 
-### Priority 1: Chat feel
-- The live tool activity indicator (shows "Reading file... path") works but could look better — maybe animate it, add a subtle progress feel
-- The thinking dots at the bottom could be more refined
-- Message transitions when new messages appear could be smoother
-- The empty state ("Send a message to start...") needs a better design — maybe show the Claude logo and some suggested prompts
+The server dashboard panel is at `src/components/servers/server-dashboard-panel.tsx` with collapsible sections (Terminal, Files, Health, Scripts).
 
-### Priority 2: Permission modal
-- The permission modal pops up when Claude wants to use a tool — it works but could feel more polished
-- Consider: should it slide up from bottom on mobile instead of center overlay?
-- The "Always allow X this session" button needs better visual hierarchy
+## What I want
 
-### Priority 3: Overall layout
-- The header could show more info (which server, connection quality)
-- The session sidebar items could show more context (message count, last message preview)
-- The mode/effort bar could be more compact or integrated into the header
-- Dark mode needs testing — ensure all custom colors work in both themes
+Add a **"Connections"** collapsible section to the server dashboard panel. It should show:
 
-### Priority 4: Mobile experience
-- Test on actual phone — keyboard handling, safe areas, scroll behavior
-- The upload button and file button in the input area — are they discoverable enough?
-- Sidebar overlay animation could be smoother
-- Consider swipe gestures for sidebar
+1. **GitHub** — Connected/Not connected status, account name if connected. Button to authenticate (opens interactive terminal with `gh auth login`) or disconnect.
+2. **Claude Code** — Connected/Not connected, version, email. Button to authenticate (`claude auth login`) or update (`npm install -g @anthropic-ai/claude-code`).
+3. **Codex** (OpenAI Codex CLI) — Connected/Not connected. Same pattern — detect via SSH, authenticate via interactive terminal.
 
-### Priority 5: Model selector
-- Add a model picker (Sonnet/Opus/Haiku) — the SDK accepts a `model` option in query params
-- Could be a dropdown in the mode/effort bar area
-- Persist selection in localStorage
+Each connection should show:
+- Service icon + name
+- Status badge (green "Connected" / gray "Not connected")
+- Account info when connected (username, email, version)
+- Action button (Connect / Disconnect / Update)
+
+Clicking "Connect" should open an interactive terminal overlay (the existing `ClaudeCodeOverlay` pattern at `src/components/servers/claude-dashboard-panel.tsx` uses this — it opens a fullscreen xterm.js terminal for interactive auth flows).
 
 ## Key files to read first
-- `src/components/chat/chat-view.tsx` — main chat view with mode bar, messages, permission modal
-- `src/components/chat/message-bubble.tsx` — all message type renderers
-- `src/components/chat/chat-layout.tsx` — 3-panel responsive layout
-- `src/components/chat/chat-input.tsx` — input textarea
-- `src/app/globals.css` — design tokens, animations
-- `server.ts` — for understanding what the `model` option looks like in query params
+- `src/components/servers/server-dashboard-panel.tsx` — main panel, add section here
+- `src/components/servers/github-dashboard-panel.tsx` — reference for GitHub integration pattern
+- `src/components/servers/claude-dashboard-panel.tsx` — reference for Claude integration + interactive terminal overlay
+- `src/lib/use-github-accounts.ts` — detection hook pattern
+- `src/lib/use-claude-accounts.ts` — detection hook pattern
+- `src/lib/api.ts` — `executeCommandApi()` for running SSH commands
 
 ## Constraints
-- Mobile-first — most users will be on phones
-- Tailwind v4 with CSS custom properties for theming
-- Keep it minimal and modern — no heavy component libraries
-- Must work in both light and dark mode
-- Changes need `npm run build && docker compose down && docker compose build && docker compose up -d` to deploy
+- Reuse existing detection hooks (`useGithubAccounts`, `useClaudeAccounts`) — don't duplicate
+- For Codex, create a new `use-codex-accounts.ts` following the same pattern (detect via `codex --version` or similar)
+- The interactive terminal overlay pattern already exists — reuse it
+- Match the existing UI style (collapsible sections, status badges, action buttons)
+- Must work on both desktop panels and mobile dashboard views

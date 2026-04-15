@@ -167,17 +167,19 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
         </div>
       )}
 
-      {/* Mode & Effort bar — extra left padding on mobile for floating chat button */}
-      <div className="relative flex shrink-0 items-center gap-3 px-3 pr-4 py-2" style={{ borderBottom: "1px solid var(--canvas-border)", paddingLeft: headerless ? "52px" : "12px" }}>
+      {/* Mode & Effort bar — compact single row */}
+      <div className="relative flex shrink-0 items-center gap-2 px-3 pr-3 py-1.5" style={{ borderBottom: "1px solid var(--canvas-border)", paddingLeft: headerless ? "52px" : "12px" }}>
         <button
           type="button"
           onClick={() => setShowModeMenu((v) => !v)}
-          className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
+          className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
         >
-          <FiShield size={11} />
+          <FiShield size={10} />
           <span>{MODE_LABELS[permissionMode] ?? "Default"}</span>
-          <FiChevronDown size={10} />
+          <FiChevronDown size={8} />
         </button>
+
+        <div className="h-3 w-px bg-canvas-border" />
 
         <div className="flex items-center gap-0.5 rounded-full bg-canvas-surface-hover p-0.5">
           {EFFORT_OPTIONS.map((opt) => {
@@ -191,7 +193,7 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                   setEffortLevel(val);
                   setEffort(val);
                 }}
-                className={`rounded-full px-2.5 py-0.5 text-[10px] font-medium transition-all duration-200 ${
+                className={`rounded-full px-2 py-0.5 text-[9px] font-medium transition-all duration-200 ${
                   isActive
                     ? "bg-canvas-bg text-canvas-fg shadow-sm"
                     : "text-canvas-muted hover:text-canvas-fg"

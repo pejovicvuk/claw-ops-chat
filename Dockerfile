@@ -17,9 +17,13 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV PORT=3100
+ENV PATH="/usr/local/bin:/root/.local/bin:${PATH}"
 
-# Runtime deps: git for version control, bash/curl/python3 for Bitbucket skill
-RUN apk add --no-cache bash curl python3 git openssh-client
+# Runtime deps: git for version control, bash/curl/python3 for Bitbucket skill, uv for MCP servers
+RUN apk add --no-cache bash curl python3 git openssh-client \
+    && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uv sh \
+    && ln -s /opt/uv/uv /usr/local/bin/uv \
+    && ln -s /opt/uv/uvx /usr/local/bin/uvx
 
 # Copy the full app with node_modules and build output
 COPY --from=builder /app/node_modules ./node_modules

@@ -1,5 +1,6 @@
 services:
   claw-chat:
+    build: .
     image: teslicvukasin/claw-chat:latest
     container_name: claw-chat
     env_file: .env

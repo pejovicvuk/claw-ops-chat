@@ -18,8 +18,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3100
 
-# Runtime deps for Bitbucket skill (bash, curl, python3)
-RUN apk add --no-cache bash curl python3
+# Runtime deps: git for version control, bash/curl/python3 for Bitbucket skill
+RUN apk add --no-cache bash curl python3 git openssh-client
 
 # Copy the full app with node_modules and build output
 COPY --from=builder /app/node_modules ./node_modules

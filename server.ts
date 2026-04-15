@@ -1,6 +1,9 @@
 import "dotenv/config";
 import { createServer, IncomingMessage } from "http";
 import { parse } from "url";
+import { readFileSync } from "fs";
+import { join } from "path";
+import { homedir } from "os";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { query } from "@anthropic-ai/claude-agent-sdk";
@@ -27,6 +30,18 @@ const ALLOWED_ORIGINS = new Set(
 
 /** Permission/question response timeout in ms (default: 5 minutes). */
 const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "300000", 10);
+
+/* Load MCP servers from ~/.claude.json */
+let mcpServers: Record<string, unknown> | undefined;
+try {
+  const claudeJson = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf-8"));
+  if (claudeJson.mcpServers && Object.keys(claudeJson.mcpServers).length > 0) {
+    mcpServers = claudeJson.mcpServers;
+    console.log(`> Loaded MCP servers: ${Object.keys(mcpServers!).join(", ")}`);
+  }
+} catch {
+  // No ~/.claude.json or invalid — continue without MCP
+}
 
 /** Heartbeat interval in ms (default: 30 seconds). */
 const HEARTBEAT_INTERVAL_MS = 30_000;
@@ -313,6 +328,7 @@ class SessionManager {
         return { behavior: "deny", message: response.message || "User denied this action" };
       },
       ...(session.effort ? { effort: session.effort } : {}),
+      ...(mcpServers ? { mcpServers } : {}),
     };
 
     const queryParams: Record<string, unknown> = { prompt: text, options: queryOptions };

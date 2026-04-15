@@ -6,6 +6,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 require("dotenv/config");
 const http_1 = require("http");
 const url_1 = require("url");
+const fs_1 = require("fs");
+const path_1 = require("path");
+const os_1 = require("os");
 const next_1 = __importDefault(require("next"));
 const ws_1 = require("ws");
 const claude_agent_sdk_1 = require("@anthropic-ai/claude-agent-sdk");
@@ -21,6 +24,18 @@ const API_ORIGIN = (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080
 const ALLOWED_ORIGINS = new Set((process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean));
 /** Permission/question response timeout in ms (default: 5 minutes). */
 const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "300000", 10);
+/* Load MCP servers from ~/.claude.json */
+let mcpServers;
+try {
+    const claudeJson = JSON.parse((0, fs_1.readFileSync)((0, path_1.join)((0, os_1.homedir)(), ".claude.json"), "utf-8"));
+    if (claudeJson.mcpServers && Object.keys(claudeJson.mcpServers).length > 0) {
+        mcpServers = claudeJson.mcpServers;
+        console.log(`> Loaded MCP servers: ${Object.keys(mcpServers).join(", ")}`);
+    }
+}
+catch {
+    // No ~/.claude.json or invalid — continue without MCP
+}
 /** Heartbeat interval in ms (default: 30 seconds). */
 const HEARTBEAT_INTERVAL_MS = 30000;
 /** Maximum WebSocket messages per second per session (default: 20). */
@@ -261,6 +276,7 @@ class SessionManager {
                 return { behavior: "deny", message: response.message || "User denied this action" };
             },
             ...(session.effort ? { effort: session.effort } : {}),
+            ...(mcpServers ? { mcpServers } : {}),
         };
         const queryParams = { prompt: text, options: queryOptions };
         const resumeId = session.claudeSessionId;

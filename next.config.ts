@@ -26,6 +26,7 @@ const nextConfig: NextConfig = {
             `connect-src 'self' ws: wss: ${apiOrigin}`,
             "img-src 'self' data: blob:",
             "font-src 'self' data: https://fonts.gstatic.com",
+            "worker-src 'self'",
             "object-src 'none'",
             "frame-ancestors 'none'",
             "base-uri 'self'",

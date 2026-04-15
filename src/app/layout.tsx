@@ -7,10 +7,20 @@ export const dynamic = "force-dynamic";
 export const metadata: Metadata = {
   title: "Claw Chat",
   description: "Claude Code Chat Interface",
+  manifest: "/chat/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "black-translucent",
     title: "Claw Chat",
+  },
+  icons: {
+    icon: [
+      { url: "/chat/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/chat/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [
+      { url: "/chat/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
+    ],
   },
   formatDetection: {
     telephone: false,
@@ -43,6 +53,11 @@ export default function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html: `window.__CLAWCHAT_API_ORIGIN__=${JSON.stringify(runtimeApiOrigin)};`,
+          }}
+        />
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `if("serviceWorker"in navigator){navigator.serviceWorker.register("/chat/sw.js").catch(function(){})}`,
           }}
         />
       </head>

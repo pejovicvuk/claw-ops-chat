@@ -1,13 +1,12 @@
 import { rm, stat } from "fs/promises";
-import { extractToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { extractSession, unauthorized } from "@/lib/auth-server";
 import { safePath, SafePathError } from "@/lib/safe-path";
 
 /** Maximum number of entries in a directory before recursive delete is refused. */
 const MAX_RECURSIVE_ENTRIES = 100;
 
 export async function DELETE(request: Request) {
-  const token = extractToken(request);
-  if (!token || !validateToken(token)) return unauthorized();
+  if (!extractSession(request)) return unauthorized();
 
   const url = new URL(request.url);
   const rawPath = url.searchParams.get("path");

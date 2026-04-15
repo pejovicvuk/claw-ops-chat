@@ -1,12 +1,11 @@
 import { readFile, stat } from "fs/promises";
-import { extractToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { extractSession, unauthorized } from "@/lib/auth-server";
 import { safePath, SafePathError } from "@/lib/safe-path";
 
 const MAX_SIZE = 1024 * 1024; // 1MB
 
 export async function GET(request: Request) {
-  const token = extractToken(request);
-  if (!token || !validateToken(token)) return unauthorized();
+  if (!extractSession(request)) return unauthorized();
 
   const url = new URL(request.url);
   const rawPath = url.searchParams.get("path");

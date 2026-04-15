@@ -29,6 +29,9 @@ export const viewport: Viewport = {
   ],
 };
 
+const runtimeApiOrigin =
+  process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080";
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -36,6 +39,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `window.__CLAWCHAT_API_ORIGIN__=${JSON.stringify(runtimeApiOrigin)};`,
+          }}
+        />
+      </head>
       <body className="antialiased">
         <Providers>{children}</Providers>
       </body>

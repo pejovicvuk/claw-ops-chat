@@ -1,36 +1,25 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { getToken } from "@/lib/auth";
 import { fetchSessions } from "@/lib/api";
 import type { ChatSession } from "@/lib/types";
 import { ChatLayout } from "@/components/chat/chat-layout";
+import { AuthGuard } from "@/components/auth/auth-guard";
 
 const STORAGE_KEY = "claw-chat-session:v1";
 
 export default function ChatPage() {
-  const router = useRouter();
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(true);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
 
-  // Auth check
+  // Restore last session
   useEffect(() => {
-    const token = getToken();
-    if (!token) {
-      router.push("/login");
-      return;
-    }
-    setReady(true);
-
-    // Restore last session
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) setSelectedSessionId(saved);
     } catch {}
-  }, [router]);
+  }, []);
 
   // Persist session selection
   useEffect(() => {
@@ -53,8 +42,8 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (ready) loadSessions();
-  }, [ready, loadSessions]);
+    loadSessions();
+  }, [loadSessions]);
 
   const handleNewChat = useCallback(() => {
     setSelectedSessionId(null);
@@ -65,30 +54,23 @@ export default function ChatPage() {
   }, []);
 
   const handleSessionCreated = useCallback((claudeSessionId: string) => {
-    // Save for persistence but don't re-key the active ChatView
     try { localStorage.setItem(STORAGE_KEY, claudeSessionId); } catch {}
     loadSessions();
   }, [loadSessions]);
 
-  if (!ready) {
-    return (
-      <div className="flex h-dvh items-center justify-center bg-canvas-bg">
-        <div className="h-5 w-5 animate-spin rounded-full border-2 border-canvas-border border-t-canvas-muted" />
-      </div>
-    );
-  }
-
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-canvas-bg text-canvas-fg">
-      <ChatLayout
-        sessions={sessions}
-        selectedSessionId={selectedSessionId}
-        onSelectSession={handleSelectSession}
-        onNewChat={handleNewChat}
-        onRefreshSessions={loadSessions}
-        sessionsLoading={sessionsLoading}
-        onSessionCreated={handleSessionCreated}
-      />
-    </div>
+    <AuthGuard>
+      <div className="flex h-dvh flex-col overflow-hidden bg-canvas-bg text-canvas-fg">
+        <ChatLayout
+          sessions={sessions}
+          selectedSessionId={selectedSessionId}
+          onSelectSession={handleSelectSession}
+          onNewChat={handleNewChat}
+          onRefreshSessions={loadSessions}
+          sessionsLoading={sessionsLoading}
+          onSessionCreated={handleSessionCreated}
+        />
+      </div>
+    </AuthGuard>
   );
 }

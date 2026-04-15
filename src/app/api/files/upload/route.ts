@@ -1,14 +1,13 @@
 import { writeFile, mkdir } from "fs/promises";
 import { join, dirname } from "path";
-import { extractToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { extractSession, unauthorized } from "@/lib/auth-server";
 import { safePath, safeFilename, SafePathError } from "@/lib/safe-path";
 
 /** Maximum upload file size: 10MB */
 const MAX_UPLOAD_SIZE = 10 * 1024 * 1024;
 
 export async function POST(request: Request) {
-  const token = extractToken(request);
-  if (!token || !validateToken(token)) return unauthorized();
+  if (!extractSession(request)) return unauthorized();
 
   const url = new URL(request.url);
   const rawDirPath = url.searchParams.get("path") || "~";

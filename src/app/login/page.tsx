@@ -1,71 +1,187 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import { setToken } from "@/lib/auth";
+import {
+  loginApi,
+  refreshTokenApi,
+  ApiError,
+} from "@/lib/api-backend";
+import {
+  setAuth,
+  getStoredAuth,
+  isAuthenticated,
+  updateStoredRefreshToken,
+} from "@/lib/auth";
+import { setAccessToken } from "@/lib/apiClient";
+
+const emptySubscribe = () => () => {};
+
+/**
+ * Establish a local session cookie by calling the chat backend's
+ * /api/auth/session endpoint with the Spring access token.
+ * Returns the user object on success, throws on failure.
+ */
+async function establishSession(accessToken: string) {
+  const base = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
+  const res = await fetch(`${base}/api/auth/session`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (res.status === 403) {
+    const body = await res.json().catch(() => ({}));
+    throw new ApiError(403, body.error || "This email is not authorized.");
+  }
+  if (!res.ok) {
+    throw new ApiError(res.status, "Failed to establish session.");
+  }
+
+  return (await res.json()) as { user: { id: string; email: string; username: string; role: string } };
+}
 
 export default function LoginPage() {
-  const [token, setTokenValue] = useState("");
+  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const router = useRouter();
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setError("");
+  const mounted = useSyncExternalStore(
+    emptySubscribe,
+    () => true,
+    () => false,
+  );
+
+  // Auto-login: if a refresh token exists, silently restore the session.
+  useEffect(() => {
+    if (!mounted) return;
+
+    const stored = getStoredAuth();
+    if (!stored?.refreshToken) return;
+
     setLoading(true);
-
-    try {
-      const base = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
-      const res = await fetch(`${base}/api/auth/verify`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token: token.trim() }),
+    refreshTokenApi(stored.refreshToken)
+      .then(async ({ accessToken, refreshToken }) => {
+        setAccessToken(accessToken);
+        updateStoredRefreshToken(refreshToken);
+        // Re-establish local session cookie
+        await establishSession(accessToken);
+        router.replace("/");
+      })
+      .catch(() => {
+        setLoading(false);
       });
+  }, [mounted, router]);
 
-      if (!res.ok) {
-        setError("Invalid token");
+  const handleSubmit = useCallback(
+    async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      setError("");
+      const trimmedEmail = email.trim();
+      if (!trimmedEmail || !password) {
+        setError("Please enter your email and password.");
         return;
       }
 
-      setToken(token.trim());
-      router.push("/");
-    } catch {
-      setError("Connection error");
-    } finally {
-      setLoading(false);
-    }
-  }
+      setLoading(true);
+      try {
+        // 1. Login against Spring backend
+        const { accessToken, refreshToken } = await loginApi(
+          trimmedEmail,
+          password,
+        );
+        setAccessToken(accessToken);
+
+        // 2. Establish local session (validates email against ALLOWED_EMAIL)
+        const { user } = await establishSession(accessToken);
+
+        // 3. Persist auth state
+        setAuth(user, refreshToken);
+        router.replace("/");
+      } catch (err) {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : "Login failed. Please try again.",
+        );
+        setLoading(false);
+      }
+    },
+    [email, password, router],
+  );
+
+  if (!mounted || loading) return null;
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-canvas-bg p-4">
       <form
         onSubmit={handleSubmit}
+        noValidate
         className="w-full max-w-sm space-y-4"
       >
         <h1 className="text-center text-xl font-semibold text-canvas-fg">
           Claw Chat
         </h1>
         <p className="text-center text-sm text-canvas-muted">
-          Enter your access token to continue
+          Sign in to continue
         </p>
-        <input
-          type="password"
-          value={token}
-          onChange={(e) => setTokenValue(e.target.value)}
-          placeholder="Access token"
-          autoFocus
-          className="w-full rounded-lg border border-canvas-border bg-canvas-bg px-4 py-3 text-canvas-fg placeholder:text-canvas-muted focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
+
+        <div>
+          <label
+            htmlFor="login-email"
+            className="mb-1.5 block text-xs font-medium text-canvas-muted"
+          >
+            Email
+          </label>
+          <input
+            id="login-email"
+            type="email"
+            required
+            autoComplete="email"
+            placeholder="you@example.com"
+            value={email}
+            onChange={(e) => {
+              setEmail(e.target.value);
+              if (error) setError("");
+            }}
+            autoFocus
+            className="w-full rounded-lg border border-canvas-border bg-canvas-bg px-4 py-3 text-canvas-fg placeholder:text-canvas-muted focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
+        <div>
+          <label
+            htmlFor="login-password"
+            className="mb-1.5 block text-xs font-medium text-canvas-muted"
+          >
+            Password
+          </label>
+          <input
+            id="login-password"
+            type="password"
+            required
+            autoComplete="current-password"
+            placeholder="Enter your password"
+            value={password}
+            onChange={(e) => {
+              setPassword(e.target.value);
+              if (error) setError("");
+            }}
+            className="w-full rounded-lg border border-canvas-border bg-canvas-bg px-4 py-3 text-canvas-fg placeholder:text-canvas-muted focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+
         {error && (
           <p className="text-center text-sm text-red-500">{error}</p>
         )}
         <button
           type="submit"
-          disabled={!token.trim() || loading}
+          disabled={!email.trim() || !password || loading}
           className="w-full rounded-lg bg-[#1f6feb] px-4 py-3 font-medium text-white disabled:opacity-50"
         >
-          {loading ? "Verifying..." : "Continue"}
+          {loading ? "Signing in..." : "Sign in"}
         </button>
       </form>
     </div>

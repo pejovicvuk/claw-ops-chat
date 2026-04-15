@@ -1,34 +1,71 @@
 "use client";
 
-const TOKEN_KEY = "claw-chat-token:v1";
-
 /**
- * Get the auth token from sessionStorage.
- * Note: The primary auth mechanism is the httpOnly cookie set by /api/auth/verify.
- * This is only used for the WebSocket connection URL as a fallback.
+ * Client-side authentication state.
+ *
+ * Stores the authenticated user and JWT refresh token in localStorage.
+ * Access token is kept in memory only (see apiClient.ts).
  */
-export function getToken(): string | null {
+
+import type { AuthUser } from "./api-backend";
+
+const STORAGE_KEY = "claw-chat-auth:v1";
+
+export interface StoredAuth {
+  user: AuthUser;
+  refreshToken: string;
+}
+
+/** Persist the authenticated user and refresh token in localStorage. */
+export function setAuth(user: AuthUser, refreshToken: string): void {
+  if (typeof window === "undefined") return;
+  const stored: StoredAuth = { user, refreshToken };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+}
+
+/** Update only the refresh token in the stored auth record (after token rotation). */
+export function updateStoredRefreshToken(refreshToken: string): void {
+  if (typeof window === "undefined") return;
+  const stored = getStoredAuth();
+  if (!stored) return;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify({ ...stored, refreshToken }));
+}
+
+/** Read the full stored auth record, or null if not logged in. */
+export function getStoredAuth(): StoredAuth | null {
   if (typeof window === "undefined") return null;
-  return sessionStorage.getItem(TOKEN_KEY);
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw) as StoredAuth;
+  } catch {
+    return null;
+  }
 }
 
-export function setToken(token: string) {
-  sessionStorage.setItem(TOKEN_KEY, token);
+/** Read the stored user, or null if not logged in. */
+export function getUser(): AuthUser | null {
+  return getStoredAuth()?.user ?? null;
 }
 
-export function clearToken() {
-  sessionStorage.removeItem(TOKEN_KEY);
+/** Clear auth state from localStorage (logout). */
+export function clearAuth(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(STORAGE_KEY);
+  // Also clear legacy storage key
+  sessionStorage.removeItem("claw-chat-token:v1");
+}
+
+/** Boolean convenience — is the user currently authenticated (has a refresh token)? */
+export function isAuthenticated(): boolean {
+  return !!getStoredAuth()?.refreshToken;
 }
 
 /**
- * Authenticated fetch. The httpOnly cookie is sent automatically by the browser.
- * The Authorization header is kept as a fallback for compatibility.
+ * Authenticated fetch for local chat API routes.
+ * Relies on the httpOnly session cookie (sent automatically by the browser).
+ * No Bearer header needed — the signed cookie handles auth.
  */
 export async function authFetch(path: string, init?: RequestInit): Promise<Response> {
-  const token = getToken();
-  const headers = new Headers(init?.headers);
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-  return fetch(path, { ...init, headers, credentials: "same-origin" });
+  return fetch(path, { ...init, credentials: "same-origin" });
 }

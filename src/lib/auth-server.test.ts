@@ -1,115 +1,94 @@
-import { describe, it, expect, vi, beforeAll } from "vitest";
-
-// Must stub env BEFORE import — vitest hoists imports
-vi.stubEnv("CLAW_CHAT_TOKEN", "test-token-abc123");
+import { describe, it, expect } from "vitest";
 
 const mod = await import("./auth-server");
 const {
-  validateToken,
-  extractBearerToken,
-  extractToken,
-  extractTokenFromCookieHeader,
+  signSession,
+  verifySession,
+  extractSession,
+  extractSessionFromCookieHeader,
   makeSessionCookie,
   makeClearSessionCookie,
 } = mod;
 
-describe("validateToken", () => {
-  it("accepts the correct token", () => {
-    expect(validateToken("test-token-abc123")).toBe(true);
+describe("signSession / verifySession", () => {
+  it("signs and verifies a session", () => {
+    const signed = signSession("user@example.com");
+    const payload = verifySession(signed);
+    expect(payload).not.toBeNull();
+    expect(payload!.email).toBe("user@example.com");
   });
 
-  it("rejects an incorrect token", () => {
-    expect(validateToken("wrong-token-xyz")).toBe(false);
+  it("rejects a tampered signature", () => {
+    const signed = signSession("user@example.com");
+    const tampered = signed.slice(0, -4) + "dead";
+    expect(verifySession(tampered)).toBeNull();
   });
 
-  it("rejects an empty token", () => {
-    expect(validateToken("")).toBe(false);
+  it("rejects a tampered payload", () => {
+    const signed = signSession("user@example.com");
+    const [, sig] = signed.split(".");
+    const fakePayload = Buffer.from(
+      JSON.stringify({ email: "evil@example.com", exp: Math.floor(Date.now() / 1000) + 9999 }),
+    ).toString("base64url");
+    expect(verifySession(`${fakePayload}.${sig}`)).toBeNull();
   });
 
-  it("rejects a token of different length", () => {
-    expect(validateToken("short")).toBe(false);
+  it("rejects a cookie without a dot separator", () => {
+    expect(verifySession("noseparator")).toBeNull();
   });
 
-  it("uses timing-safe comparison (same length, different content)", () => {
-    // Same length as "test-token-abc123" (18 chars)
-    expect(validateToken("xxxxxxxxxxxxxxxxxx")).toBe(false);
+  it("rejects an empty string", () => {
+    expect(verifySession("")).toBeNull();
   });
 });
 
-describe("extractBearerToken", () => {
-  it("extracts token from Authorization: Bearer header", () => {
+describe("extractSession", () => {
+  it("extracts and verifies session from cookie", () => {
+    const signed = signSession("user@example.com");
     const req = new Request("http://localhost", {
-      headers: { Authorization: "Bearer my-token" },
+      headers: { Cookie: `claw-session=${encodeURIComponent(signed)}; other=val` },
     });
-    expect(extractBearerToken(req)).toBe("my-token");
+    const payload = extractSession(req);
+    expect(payload).not.toBeNull();
+    expect(payload!.email).toBe("user@example.com");
   });
 
-  it("returns null when no Authorization header", () => {
+  it("returns null when no cookie header", () => {
     const req = new Request("http://localhost");
-    expect(extractBearerToken(req)).toBe(null);
+    expect(extractSession(req)).toBeNull();
   });
 
-  it("returns null for non-Bearer auth", () => {
+  it("returns null when cookie has invalid signature", () => {
     const req = new Request("http://localhost", {
-      headers: { Authorization: "Basic dXNlcjpwYXNz" },
+      headers: { Cookie: "claw-session=invalid.value" },
     });
-    expect(extractBearerToken(req)).toBe(null);
+    expect(extractSession(req)).toBeNull();
   });
 });
 
-describe("extractToken", () => {
-  it("extracts token from cookie when present", () => {
-    const req = new Request("http://localhost", {
-      headers: { Cookie: "claw-session=cookie-token; other=val" },
-    });
-    expect(extractToken(req)).toBe("cookie-token");
-  });
-
-  it("falls back to Bearer token when no cookie", () => {
-    const req = new Request("http://localhost", {
-      headers: { Authorization: "Bearer bearer-token" },
-    });
-    expect(extractToken(req)).toBe("bearer-token");
-  });
-
-  it("prefers cookie over Bearer token", () => {
-    const req = new Request("http://localhost", {
-      headers: {
-        Cookie: "claw-session=cookie-token",
-        Authorization: "Bearer bearer-token",
-      },
-    });
-    expect(extractToken(req)).toBe("cookie-token");
-  });
-
-  it("returns null when neither cookie nor Bearer is present", () => {
-    const req = new Request("http://localhost");
-    expect(extractToken(req)).toBe(null);
-  });
-});
-
-describe("extractTokenFromCookieHeader", () => {
-  it("extracts token from raw cookie header string", () => {
-    expect(extractTokenFromCookieHeader("claw-session=my-token; path=/")).toBe("my-token");
-  });
-
-  it("handles URL-encoded token values", () => {
-    expect(extractTokenFromCookieHeader("claw-session=token%20with%20space")).toBe("token with space");
+describe("extractSessionFromCookieHeader", () => {
+  it("extracts session from raw cookie header string", () => {
+    const signed = signSession("test@example.com");
+    const payload = extractSessionFromCookieHeader(
+      `claw-session=${encodeURIComponent(signed)}; path=/`,
+    );
+    expect(payload).not.toBeNull();
+    expect(payload!.email).toBe("test@example.com");
   });
 
   it("returns null for missing cookie", () => {
-    expect(extractTokenFromCookieHeader("other=val")).toBe(null);
+    expect(extractSessionFromCookieHeader("other=val")).toBeNull();
   });
 
   it("returns null for undefined header", () => {
-    expect(extractTokenFromCookieHeader(undefined)).toBe(null);
+    expect(extractSessionFromCookieHeader(undefined)).toBeNull();
   });
 });
 
 describe("makeSessionCookie", () => {
   it("creates an httpOnly SameSite=Strict cookie", () => {
-    const cookie = makeSessionCookie("my-token");
-    expect(cookie).toContain("claw-session=my-token");
+    const cookie = makeSessionCookie("signed-value");
+    expect(cookie).toContain("claw-session=signed-value");
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("SameSite=Strict");
     expect(cookie).toContain("Path=/chat");

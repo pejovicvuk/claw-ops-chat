@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { getToken } from "@/lib/auth";
+import { getAccessToken } from "@/lib/apiClient";
 import type { ChatMessage, ClaudeStatus, ActiveToolInfo } from "@/lib/types";
 
 /** Max reconnection delay in ms. */
@@ -271,16 +271,12 @@ export function useClaudeChat(sessionId: string | null) {
     intentionalCloseRef.current = false;
     setStatus("connecting");
 
-    const token = getToken();
-    if (!token) {
-      setStatus("disconnected");
-      return;
-    }
-
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    // Token is still passed as query param for backward compatibility;
-    // the server also reads the httpOnly cookie.
-    const wsUrl = `${proto}//${window.location.host}/chat/ws/chat?token=${encodeURIComponent(token)}&session=${encodeURIComponent(sessionId)}`;
+    // The httpOnly session cookie is sent automatically by the browser.
+    // Also pass the access token as query param fallback.
+    const accessToken = getAccessToken();
+    const tokenParam = accessToken ? `&token=${encodeURIComponent(accessToken)}` : "";
+    const wsUrl = `${proto}//${window.location.host}/chat/ws/chat?session=${encodeURIComponent(sessionId)}${tokenParam}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

@@ -1,10 +1,9 @@
 import { writeFile } from "fs/promises";
-import { extractToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { extractSession, unauthorized } from "@/lib/auth-server";
 import { safePath, SafePathError } from "@/lib/safe-path";
 
 export async function POST(request: Request) {
-  const token = extractToken(request);
-  if (!token || !validateToken(token)) return unauthorized();
+  if (!extractSession(request)) return unauthorized();
 
   const body = await request.json();
   const rawPath = body?.path;

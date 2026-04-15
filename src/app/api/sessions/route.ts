@@ -1,7 +1,7 @@
 import { readdir, readFile, stat } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
-import { extractToken, validateToken, unauthorized } from "@/lib/auth-server";
+import { extractSession, unauthorized } from "@/lib/auth-server";
 
 interface SessionEntry {
   sessionId: string;
@@ -23,8 +23,7 @@ function extractText(content: unknown): string {
 }
 
 export async function GET(request: Request) {
-  const token = extractToken(request);
-  if (!token || !validateToken(token)) return unauthorized();
+  if (!extractSession(request)) return unauthorized();
 
   const projectsDir = join(homedir(), ".claude", "projects");
   const sessions: SessionEntry[] = [];

@@ -169,8 +169,7 @@ export function ChatLayout({
   if (isMobile) {
     return (
       <div
-        className="flex flex-col"
-        style={{ height: viewportHeight, overflow: "hidden" }}
+        className="flex flex-col h-dvh overflow-hidden"
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}

@@ -167,8 +167,8 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
         </div>
       )}
 
-      {/* Mode & Effort bar */}
-      <div className="relative flex shrink-0 items-center gap-3 px-3 py-1.5" style={{ borderBottom: "1px solid var(--canvas-border)" }}>
+      {/* Mode & Effort bar — extra left padding on mobile for floating chat button */}
+      <div className="relative flex shrink-0 items-center gap-3 px-3 pr-4 py-2" style={{ borderBottom: "1px solid var(--canvas-border)", paddingLeft: headerless ? "52px" : "12px" }}>
         <button
           type="button"
           onClick={() => setShowModeMenu((v) => !v)}

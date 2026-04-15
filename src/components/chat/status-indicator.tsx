@@ -34,9 +34,9 @@ export function StatusIndicator({ status, activeTool, onReconnect }: StatusIndic
     : LABEL[status];
 
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex items-center gap-2 pr-1">
       <span className={`h-2 w-2 shrink-0 rounded-full ${DOT_CLASS[status]}`} />
-      <span className="text-[11px] text-canvas-muted">{label}</span>
+      <span className="text-[11px] text-canvas-muted whitespace-nowrap">{label}</span>
       {status === "disconnected" && (
         <button
           type="button"

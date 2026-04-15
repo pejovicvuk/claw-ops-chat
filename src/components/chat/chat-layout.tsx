@@ -181,17 +181,17 @@ export function ChatLayout({
           style={{ zIndex: Z_INDEX.MODAL - 1, opacity: 0, transition: "opacity 100ms" }}
         />
 
-        {/* Floating hamburger bubble — glassmorphism */}
+        {/* Floating chat button — sits beside mode bar */}
         <div
-          className="fixed left-3 z-30"
-          style={{ top: "max(env(safe-area-inset-top, 0px), 12px)" }}
+          className="fixed left-3 z-30 flex items-center"
+          style={{ top: "max(env(safe-area-inset-top, 0px), 6px)" }}
         >
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
-            className="glass flex h-10 w-10 items-center justify-center rounded-full shadow-lg transition-transform duration-200 active:scale-90"
+            className="glass flex h-9 w-9 items-center justify-center rounded-full shadow-md transition-transform duration-200 active:scale-90"
           >
-            <FiMessageCircle size={18} className="text-canvas-fg" />
+            <FiMessageCircle size={16} className="text-canvas-fg" />
           </button>
         </div>
 

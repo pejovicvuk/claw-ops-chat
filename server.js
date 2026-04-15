@@ -9,13 +9,14 @@ const url_1 = require("url");
 const next_1 = __importDefault(require("next"));
 const ws_1 = require("ws");
 const claude_agent_sdk_1 = require("@anthropic-ai/claude-agent-sdk");
-const crypto_1 = require("crypto");
+const auth_server_1 = require("./src/lib/auth-server");
 /* ------------------------------------------------------------------ */
 /*  Config                                                             */
 /* ------------------------------------------------------------------ */
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT || "3100", 10);
-const CLAW_CHAT_TOKEN = process.env.CLAW_CHAT_TOKEN;
+const ALLOWED_EMAIL = process.env.ALLOWED_EMAIL || "";
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080").replace(/\/+$/, "");
 /** Allowed origins for WebSocket connections. Auto-populated from ALLOWED_ORIGINS env or defaults. */
 const ALLOWED_ORIGINS = new Set((process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean));
 /** Permission/question response timeout in ms (default: 5 minutes). */
@@ -26,25 +27,30 @@ const HEARTBEAT_INTERVAL_MS = 30000;
 const WS_RATE_LIMIT = parseInt(process.env.WS_RATE_LIMIT || "20", 10);
 /** Session cleanup delay after all clients disconnect (default: 60s). */
 const SESSION_CLEANUP_MS = 60000;
-if (!CLAW_CHAT_TOKEN) {
-    console.error("FATAL: CLAW_CHAT_TOKEN environment variable is required");
+if (!ALLOWED_EMAIL) {
+    console.error("FATAL: ALLOWED_EMAIL environment variable is required");
     process.exit(1);
 }
 /* ------------------------------------------------------------------ */
-/*  Cookie parsing                                                     */
+/*  WebSocket auth helper                                              */
 /* ------------------------------------------------------------------ */
-const COOKIE_NAME = "claw-session";
-function extractTokenFromCookies(cookieHeader) {
-    if (!cookieHeader)
-        return null;
-    const prefix = `${COOKIE_NAME}=`;
-    for (const part of cookieHeader.split(";")) {
-        const trimmed = part.trim();
-        if (trimmed.startsWith(prefix)) {
-            return decodeURIComponent(trimmed.slice(prefix.length));
-        }
+/**
+ * Validate an access token by calling the Spring backend's /auth/me.
+ * Returns true if the token is valid and the email matches ALLOWED_EMAIL.
+ */
+async function validateAccessToken(token) {
+    try {
+        const res = await fetch(`${API_ORIGIN}/api/v1/auth/me`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok)
+            return false;
+        const user = (await res.json());
+        return user.email.toLowerCase() === ALLOWED_EMAIL.toLowerCase();
     }
-    return null;
+    catch {
+        return false;
+    }
 }
 /* ------------------------------------------------------------------ */
 /*  Session Manager                                                    */
@@ -468,21 +474,6 @@ class SessionManager {
     }
 }
 /* ------------------------------------------------------------------ */
-/*  Token validation                                                   */
-/* ------------------------------------------------------------------ */
-function validateToken(token) {
-    if (!CLAW_CHAT_TOKEN)
-        return false;
-    if (token.length !== CLAW_CHAT_TOKEN.length)
-        return false;
-    try {
-        return (0, crypto_1.timingSafeEqual)(Buffer.from(token), Buffer.from(CLAW_CHAT_TOKEN));
-    }
-    catch {
-        return false;
-    }
-}
-/* ------------------------------------------------------------------ */
 /*  Origin validation                                                  */
 /* ------------------------------------------------------------------ */
 function isOriginAllowed(origin) {
@@ -519,7 +510,7 @@ app.prepare().then(() => {
     const wss = new ws_1.WebSocketServer({ noServer: true });
     // Let Next.js handle its own upgrade requests (HMR etc.)
     const nextUpgradeHandler = app.getUpgradeHandler();
-    server.on("upgrade", (req, socket, head) => {
+    server.on("upgrade", async (req, socket, head) => {
         const { pathname, query: qs } = (0, url_1.parse)(req.url || "/", true);
         if (pathname !== "/ws/chat" && pathname !== "/chat/ws/chat") {
             // Pass to Next.js for HMR and other internal WebSockets
@@ -534,14 +525,22 @@ app.prepare().then(() => {
             socket.destroy();
             return;
         }
-        // Authenticate: try cookie first, then query string token (for backward compat)
-        const cookieToken = extractTokenFromCookies(req.headers.cookie);
-        const queryToken = qs.token;
-        const token = cookieToken || queryToken;
-        if (!token || !validateToken(token)) {
-            socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
-            socket.destroy();
-            return;
+        // Authenticate: try signed session cookie first (fast, local HMAC check),
+        // then fall back to validating access token via the Spring backend.
+        const sessionPayload = (0, auth_server_1.extractSessionFromCookieHeader)(req.headers.cookie);
+        if (!sessionPayload) {
+            const queryToken = qs.token;
+            if (!queryToken) {
+                socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+                socket.destroy();
+                return;
+            }
+            const valid = await validateAccessToken(queryToken);
+            if (!valid) {
+                socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+                socket.destroy();
+                return;
+            }
         }
         const sessionId = qs.session || "default";
         wss.handleUpgrade(req, socket, head, (ws) => {

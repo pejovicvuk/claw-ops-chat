@@ -6,6 +6,7 @@ import {
   loginApi,
   refreshTokenApi,
   ApiError,
+  type AuthUser,
 } from "@/lib/api-backend";
 import {
   setAuth,
@@ -38,7 +39,7 @@ async function establishSession(accessToken: string) {
     throw new ApiError(res.status, "Failed to establish session.");
   }
 
-  return (await res.json()) as { user: { id: string; email: string; username: string; role: string } };
+  return (await res.json()) as { user: AuthUser };
 }
 
 export default function LoginPage() {

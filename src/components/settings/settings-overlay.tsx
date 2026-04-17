@@ -1,48 +1,60 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
-import { FiSettings, FiX, FiLogOut, FiMail, FiUser, FiShield } from "react-icons/fi";
-import { authFetch, clearAuth, getUser } from "@/lib/auth";
+import { useCallback, useEffect, useRef } from "react";
+import { FiSettings, FiX, FiLogOut, FiArrowLeft } from "react-icons/fi";
+import { authFetch, clearAuth } from "@/lib/auth";
 import { clearAccessToken } from "@/lib/apiClient";
 import { useUrlState } from "@/lib/use-url-state";
 import { Z_INDEX } from "@/lib/z-index";
-import { SettingsSection } from "./settings-section";
-import { ThemeSelector } from "./theme-selector";
+import { SettingsMainPage } from "./pages/settings-main-page";
+import { SettingsConnectionsPage } from "./pages/settings-connections-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
-const emptySubscribe = () => () => {};
+
+type Page = "main" | "connections";
+
+/** Parse the current settings page from the URL param value. */
+function parsePage(raw: string | null): Page | null {
+  if (raw === null) return null;
+  if (raw === "connections") return "connections";
+  // "main", "1" (back-compat), anything else → main page
+  return "main";
+}
+
+const PAGE_TITLES: Record<Page, string> = {
+  main: "Settings",
+  connections: "Connections",
+};
 
 /**
- * Full-screen settings overlay. Open/closed state is driven by ?settings=1 in the URL.
- * Render this once near the root (e.g. from page.tsx) — it handles its own visibility.
+ * Full-screen settings overlay. Open/closed state + active page are both
+ * driven by the ?settings= URL param:
+ *   ?settings=main        → main page
+ *   ?settings=connections → connections list page
+ *   absent                → closed
+ *   ?settings=1           → treated as "main" (back-compat)
  */
 export function SettingsOverlay() {
   const { params, setParam } = useUrlState();
-  const open = params.get("settings") === "1";
+  const page = parsePage(params.get("settings"));
+  const open = page !== null;
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-
-  // Avoid hydration mismatch — returns false during SSR, true after mount.
-  const mounted = useSyncExternalStore(
-    emptySubscribe,
-    () => true,
-    () => false,
-  );
-  // Memo the user read to a stable identity — avoids infinite re-render loops
-  // from useSyncExternalStore returning a fresh object each render.
-  const user = useMemo(() => (mounted ? getUser() : null), [mounted]);
 
   const close = useCallback(() => {
     setParam("settings", null);
   }, [setParam]);
 
-  // Escape key dismissal + focus trap entry point.
+  const goToMain = useCallback(() => {
+    setParam("settings", "main");
+  }, [setParam]);
+
+  // Escape key dismissal + focus entry point on open.
   useEffect(() => {
     if (!open) return;
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") close();
     }
     document.addEventListener("keydown", onKey);
-    // Focus close button when opening — gives keyboard users a predictable entry point
     closeButtonRef.current?.focus();
     return () => document.removeEventListener("keydown", onKey);
   }, [open, close]);
@@ -58,7 +70,10 @@ export function SettingsOverlay() {
     window.location.href = `${BASE}/login`;
   }, []);
 
-  if (!open) return null;
+  if (!open || !page) return null;
+
+  const isSubPage = page !== "main";
+  const title = PAGE_TITLES[page];
 
   return (
     <div
@@ -75,10 +90,21 @@ export function SettingsOverlay() {
       >
         {/* Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-5 py-3.5">
-          <div className="flex items-center gap-2">
-            <FiSettings size={16} className="text-canvas-muted" />
-            <h2 id="settings-title" className="text-[14px] font-semibold text-canvas-fg">
-              Settings
+          <div className="flex min-w-0 items-center gap-2">
+            {isSubPage ? (
+              <button
+                type="button"
+                onClick={goToMain}
+                aria-label="Back to settings"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+              >
+                <FiArrowLeft size={14} />
+              </button>
+            ) : (
+              <FiSettings size={16} className="shrink-0 text-canvas-muted" />
+            )}
+            <h2 id="settings-title" className="truncate text-[14px] font-semibold text-canvas-fg">
+              {title}
             </h2>
           </div>
           <button
@@ -86,75 +112,35 @@ export function SettingsOverlay() {
             type="button"
             onClick={close}
             aria-label="Close settings"
-            className="flex h-8 w-8 items-center justify-center rounded-full text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
           >
             <FiX size={16} />
           </button>
         </div>
 
-        {/* Content */}
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
-          {/* Account */}
-          <SettingsSection title="Account" description="Signed in as">
-            {user ? (
-              <div className="space-y-2">
-                <InfoRow icon={<FiMail size={13} />} label="Email" value={user.email} />
-                {user.username && user.username !== user.email && (
-                  <InfoRow icon={<FiUser size={13} />} label="Username" value={user.username} />
-                )}
-                {user.role && (
-                  <InfoRow icon={<FiShield size={13} />} label="Role" value={user.role} />
-                )}
-              </div>
-            ) : (
-              <p className="text-[12px] text-canvas-muted">Not signed in</p>
-            )}
-          </SettingsSection>
-
-          {/* Appearance */}
-          <SettingsSection title="Appearance" description="Choose how the app looks">
-            <ThemeSelector />
-          </SettingsSection>
-
-          {/* Connections (placeholder for future work) */}
-          <SettingsSection title="Connections" description="External integrations">
-            <p className="text-[12px] text-canvas-muted">
-              GitHub, Claude Code, and other connections will appear here.
-            </p>
-          </SettingsSection>
+        {/* Page content */}
+        <div className="flex-1 overflow-y-auto px-5 py-5">
+          {page === "main" && <SettingsMainPage />}
+          {page === "connections" && <SettingsConnectionsPage />}
         </div>
 
-        {/* Footer */}
-        <div
-          className="flex shrink-0 items-center justify-end border-t border-canvas-border px-5 py-3"
-          style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 12px)" }}
-        >
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/15"
+        {/* Footer — only on main page */}
+        {page === "main" && (
+          <div
+            className="flex shrink-0 items-center justify-end border-t border-canvas-border px-5 py-3"
+            style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 12px)" }}
           >
-            <FiLogOut size={13} />
-            Log out
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/15"
+            >
+              <FiLogOut size={13} />
+              Log out
+            </button>
+          </div>
+        )}
       </div>
-    </div>
-  );
-}
-
-interface InfoRowProps {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}
-
-function InfoRow({ icon, label, value }: InfoRowProps) {
-  return (
-    <div className="flex items-center gap-2 rounded-lg bg-canvas-bg px-3 py-2">
-      <span className="text-canvas-muted">{icon}</span>
-      <span className="shrink-0 text-[11px] text-canvas-muted">{label}</span>
-      <span className="ml-auto truncate text-[12px] font-medium text-canvas-fg">{value}</span>
     </div>
   );
 }

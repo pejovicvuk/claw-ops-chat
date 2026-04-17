@@ -36,7 +36,7 @@ export function SessionList({
   runningSessionIds,
 }: SessionListProps) {
   const { setParam } = useUrlState();
-  const openSettings = () => setParam("settings", "1");
+  const openSettings = () => setParam("settings", "main");
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

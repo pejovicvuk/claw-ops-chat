@@ -2,23 +2,23 @@
 
 ## Quick Reference
 
-| Action             | Command                                                                     |
-| ------------------ | --------------------------------------------------------------------------- |
-| Install            | `npm install --force` (needed for lightningcss-linux-x64-musl on non-Linux) |
-| Dev                | `npm run dev` (tsx server.ts — HTTP + WebSocket on port 3100)               |
-| Dev (Next.js only) | `npm run dev:next`                                                          |
-| Build              | `npm run build` (next build + tsc server.ts)                                |
-| Start              | `npm start` (node server.js)                                                |
-| Test               | `npm test` (vitest run)                                                     |
-| Test watch         | `npm run test:watch`                                                        |
-| Single test        | `npx vitest run src/lib/safe-path.test.ts`                                  |
-| Lint               | `npm run lint` (eslint)                                                     |
-| Format             | `npm run format` (prettier --write .)                                       |
-| Format check       | `npm run format:check`                                                      |
-| Type check         | `npx tsc --noEmit`                                                          |
-| Docker build       | `docker compose build`                                                      |
-| Docker deploy      | `docker compose up -d`                                                      |
-| Health check       | `curl http://localhost:3100/chat/api/health`                                |
+| Action             | Command                                                       |
+| ------------------ | ------------------------------------------------------------- |
+| Install            | `npm install`                                                 |
+| Dev                | `npm run dev` (tsx server.ts — HTTP + WebSocket on port 3100) |
+| Dev (Next.js only) | `npm run dev:next`                                            |
+| Build              | `npm run build` (next build + tsc server.ts)                  |
+| Start              | `npm start` (node server.js)                                  |
+| Test               | `npm test` (vitest run)                                       |
+| Test watch         | `npm run test:watch`                                          |
+| Single test        | `npx vitest run src/lib/safe-path.test.ts`                    |
+| Lint               | `npm run lint` (eslint)                                       |
+| Format             | `npm run format` (prettier --write .)                         |
+| Format check       | `npm run format:check`                                        |
+| Type check         | `npx tsc --noEmit`                                            |
+| Docker build       | `docker compose build`                                        |
+| Docker deploy      | `docker compose up -d`                                        |
+| Health check       | `curl http://localhost:3100/chat/api/health`                  |
 
 ## Architecture
 

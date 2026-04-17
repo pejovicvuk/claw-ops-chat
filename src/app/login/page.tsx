@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { loginApi, refreshTokenApi, ApiError, type AuthUser } from "@/lib/api-backend";
-import { setAuth, getStoredAuth, isAuthenticated, updateStoredRefreshToken } from "@/lib/auth";
+import { setAuth, getStoredAuth, updateStoredRefreshToken } from "@/lib/auth";
 import { setAccessToken } from "@/lib/apiClient";
 
 const emptySubscribe = () => () => {};
@@ -37,7 +37,13 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  // Initialize loading=true when a stored refresh token exists (avoids flash of login form).
+  const hasStoredToken = useSyncExternalStore(
+    emptySubscribe,
+    () => !!getStoredAuth()?.refreshToken,
+    () => false,
+  );
+  const [loading, setLoading] = useState(hasStoredToken);
 
   const mounted = useSyncExternalStore(
     emptySubscribe,
@@ -45,26 +51,30 @@ export default function LoginPage() {
     () => false,
   );
 
-  // Auto-login: if a refresh token exists, silently restore the session.
+  // Auto-login: if a stored refresh token exists, silently restore the session.
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || !hasStoredToken) return;
 
+    let cancelled = false;
     const stored = getStoredAuth();
     if (!stored?.refreshToken) return;
 
-    setLoading(true);
     refreshTokenApi(stored.refreshToken)
       .then(async ({ accessToken, refreshToken }) => {
+        if (cancelled) return;
         setAccessToken(accessToken);
         updateStoredRefreshToken(refreshToken);
-        // Re-establish local session cookie
         await establishSession(accessToken);
         router.replace("/");
       })
       .catch(() => {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       });
-  }, [mounted, router]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mounted, hasStoredToken, router]);
 
   const handleSubmit = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {

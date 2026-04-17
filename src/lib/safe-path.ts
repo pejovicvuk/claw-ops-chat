@@ -1,5 +1,5 @@
 import { realpath } from "fs/promises";
-import { resolve, basename } from "path";
+import { resolve, basename, sep } from "path";
 import { homedir } from "os";
 
 /**
@@ -46,7 +46,7 @@ export async function safePath(userPath: string): Promise<string> {
 
   // Validate the resolved path is within the base directory
   const normalizedBase = await getBaseDir();
-  if (!resolved.startsWith(normalizedBase + "/") && resolved !== normalizedBase) {
+  if (!resolved.startsWith(normalizedBase + sep) && resolved !== normalizedBase) {
     throw new SafePathError(`Access denied: path is outside the allowed directory`);
   }
 

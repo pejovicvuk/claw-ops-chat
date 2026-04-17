@@ -22,6 +22,8 @@ export function useClaudeChat(sessionId: string | null) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Track whether the hook is intentionally closing (unmount/session change). */
   const intentionalCloseRef = useRef(false);
+  /** Ref to break circular dependency between connect ↔ scheduleReconnect. */
+  const scheduleReconnectRef = useRef<() => void>(() => {});
 
   /* ── Pre-populate messages (for loading history) ── */
   const setInitialMessages = useCallback((msgs: ChatMessage[]) => {
@@ -314,7 +316,7 @@ export function useClaudeChat(sessionId: string | null) {
 
         // Auto-reconnect with exponential backoff (unless intentionally closed)
         if (!intentionalCloseRef.current) {
-          scheduleReconnect();
+          scheduleReconnectRef.current();
         }
       }
     };
@@ -336,6 +338,11 @@ export function useClaudeChat(sessionId: string | null) {
       connect();
     }, delay + jitter);
   }, [connect]);
+
+  // Keep ref in sync so connect's onclose handler uses the latest scheduleReconnect.
+  useEffect(() => {
+    scheduleReconnectRef.current = scheduleReconnect;
+  }, [scheduleReconnect]);
 
   /* ── Send user message ── */
   const sendMessage = useCallback(

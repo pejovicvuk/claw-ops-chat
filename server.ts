@@ -7,7 +7,7 @@ import { homedir } from "os";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { extractSessionFromCookieHeader, verifySession } from "./src/lib/auth-server";
+import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 
 /* ------------------------------------------------------------------ */
 /*  Config                                                             */
@@ -49,9 +49,6 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 
 /** Maximum WebSocket messages per second per session (default: 20). */
 const WS_RATE_LIMIT = parseInt(process.env.WS_RATE_LIMIT || "20", 10);
-
-/** Session cleanup delay after all clients disconnect (default: 60s). */
-const SESSION_CLEANUP_MS = 60_000;
 
 if (!ALLOWED_EMAIL) {
   console.error("FATAL: ALLOWED_EMAIL environment variable is required");

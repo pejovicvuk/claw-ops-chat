@@ -31,29 +31,34 @@ export function AuthGuard({ children }: AuthGuardProps) {
     () => false,
   );
 
-  const [ready, setReady] = useState(false);
+  // Initialize ready=true if we already have an access token in memory (avoids flash).
+  const hasToken = useSyncExternalStore(
+    emptySubscribe,
+    () => isAuthenticated() && !!getAccessToken(),
+    () => false,
+  );
+  const [ready, setReady] = useState(hasToken);
 
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || ready) return;
 
     if (!isAuthenticated()) {
       router.replace("/login");
       return;
     }
 
-    if (getAccessToken()) {
-      setReady(true);
-      return;
-    }
-
+    // Token already in memory — handled by initial state above.
+    // If we reach here, we need to refresh.
     const stored = getStoredAuth();
     if (!stored?.refreshToken) {
       router.replace("/login");
       return;
     }
 
+    let cancelled = false;
     refreshTokenApi(stored.refreshToken)
       .then(async ({ accessToken, refreshToken }) => {
+        if (cancelled) return;
         setAccessToken(accessToken);
         updateStoredRefreshToken(refreshToken);
 
@@ -68,11 +73,16 @@ export function AuthGuard({ children }: AuthGuardProps) {
         setReady(true);
       })
       .catch(() => {
+        if (cancelled) return;
         clearAuth();
         clearAccessToken();
         router.replace("/login");
       });
-  }, [mounted, router]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [mounted, ready, router]);
 
   if (!mounted || !ready) return null;
 

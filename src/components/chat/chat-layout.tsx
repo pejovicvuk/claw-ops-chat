@@ -43,7 +43,7 @@ export function ChatLayout({
   onSessionCreated,
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
-  const { viewportHeight } = useVisualViewport();
+  useVisualViewport();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [filesPanelOpen, setFilesPanelOpen] = useState(false);
@@ -54,13 +54,14 @@ export function ChatLayout({
 
   const fileBrowserRef = useRef<FileBrowserHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [currentBrowserPath, setCurrentBrowserPath] = useState("~");
+  const [currentBrowserPath] = useState("~");
 
   // Stable session ID — only changes when user explicitly picks a session or clicks New Chat.
   const [sessionId, setSessionId] = useState(() => selectedSessionId || "new-" + Date.now());
 
   // Update when user picks a different session or clicks New Chat
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- legitimate prop→state sync
     setSessionId(selectedSessionId || "new-" + Date.now());
   }, [selectedSessionId]);
 

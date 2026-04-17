@@ -25,6 +25,7 @@ Add a **"Connections"** collapsible section to the server dashboard panel. It sh
 3. **Codex** (OpenAI Codex CLI) — Connected/Not connected. Same pattern — detect via SSH, authenticate via interactive terminal.
 
 Each connection should show:
+
 - Service icon + name
 - Status badge (green "Connected" / gray "Not connected")
 - Account info when connected (username, email, version)
@@ -33,6 +34,7 @@ Each connection should show:
 Clicking "Connect" should open an interactive terminal overlay (the existing `ClaudeCodeOverlay` pattern at `src/components/servers/claude-dashboard-panel.tsx` uses this — it opens a fullscreen xterm.js terminal for interactive auth flows).
 
 ## Key files to read first
+
 - `src/components/servers/server-dashboard-panel.tsx` — main panel, add section here
 - `src/components/servers/github-dashboard-panel.tsx` — reference for GitHub integration pattern
 - `src/components/servers/claude-dashboard-panel.tsx` — reference for Claude integration + interactive terminal overlay
@@ -41,6 +43,7 @@ Clicking "Connect" should open an interactive terminal overlay (the existing `Cl
 - `src/lib/api.ts` — `executeCommandApi()` for running SSH commands
 
 ## Constraints
+
 - Reuse existing detection hooks (`useGithubAccounts`, `useClaudeAccounts`) — don't duplicate
 - For Codex, create a new `use-codex-accounts.ts` following the same pattern (detect via `codex --version` or similar)
 - The interactive terminal overlay pattern already exists — reuse it

@@ -47,9 +47,7 @@ export async function safePath(userPath: string): Promise<string> {
   // Validate the resolved path is within the base directory
   const normalizedBase = await getBaseDir();
   if (!resolved.startsWith(normalizedBase + "/") && resolved !== normalizedBase) {
-    throw new SafePathError(
-      `Access denied: path is outside the allowed directory`,
-    );
+    throw new SafePathError(`Access denied: path is outside the allowed directory`);
   }
 
   return resolved;

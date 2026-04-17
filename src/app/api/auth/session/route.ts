@@ -1,12 +1,9 @@
-import {
-  signSession,
-  makeSessionCookie,
-  makeClearSessionCookie,
-} from "@/lib/auth-server";
+import { signSession, makeSessionCookie, makeClearSessionCookie } from "@/lib/auth-server";
 
-const API_ORIGIN = (
-  process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080"
-).replace(/\/+$/, "");
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080").replace(
+  /\/+$/,
+  "",
+);
 const ALLOWED_EMAIL = process.env.ALLOWED_EMAIL || "";
 
 /**
@@ -37,17 +34,11 @@ export async function POST(request: Request) {
     }
     user = await meRes.json();
   } catch {
-    return Response.json(
-      { error: "Failed to validate token with backend" },
-      { status: 502 },
-    );
+    return Response.json({ error: "Failed to validate token with backend" }, { status: 502 });
   }
 
   // Check email against allowed email
-  if (
-    !ALLOWED_EMAIL ||
-    user.email.toLowerCase() !== ALLOWED_EMAIL.toLowerCase()
-  ) {
+  if (!ALLOWED_EMAIL || user.email.toLowerCase() !== ALLOWED_EMAIL.toLowerCase()) {
     return Response.json(
       { error: "This email is not authorized to access this application." },
       { status: 403 },

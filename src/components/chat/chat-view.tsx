@@ -33,11 +33,20 @@ const EFFORT_OPTIONS = [
 ];
 
 const TOOL_ICONS: Record<string, typeof FiTerminal> = {
-  Bash: FiTerminal, Read: FiFile, Write: FiEdit, Edit: FiEdit, Glob: FiFile, Grep: FiFile,
+  Bash: FiTerminal,
+  Read: FiFile,
+  Write: FiEdit,
+  Edit: FiEdit,
+  Glob: FiFile,
+  Grep: FiFile,
 };
 const TOOL_LABELS: Record<string, string> = {
-  Bash: "Run command", Read: "Read file", Write: "Write file", Edit: "Edit file",
-  Glob: "Search files", Grep: "Search content",
+  Bash: "Run command",
+  Read: "Read file",
+  Write: "Write file",
+  Edit: "Edit file",
+  Glob: "Search files",
+  Grep: "Search content",
 };
 function getToolDisplayForPermission(name: string) {
   return { icon: TOOL_ICONS[name] ?? FiTerminal, label: TOOL_LABELS[name] ?? `Use ${name}` };
@@ -45,7 +54,8 @@ function getToolDisplayForPermission(name: string) {
 function getPermDescForModal(toolName: string, input?: Record<string, unknown>): string {
   if (!input) return "";
   if (toolName === "Bash" && input.command) return String(input.command).slice(0, 200);
-  if (["Read", "Write", "Edit"].includes(toolName) && input.file_path) return String(input.file_path);
+  if (["Read", "Write", "Edit"].includes(toolName) && input.file_path)
+    return String(input.file_path);
   return JSON.stringify(input).slice(0, 200);
 }
 
@@ -58,8 +68,27 @@ interface ChatViewProps {
   onSessionCreated?: (claudeSessionId: string) => void;
 }
 
-export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileButton, onSessionCreated }: ChatViewProps) {
-  const { messages, status, activeTool, claudeSessionId, sendMessage, respondPermission, respondQuestion, setPermissionMode, setEffort, reconnect, setInitialMessages } = useClaudeChat(sessionId);
+export function ChatView({
+  sessionId,
+  resumeSessionId,
+  onBack,
+  headerless,
+  fileButton,
+  onSessionCreated,
+}: ChatViewProps) {
+  const {
+    messages,
+    status,
+    activeTool,
+    claudeSessionId,
+    sendMessage,
+    respondPermission,
+    respondQuestion,
+    setPermissionMode,
+    setEffort,
+    reconnect,
+    setInitialMessages,
+  } = useClaudeChat(sessionId);
   const notifiedSessionRef = useRef<string | null>(null);
   const { viewportHeight } = useVisualViewport();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -72,11 +101,15 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
   });
   const [effortLevel, setEffortLevel] = useState<string | null>(null);
   const [showModeMenu, setShowModeMenu] = useState(false);
-  const [infoMessages, setInfoMessages] = useState<Array<{ id: string; content: string; timestamp: number }>>([]);
+  const [infoMessages, setInfoMessages] = useState<
+    Array<{ id: string; content: string; timestamp: number }>
+  >([]);
   const bridgeSyncedRef = useRef(false);
 
   useEffect(() => {
-    try { localStorage.setItem(MODE_STORAGE_KEY, permissionMode); } catch {}
+    try {
+      localStorage.setItem(MODE_STORAGE_KEY, permissionMode);
+    } catch {}
   }, [permissionMode]);
 
   /* Notify parent when SDK creates a new session (so page can update selected session) */
@@ -109,7 +142,9 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
       .catch(() => {
         if (!cancelled) setLoadingHistory(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [resumeSessionId, setInitialMessages]);
 
   useEffect(() => {
@@ -127,10 +162,14 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
   /** Memoized sorted merge of chat messages and info messages. */
   const sortedMessages = useMemo(() => {
     const infoAsMsgs = infoMessages.map((m) => ({
-      ...m, role: "system" as const, type: "text" as const, _isInfo: true,
+      ...m,
+      role: "system" as const,
+      type: "text" as const,
+      _isInfo: true,
     }));
-    return [...messages.map((m) => ({ ...m, _isInfo: false })), ...infoAsMsgs]
-      .sort((a, b) => a.timestamp - b.timestamp);
+    return [...messages.map((m) => ({ ...m, _isInfo: false })), ...infoAsMsgs].sort(
+      (a, b) => a.timestamp - b.timestamp,
+    );
   }, [messages, infoMessages]);
 
   /** Find the ID of the latest tool_use message (for live activity indicator). */
@@ -168,7 +207,13 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
       )}
 
       {/* Mode & Effort bar — compact single row */}
-      <div className="relative flex shrink-0 items-center gap-2 px-3 pr-3 py-1.5" style={{ borderBottom: "1px solid var(--canvas-border)", paddingLeft: headerless ? "52px" : "12px" }}>
+      <div
+        className="relative flex shrink-0 items-center gap-2 px-3 pr-3 py-1.5"
+        style={{
+          borderBottom: "1px solid var(--canvas-border)",
+          paddingLeft: headerless ? "52px" : "12px",
+        }}
+      >
         <button
           type="button"
           onClick={() => setShowModeMenu((v) => !v)}
@@ -219,11 +264,14 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                 type="button"
                 onClick={() => {
                   if (opt.value !== permissionMode) {
-                    setInfoMessages((prev) => [...prev, {
-                      id: crypto.randomUUID(),
-                      content: `Switched to ${opt.label} mode`,
-                      timestamp: Date.now(),
-                    }]);
+                    setInfoMessages((prev) => [
+                      ...prev,
+                      {
+                        id: crypto.randomUUID(),
+                        content: `Switched to ${opt.label} mode`,
+                        timestamp: Date.now(),
+                      },
+                    ]);
                   }
                   setMode(opt.value);
                   setPermissionMode(opt.value);
@@ -284,9 +332,18 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
           {(status === "thinking" || status === "tool_running") && (
             <div className="animate-msg-in flex items-center gap-2.5 px-5 py-2">
               <span className="thinking-dots flex items-center gap-1">
-                <span className="thinking-dot h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "var(--accent)" }} />
-                <span className="thinking-dot h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "var(--accent)" }} />
-                <span className="thinking-dot h-1.5 w-1.5 rounded-full" style={{ backgroundColor: "var(--accent)" }} />
+                <span
+                  className="thinking-dot h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: "var(--accent)" }}
+                />
+                <span
+                  className="thinking-dot h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: "var(--accent)" }}
+                />
+                <span
+                  className="thinking-dot h-1.5 w-1.5 rounded-full"
+                  style={{ backgroundColor: "var(--accent)" }}
+                />
               </span>
               <span className="text-[11px] text-canvas-muted">
                 {status === "tool_running" && activeTool
@@ -300,16 +357,27 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
 
         {/* Permission modal — slides up from bottom on mobile */}
         {(() => {
-          const pending = messages.find((m) => m.type === "permission_request" && !m.permissionResolved);
+          const pending = messages.find(
+            (m) => m.type === "permission_request" && !m.permissionResolved,
+          );
           if (!pending) return null;
           const toolName = pending.toolName ?? "Tool";
           const { icon: PermIcon, label: permLabel } = getToolDisplayForPermission(toolName);
-          const permDesc = pending.content || getPermDescForModal(toolName, pending.permissionInput);
+          const permDesc =
+            pending.content || getPermDescForModal(toolName, pending.permissionInput);
           return (
             <div className="absolute inset-0 z-10 flex items-end sm:items-center justify-center bg-black/25 backdrop-blur-[3px]">
-              <div className="animate-sheet-up sm:animate-modal-in mx-0 sm:mx-4 w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl bg-canvas-bg p-5 shadow-2xl" style={{ borderTop: "1px solid var(--canvas-border)" }}>
+              <div
+                className="animate-sheet-up sm:animate-modal-in mx-0 sm:mx-4 w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl bg-canvas-bg p-5 shadow-2xl"
+                style={{ borderTop: "1px solid var(--canvas-border)" }}
+              >
                 <div className="mb-4 flex items-center gap-3">
-                  <div className="flex h-10 w-10 items-center justify-center rounded-xl" style={{ backgroundColor: "color-mix(in srgb, var(--accent) 12%, transparent)" }}>
+                  <div
+                    className="flex h-10 w-10 items-center justify-center rounded-xl"
+                    style={{
+                      backgroundColor: "color-mix(in srgb, var(--accent) 12%, transparent)",
+                    }}
+                  >
                     <PermIcon size={18} style={{ color: "var(--accent)" }} />
                   </div>
                   <div>
@@ -319,7 +387,9 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                 </div>
                 {permDesc && (
                   <div className="mb-4 rounded-xl bg-canvas-surface-hover p-3">
-                    <p className="break-all font-mono text-[11px] leading-relaxed text-canvas-muted">{permDesc}</p>
+                    <p className="break-all font-mono text-[11px] leading-relaxed text-canvas-muted">
+                      {permDesc}
+                    </p>
                   </div>
                 )}
                 <div className="space-y-2">
@@ -346,11 +416,14 @@ export function ChatView({ sessionId, resumeSessionId, onBack, headerless, fileB
                       respondPermission(pending.permissionId!, true, true);
                       setMode("acceptEdits");
                       setPermissionMode("acceptEdits");
-                      setInfoMessages((prev) => [...prev, {
-                        id: crypto.randomUUID(),
-                        content: "Switched to Accept Edits mode",
-                        timestamp: Date.now(),
-                      }]);
+                      setInfoMessages((prev) => [
+                        ...prev,
+                        {
+                          id: crypto.randomUUID(),
+                          content: "Switched to Accept Edits mode",
+                          timestamp: Date.now(),
+                        },
+                      ]);
                     }}
                     className="w-full rounded-xl py-2.5 text-[12px] font-medium transition-colors duration-150 active:opacity-70"
                     style={{

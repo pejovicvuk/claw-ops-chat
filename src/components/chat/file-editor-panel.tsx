@@ -79,9 +79,7 @@ export function FileEditorPanel({ file, onClose, zIndex = 50, onFocus }: FileEdi
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-canvas-border border-t-canvas-muted" />
           </div>
         )}
-        {error && (
-          <div className="p-4 text-[12px] text-red-400">{error}</div>
-        )}
+        {error && <div className="p-4 text-[12px] text-red-400">{error}</div>}
         {!loading && !error && (
           <textarea
             value={content}

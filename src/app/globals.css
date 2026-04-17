@@ -9,8 +9,8 @@
   --canvas-surface: rgba(255, 255, 255, 0.65);
   --canvas-surface-hover: rgba(0, 0, 0, 0.04);
   --canvas-muted: #737373;
-  --accent: #E8553A;
-  --accent-hover: #D44A32;
+  --accent: #e8553a;
+  --accent-hover: #d44a32;
   --user-bubble: #2c2c2e;
   --user-bubble-fg: #ffffff;
   --glass-bg: rgba(255, 255, 255, 0.55);
@@ -25,8 +25,8 @@
   --canvas-surface: rgba(30, 30, 30, 0.72);
   --canvas-surface-hover: rgba(255, 255, 255, 0.05);
   --canvas-muted: #999999;
-  --accent: #E8553A;
-  --accent-hover: #F06A52;
+  --accent: #e8553a;
+  --accent-hover: #f06a52;
   --user-bubble: #2c2c2e;
   --user-bubble-fg: #f0f0f0;
   --glass-bg: rgba(30, 30, 30, 0.55);
@@ -64,7 +64,8 @@ html {
   overflow: hidden;
 }
 
-html, body {
+html,
+body {
   /* Prevent overscroll bounce on iOS */
   overscroll-behavior: none;
 }
@@ -72,19 +73,13 @@ html, body {
 body {
   margin: 0;
   padding: 0;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
   background-color: var(--canvas-bg);
   color: var(--canvas-fg);
   font-family:
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    Roboto,
-    "Helvetica Neue",
-    Arial,
-    sans-serif,
-    "Apple Color Emoji",
-    "Segoe UI Emoji";
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji";
   overflow-x: hidden;
 }
 
@@ -156,7 +151,9 @@ html:not(.dark) {
 /* ── Reduced motion ── */
 
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
@@ -165,16 +162,32 @@ html:not(.dark) {
 /* ── Modal animations ── */
 
 @keyframes modalIn {
-  from { opacity: 0; transform: scale(0.95) translateY(8px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
+  from {
+    opacity: 0;
+    transform: scale(0.95) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
 }
 @keyframes modalOut {
-  from { opacity: 1; transform: scale(1) translateY(0); }
-  to { opacity: 0; transform: scale(0.95) translateY(8px); }
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.95) translateY(8px);
+  }
 }
 
-.animate-modal-in { animation: modalIn 200ms cubic-bezier(0.16, 1, 0.3, 1) both; }
-.animate-modal-out { animation: modalOut 150ms ease-in both; }
+.animate-modal-in {
+  animation: modalIn 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.animate-modal-out {
+  animation: modalOut 150ms ease-in both;
+}
 
 /* ── Collapsible section ── */
 
@@ -183,8 +196,9 @@ html:not(.dark) {
   grid-template-rows: 0fr;
   opacity: 0;
   pointer-events: none;
-  transition: grid-template-rows 250ms cubic-bezier(0.4, 0, 0.2, 1),
-              opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);
+  transition:
+    grid-template-rows 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .animate-collapse.open {
   grid-template-rows: 1fr;
@@ -199,22 +213,40 @@ html:not(.dark) {
 /* ── Thinking dots ── */
 
 @keyframes thinkingBounce {
-  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
-  40% { opacity: 1; transform: scale(1.2); }
+  0%,
+  80%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  40% {
+    opacity: 1;
+    transform: scale(1.2);
+  }
 }
 
 .thinking-dots .thinking-dot {
   animation: thinkingBounce 1.4s ease-in-out infinite;
 }
-.thinking-dots .thinking-dot:nth-child(1) { animation-delay: 0s; }
-.thinking-dots .thinking-dot:nth-child(2) { animation-delay: 0.2s; }
-.thinking-dots .thinking-dot:nth-child(3) { animation-delay: 0.4s; }
+.thinking-dots .thinking-dot:nth-child(1) {
+  animation-delay: 0s;
+}
+.thinking-dots .thinking-dot:nth-child(2) {
+  animation-delay: 0.2s;
+}
+.thinking-dots .thinking-dot:nth-child(3) {
+  animation-delay: 0.4s;
+}
 
 /* ── Mobile file sheet slide-up ── */
 
 @keyframes sheetSlideUp {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
 }
 
 .animate-sheet-up {
@@ -224,13 +256,25 @@ html:not(.dark) {
 /* ── Session sidebar slide-in (mobile) ── */
 
 @keyframes sidebarSlideIn {
-  from { transform: translateX(-100%); opacity: 0.8; }
-  to { transform: translateX(0); opacity: 1; }
+  from {
+    transform: translateX(-100%);
+    opacity: 0.8;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 @keyframes sidebarSlideOut {
-  from { transform: translateX(0); opacity: 1; }
-  to { transform: translateX(-100%); opacity: 0.8; }
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(-100%);
+    opacity: 0.8;
+  }
 }
 
 .animate-sidebar-in {
@@ -264,8 +308,14 @@ html:not(.dark) {
 /* ── Chat message fade-in ── */
 
 @keyframes messageFadeIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .animate-msg-in {
@@ -275,10 +325,17 @@ html:not(.dark) {
 /* ── Sidebar/panel smooth transitions ── */
 
 .transition-sidebar {
-  transition: width 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 150ms ease;
+  transition:
+    width 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    opacity 150ms ease;
 }
 
 /* ── Hide scrollbar utility ── */
 
-.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}

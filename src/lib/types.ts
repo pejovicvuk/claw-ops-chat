@@ -1,7 +1,14 @@
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant" | "system";
-  type: "text" | "tool_use" | "tool_result" | "thinking" | "permission_request" | "ask_question" | "error";
+  type:
+    | "text"
+    | "tool_use"
+    | "tool_result"
+    | "thinking"
+    | "permission_request"
+    | "ask_question"
+    | "error";
   content: string;
   toolName?: string;
   toolCallId?: string;

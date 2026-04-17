@@ -2,17 +2,8 @@
 
 import { useEffect, useSyncExternalStore, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  isAuthenticated,
-  getStoredAuth,
-  clearAuth,
-  updateStoredRefreshToken,
-} from "@/lib/auth";
-import {
-  getAccessToken,
-  setAccessToken,
-  clearAccessToken,
-} from "@/lib/apiClient";
+import { isAuthenticated, getStoredAuth, clearAuth, updateStoredRefreshToken } from "@/lib/auth";
+import { getAccessToken, setAccessToken, clearAccessToken } from "@/lib/apiClient";
 import { refreshTokenApi } from "@/lib/api-backend";
 
 const emptySubscribe = () => () => {};

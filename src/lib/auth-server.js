@@ -17,45 +17,39 @@ const SESSION_SECRET = process.env.SESSION_SECRET || (0, crypto_1.randomBytes)(3
  * Sign a session payload: base64(JSON) + "." + hmac_hex
  */
 function signSession(email) {
-    const payload = {
-        email,
-        exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE,
-    };
-    const data = Buffer.from(JSON.stringify(payload)).toString("base64url");
-    const sig = (0, crypto_1.createHmac)("sha256", SESSION_SECRET).update(data).digest("hex");
-    return `${data}.${sig}`;
+  const payload = {
+    email,
+    exp: Math.floor(Date.now() / 1000) + SESSION_MAX_AGE,
+  };
+  const data = Buffer.from(JSON.stringify(payload)).toString("base64url");
+  const sig = (0, crypto_1.createHmac)("sha256", SESSION_SECRET).update(data).digest("hex");
+  return `${data}.${sig}`;
 }
 /**
  * Verify a signed session cookie. Returns the payload or null.
  */
 function verifySession(cookie) {
-    const dotIdx = cookie.indexOf(".");
-    if (dotIdx === -1)
-        return null;
-    const data = cookie.slice(0, dotIdx);
-    const sig = cookie.slice(dotIdx + 1);
-    // Verify HMAC
-    const expected = (0, crypto_1.createHmac)("sha256", SESSION_SECRET).update(data).digest("hex");
-    if (sig.length !== expected.length)
-        return null;
-    try {
-        if (!(0, crypto_1.timingSafeEqual)(Buffer.from(sig), Buffer.from(expected)))
-            return null;
-    }
-    catch {
-        return null;
-    }
-    // Decode payload
-    try {
-        const payload = JSON.parse(Buffer.from(data, "base64url").toString());
-        // Check expiry
-        if (payload.exp < Math.floor(Date.now() / 1000))
-            return null;
-        return payload;
-    }
-    catch {
-        return null;
-    }
+  const dotIdx = cookie.indexOf(".");
+  if (dotIdx === -1) return null;
+  const data = cookie.slice(0, dotIdx);
+  const sig = cookie.slice(dotIdx + 1);
+  // Verify HMAC
+  const expected = (0, crypto_1.createHmac)("sha256", SESSION_SECRET).update(data).digest("hex");
+  if (sig.length !== expected.length) return null;
+  try {
+    if (!(0, crypto_1.timingSafeEqual)(Buffer.from(sig), Buffer.from(expected))) return null;
+  } catch {
+    return null;
+  }
+  // Decode payload
+  try {
+    const payload = JSON.parse(Buffer.from(data, "base64url").toString());
+    // Check expiry
+    if (payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
 }
 /* ------------------------------------------------------------------ */
 /*  Token extraction from requests                                     */
@@ -65,60 +59,56 @@ function verifySession(cookie) {
  * Reads the httpOnly cookie.
  */
 function extractSession(request) {
-    const cookieHeader = request.headers.get("Cookie");
-    if (!cookieHeader)
-        return null;
-    const cookieValue = parseCookieValue(cookieHeader, COOKIE_NAME);
-    if (!cookieValue)
-        return null;
-    return verifySession(cookieValue);
+  const cookieHeader = request.headers.get("Cookie");
+  if (!cookieHeader) return null;
+  const cookieValue = parseCookieValue(cookieHeader, COOKIE_NAME);
+  if (!cookieValue) return null;
+  return verifySession(cookieValue);
 }
 /**
  * Extract and verify session from a raw HTTP cookie header string.
  * Used by server.ts for WebSocket upgrade requests.
  */
 function extractSessionFromCookieHeader(cookieHeader) {
-    if (!cookieHeader)
-        return null;
-    const cookieValue = parseCookieValue(cookieHeader, COOKIE_NAME);
-    if (!cookieValue)
-        return null;
-    return verifySession(cookieValue);
+  if (!cookieHeader) return null;
+  const cookieValue = parseCookieValue(cookieHeader, COOKIE_NAME);
+  if (!cookieValue) return null;
+  return verifySession(cookieValue);
 }
 /* ------------------------------------------------------------------ */
 /*  Cookie helpers                                                     */
 /* ------------------------------------------------------------------ */
 function unauthorized() {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-        status: 401,
-        headers: { "Content-Type": "application/json" },
-    });
+  return new Response(JSON.stringify({ error: "Unauthorized" }), {
+    status: 401,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 /** Create Set-Cookie header value for the signed session. */
 function makeSessionCookie(signedValue) {
-    const parts = [
-        `${COOKIE_NAME}=${encodeURIComponent(signedValue)}`,
-        "HttpOnly",
-        "SameSite=Strict",
-        "Path=/chat",
-        `Max-Age=${SESSION_MAX_AGE}`,
-    ];
-    if (IS_PRODUCTION) {
-        parts.push("Secure");
-    }
-    return parts.join("; ");
+  const parts = [
+    `${COOKIE_NAME}=${encodeURIComponent(signedValue)}`,
+    "HttpOnly",
+    "SameSite=Strict",
+    "Path=/chat",
+    `Max-Age=${SESSION_MAX_AGE}`,
+  ];
+  if (IS_PRODUCTION) {
+    parts.push("Secure");
+  }
+  return parts.join("; ");
 }
 /** Create Set-Cookie header value that clears the session cookie. */
 function makeClearSessionCookie() {
-    return `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/chat; Max-Age=0`;
+  return `${COOKIE_NAME}=; HttpOnly; SameSite=Strict; Path=/chat; Max-Age=0`;
 }
 function parseCookieValue(header, name) {
-    const prefix = `${name}=`;
-    for (const part of header.split(";")) {
-        const trimmed = part.trim();
-        if (trimmed.startsWith(prefix)) {
-            return decodeURIComponent(trimmed.slice(prefix.length));
-        }
+  const prefix = `${name}=`;
+  for (const part of header.split(";")) {
+    const trimmed = part.trim();
+    if (trimmed.startsWith(prefix)) {
+      return decodeURIComponent(trimmed.slice(prefix.length));
     }
-    return null;
+  }
+  return null;
 }

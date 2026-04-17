@@ -86,10 +86,7 @@ async function tryRefreshToken(): Promise<boolean> {
 /*  apiFetch — for Spring backend calls only                           */
 /* ------------------------------------------------------------------ */
 
-export async function apiFetch(
-  path: string,
-  init?: RequestInit,
-): Promise<Response> {
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   const makeRequest = (token: string | null) =>
     fetch(buildApiUrl(path), {
       ...init,

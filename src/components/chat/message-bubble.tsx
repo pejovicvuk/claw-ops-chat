@@ -37,9 +37,10 @@ function extractToolDescription(toolName?: string, toolInput?: string): string {
   try {
     const parsed = JSON.parse(toolInput);
     if (toolName === "Bash" && parsed.command) return parsed.command.slice(0, 80);
-    if ((toolName === "Read" || toolName === "Write" || toolName === "Edit") && parsed.file_path) return parsed.file_path;
-    if ((toolName === "Grep") && parsed.pattern) return parsed.pattern;
-    if ((toolName === "Glob") && parsed.pattern) return parsed.pattern;
+    if ((toolName === "Read" || toolName === "Write" || toolName === "Edit") && parsed.file_path)
+      return parsed.file_path;
+    if (toolName === "Grep" && parsed.pattern) return parsed.pattern;
+    if (toolName === "Glob" && parsed.pattern) return parsed.pattern;
     return "";
   } catch {
     return "";
@@ -74,7 +75,9 @@ const markdownComponents = {
     );
   },
   pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="my-2 overflow-x-auto rounded-md bg-canvas-bg border border-canvas-border">{children}</pre>
+    <pre className="my-2 overflow-x-auto rounded-md bg-canvas-bg border border-canvas-border">
+      {children}
+    </pre>
   ),
   strong: ({ children }: { children?: React.ReactNode }) => (
     <strong className="font-bold text-canvas-fg">{children}</strong>
@@ -85,11 +88,11 @@ const markdownComponents = {
   ol: ({ children }: { children?: React.ReactNode }) => (
     <ol className="my-1.5 ml-4 list-decimal text-[14px] text-canvas-fg">{children}</ol>
   ),
-  li: ({ children }: { children?: React.ReactNode }) => (
-    <li className="my-0.5">{children}</li>
-  ),
+  li: ({ children }: { children?: React.ReactNode }) => <li className="my-0.5">{children}</li>,
   a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">{children}</a>
+    <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
   ),
   table: ({ children }: { children?: React.ReactNode }) => (
     <div className="my-2 overflow-x-auto rounded-md border border-canvas-border">
@@ -116,7 +119,12 @@ interface MessageBubbleProps {
   onQuestionRespond?: (id: string, answers: Record<string, string>) => void;
 }
 
-export function MessageBubble({ message, isLatestToolUse, onPermissionRespond, onQuestionRespond }: MessageBubbleProps) {
+export function MessageBubble({
+  message,
+  isLatestToolUse,
+  onPermissionRespond,
+  onQuestionRespond,
+}: MessageBubbleProps) {
   if (message.type === "error") {
     return (
       <div className="flex justify-center px-4 py-1.5">
@@ -156,8 +164,10 @@ export function MessageBubble({ message, isLatestToolUse, onPermissionRespond, o
     return <ToolResultBlock message={message} />;
   }
   if (message.type === "thinking") return <ThinkingBlock message={message} />;
-  if (message.type === "permission_request") return <PermissionRequestBlock message={message} onRespond={onPermissionRespond} />;
-  if (message.type === "ask_question") return <AskQuestionBlock message={message} onRespond={onQuestionRespond} />;
+  if (message.type === "permission_request")
+    return <PermissionRequestBlock message={message} onRespond={onPermissionRespond} />;
+  if (message.type === "ask_question")
+    return <AskQuestionBlock message={message} onRespond={onQuestionRespond} />;
 
   return (
     <div className="flex justify-start px-4 py-1.5">
@@ -202,7 +212,10 @@ function AssistantTextContent({ content }: { content: string }) {
     <>
       {segments.map((seg, i) =>
         seg.type === "box" ? (
-          <div key={i} className="my-2 overflow-x-auto rounded-md border border-canvas-border bg-canvas-bg p-3">
+          <div
+            key={i}
+            className="my-2 overflow-x-auto rounded-md border border-canvas-border bg-canvas-bg p-3"
+          >
             <pre className="whitespace-pre font-mono text-[11px] leading-relaxed text-canvas-fg">
               {seg.content}
             </pre>
@@ -225,7 +238,9 @@ function ToolUseIndicator({ message }: { message: ChatMessage }) {
     <div className="px-4 py-0.5">
       <div className="flex items-center gap-1.5 px-1 text-[11px] text-canvas-muted">
         <Icon size={11} className="shrink-0 opacity-60" style={{ color: "var(--accent)" }} />
-        <span className="opacity-70" style={{ color: "var(--accent)" }}>{label}</span>
+        <span className="opacity-70" style={{ color: "var(--accent)" }}>
+          {label}
+        </span>
         {desc && (
           <span className="line-clamp-1 min-w-0 flex-1 font-mono text-[10px] opacity-50">
             {desc}
@@ -247,7 +262,9 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
       <div className="px-4 py-0.5">
         <div className="flex items-center gap-1.5 rounded-md border-l-2 border-red-500/50 bg-red-500/5 px-2 py-1.5">
           <FiX size={10} className="shrink-0 text-red-400" />
-          <span className="line-clamp-2 text-[11px] text-red-400">{message.content.slice(0, 200)}</span>
+          <span className="line-clamp-2 text-[11px] text-red-400">
+            {message.content.slice(0, 200)}
+          </span>
         </div>
       </div>
     );
@@ -262,7 +279,9 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
         className="flex items-center gap-1 px-1 py-0.5 text-[10px] text-canvas-muted/50 hover:text-canvas-muted"
       >
         {collapsed ? <FiChevronRight size={9} /> : <FiChevronDown size={9} />}
-        <span>output ({lineCount} {lineCount === 1 ? "line" : "lines"})</span>
+        <span>
+          output ({lineCount} {lineCount === 1 ? "line" : "lines"})
+        </span>
       </button>
       {!collapsed && (
         <pre className="ml-2 max-h-[200px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
@@ -317,9 +336,11 @@ function PermissionRequestBlock({
 
   return (
     <div className="px-4 py-0.5">
-      <div className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
-        allowed ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
-      }`}>
+      <div
+        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
+          allowed ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
+        }`}
+      >
         {allowed ? <FiCheck size={10} /> : <FiX size={10} />}
         {allowed ? "Allowed" : "Denied"}: {toolName}
       </div>
@@ -355,9 +376,7 @@ function AskQuestionBlock({
       <div className="rounded-lg border border-accent/30 bg-canvas-surface-hover px-3.5 py-3">
         {questions.map((q) => (
           <div key={q.question} className="mb-3 last:mb-0">
-            <p className="text-[13px] font-medium text-canvas-fg mb-2">
-              {q.question}
-            </p>
+            <p className="text-[13px] font-medium text-canvas-fg mb-2">{q.question}</p>
             <div className="space-y-1.5">
               {q.options.map((opt) => {
                 const isSelected = selectedAnswers[q.question] === opt.label;
@@ -373,9 +392,11 @@ function AskQuestionBlock({
                         : "border-canvas-border bg-canvas-bg active:bg-canvas-surface-hover"
                     } ${resolved ? "opacity-60" : ""}`}
                   >
-                    <div className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${
-                      isSelected ? "border-accent bg-accent" : "border-gray-600"
-                    }`} />
+                    <div
+                      className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${
+                        isSelected ? "border-accent bg-accent" : "border-gray-600"
+                      }`}
+                    />
                     <div className="min-w-0">
                       <p className="text-[12px] font-medium text-canvas-fg">{opt.label}</p>
                       {opt.description && (

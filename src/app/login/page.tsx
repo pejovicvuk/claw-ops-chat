@@ -2,18 +2,8 @@
 
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
-import {
-  loginApi,
-  refreshTokenApi,
-  ApiError,
-  type AuthUser,
-} from "@/lib/api-backend";
-import {
-  setAuth,
-  getStoredAuth,
-  isAuthenticated,
-  updateStoredRefreshToken,
-} from "@/lib/auth";
+import { loginApi, refreshTokenApi, ApiError, type AuthUser } from "@/lib/api-backend";
+import { setAuth, getStoredAuth, isAuthenticated, updateStoredRefreshToken } from "@/lib/auth";
 import { setAccessToken } from "@/lib/apiClient";
 
 const emptySubscribe = () => () => {};
@@ -89,10 +79,7 @@ export default function LoginPage() {
       setLoading(true);
       try {
         // 1. Login against Spring backend
-        const { accessToken, refreshToken } = await loginApi(
-          trimmedEmail,
-          password,
-        );
+        const { accessToken, refreshToken } = await loginApi(trimmedEmail, password);
         setAccessToken(accessToken);
 
         // 2. Establish local session (validates email against ALLOWED_EMAIL)
@@ -102,11 +89,7 @@ export default function LoginPage() {
         setAuth(user, refreshToken);
         router.replace("/");
       } catch (err) {
-        setError(
-          err instanceof ApiError
-            ? err.message
-            : "Login failed. Please try again.",
-        );
+        setError(err instanceof ApiError ? err.message : "Login failed. Please try again.");
         setLoading(false);
       }
     },
@@ -117,17 +100,9 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-dvh items-center justify-center bg-canvas-bg p-4">
-      <form
-        onSubmit={handleSubmit}
-        noValidate
-        className="w-full max-w-sm space-y-4"
-      >
-        <h1 className="text-center text-xl font-semibold text-canvas-fg">
-          Claw Chat
-        </h1>
-        <p className="text-center text-sm text-canvas-muted">
-          Sign in to continue
-        </p>
+      <form onSubmit={handleSubmit} noValidate className="w-full max-w-sm space-y-4">
+        <h1 className="text-center text-xl font-semibold text-canvas-fg">Claw Chat</h1>
+        <p className="text-center text-sm text-canvas-muted">Sign in to continue</p>
 
         <div>
           <label
@@ -174,9 +149,7 @@ export default function LoginPage() {
           />
         </div>
 
-        {error && (
-          <p className="text-center text-sm text-red-500">{error}</p>
-        )}
+        {error && <p className="text-center text-sm text-red-500">{error}</p>}
         <button
           type="submit"
           disabled={!email.trim() || !password || loading}

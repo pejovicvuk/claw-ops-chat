@@ -29,9 +29,8 @@ const LABEL: Record<ClaudeStatus, string> = {
 };
 
 export function StatusIndicator({ status, activeTool, onReconnect }: StatusIndicatorProps) {
-  const label = status === "tool_running" && activeTool
-    ? `Running ${activeTool.name}...`
-    : LABEL[status];
+  const label =
+    status === "tool_running" && activeTool ? `Running ${activeTool.name}...` : LABEL[status];
 
   return (
     <div className="flex items-center gap-2 pr-1">

@@ -34,16 +34,20 @@ export function useClaudeChat(sessionId: string | null) {
       const existing = prev.find((m) => m.id === currentAssistantRef.current);
       if (existing) {
         return prev.map((m) =>
-          m.id === currentAssistantRef.current
-            ? { ...m, content: m.content + delta }
-            : m,
+          m.id === currentAssistantRef.current ? { ...m, content: m.content + delta } : m,
         );
       }
       const id = crypto.randomUUID();
       currentAssistantRef.current = id;
       return [
         ...prev,
-        { id, role: "assistant" as const, type: "text" as const, content: delta, timestamp: Date.now() },
+        {
+          id,
+          role: "assistant" as const,
+          type: "text" as const,
+          content: delta,
+          timestamp: Date.now(),
+        },
       ];
     });
   }, []);
@@ -92,7 +96,13 @@ export function useClaudeChat(sessionId: string | null) {
           currentThinkingRef.current = id;
           setMessages((prev) => [
             ...prev,
-            { id, role: "assistant" as const, type: "thinking" as const, content: evt.text as string, timestamp: Date.now() },
+            {
+              id,
+              role: "assistant" as const,
+              type: "thinking" as const,
+              content: evt.text as string,
+              timestamp: Date.now(),
+            },
           ]);
         }
         return;
@@ -146,7 +156,8 @@ export function useClaudeChat(sessionId: string | null) {
 
       if (type === "tool_result") {
         setMessages((prev) => {
-          if (prev.some((m) => m.toolCallId === (evt.id as string) && m.type === "tool_result")) return prev;
+          if (prev.some((m) => m.toolCallId === (evt.id as string) && m.type === "tool_result"))
+            return prev;
           return [
             ...prev,
             {
@@ -382,9 +393,7 @@ export function useClaudeChat(sessionId: string | null) {
   const respondQuestion = useCallback(
     (askId: string, answers: Record<string, string>) => {
       sendToServer({ type: "ask_response", id: askId, answers });
-      setMessages((prev) =>
-        prev.map((m) => (m.askId === askId ? { ...m, askResolved: true } : m)),
-      );
+      setMessages((prev) => prev.map((m) => (m.askId === askId ? { ...m, askResolved: true } : m)));
       setStatus("thinking");
     },
     [sendToServer],

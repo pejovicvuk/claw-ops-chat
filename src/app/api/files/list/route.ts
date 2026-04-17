@@ -33,7 +33,9 @@ export async function GET(request: Request) {
               const s = await stat(fullPath);
               size = s.size;
             }
-          } catch { /* skip */ }
+          } catch {
+            /* skip */
+          }
           return { name: entry.name, path: fullPath, directory: isDir, size };
         }),
     );

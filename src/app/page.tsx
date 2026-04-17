@@ -24,7 +24,9 @@ export default function ChatPage() {
   // Persist session selection
   useEffect(() => {
     if (selectedSessionId) {
-      try { localStorage.setItem(STORAGE_KEY, selectedSessionId); } catch {}
+      try {
+        localStorage.setItem(STORAGE_KEY, selectedSessionId);
+      } catch {}
     }
   }, [selectedSessionId]);
 
@@ -53,10 +55,15 @@ export default function ChatPage() {
     setSelectedSessionId(sessionId);
   }, []);
 
-  const handleSessionCreated = useCallback((claudeSessionId: string) => {
-    try { localStorage.setItem(STORAGE_KEY, claudeSessionId); } catch {}
-    loadSessions();
-  }, [loadSessions]);
+  const handleSessionCreated = useCallback(
+    (claudeSessionId: string) => {
+      try {
+        localStorage.setItem(STORAGE_KEY, claudeSessionId);
+      } catch {}
+      loadSessions();
+    },
+    [loadSessions],
+  );
 
   return (
     <AuthGuard>

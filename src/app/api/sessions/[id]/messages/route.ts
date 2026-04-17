@@ -26,10 +26,7 @@ function extractText(content: unknown): string {
   return "";
 }
 
-export async function GET(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> },
-) {
+export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   if (!extractSession(request)) return unauthorized();
 
   const { id: sessionId } = await params;
@@ -105,7 +102,9 @@ export async function GET(
             });
           }
         }
-      } catch { /* skip malformed lines */ }
+      } catch {
+        /* skip malformed lines */
+      }
     }
 
     return Response.json(messages);

@@ -7,10 +7,7 @@ import { homedir } from "os";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import {
-  extractSessionFromCookieHeader,
-  verifySession,
-} from "./src/lib/auth-server";
+import { extractSessionFromCookieHeader, verifySession } from "./src/lib/auth-server";
 
 /* ------------------------------------------------------------------ */
 /*  Config                                                             */
@@ -19,13 +16,17 @@ import {
 const dev = process.env.NODE_ENV !== "production";
 const port = parseInt(process.env.PORT || "3100", 10);
 const ALLOWED_EMAIL = process.env.ALLOWED_EMAIL || "";
-const API_ORIGIN = (
-  process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080"
-).replace(/\/+$/, "");
+const API_ORIGIN = (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080").replace(
+  /\/+$/,
+  "",
+);
 
 /** Allowed origins for WebSocket connections. Auto-populated from ALLOWED_ORIGINS env or defaults. */
 const ALLOWED_ORIGINS = new Set(
-  (process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean),
+  (process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean),
 );
 
 /** Permission/question response timeout in ms (default: 5 minutes). */
@@ -196,14 +197,17 @@ class SessionManager {
       // Sessions stay alive even with 0 clients — work continues in background.
       // Only cleanup idle sessions (not processing, no clients) after 30 minutes.
       if (session.clients.size === 0 && !session.isProcessing) {
-        setTimeout(() => {
-          if (session.clients.size === 0 && !session.isProcessing) {
-            // Check if truly idle for a while
-            if (Date.now() - session.lastActivity > 30 * 60 * 1000) {
-              this.sessions.delete(session.id);
+        setTimeout(
+          () => {
+            if (session.clients.size === 0 && !session.isProcessing) {
+              // Check if truly idle for a while
+              if (Date.now() - session.lastActivity > 30 * 60 * 1000) {
+                this.sessions.delete(session.id);
+              }
             }
-          }
-        }, 30 * 60 * 1000);
+          },
+          30 * 60 * 1000,
+        );
       }
     });
   }
@@ -263,7 +267,8 @@ class SessionManager {
 
     const getToolDescription = (toolName: string, input: Record<string, unknown>): string => {
       if (toolName === "Bash" && input.command) return (input.command as string).slice(0, 120);
-      if (["Read", "Write", "Edit"].includes(toolName) && input.file_path) return input.file_path as string;
+      if (["Read", "Write", "Edit"].includes(toolName) && input.file_path)
+        return input.file_path as string;
       if (toolName === "Grep" && input.pattern) return `pattern: ${input.pattern}`;
       if (toolName === "Glob" && input.pattern) return `pattern: ${input.pattern}`;
       return "";
@@ -292,7 +297,16 @@ class SessionManager {
         }
 
         // Mode-aware auto-approval
-        const SAFE_TOOLS = new Set(["Read", "Glob", "Grep", "Agent", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"]);
+        const SAFE_TOOLS = new Set([
+          "Read",
+          "Glob",
+          "Grep",
+          "Agent",
+          "TaskCreate",
+          "TaskUpdate",
+          "TaskGet",
+          "TaskList",
+        ]);
         const EDIT_TOOLS = new Set(["Write", "Edit"]);
         const mode = session.permissionMode;
 
@@ -409,7 +423,11 @@ class SessionManager {
           if (eventType === "content_block_stop") {
             if (pendingToolUse) {
               let parsedInput: Record<string, unknown> = {};
-              try { parsedInput = JSON.parse(toolInputAccum); } catch { /* empty */ }
+              try {
+                parsedInput = JSON.parse(toolInputAccum);
+              } catch {
+                /* empty */
+              }
               this.broadcast(session, {
                 type: "tool_use_start",
                 id: pendingToolUse.id,
@@ -432,9 +450,12 @@ class SessionManager {
           if (Array.isArray(content)) {
             for (const item of content) {
               if (item.type === "tool_result") {
-                const resultContent = typeof item.content === "string"
-                  ? item.content
-                  : Array.isArray(item.content) ? item.content.map((c: Record<string, unknown>) => c.text || "").join("") : "";
+                const resultContent =
+                  typeof item.content === "string"
+                    ? item.content
+                    : Array.isArray(item.content)
+                      ? item.content.map((c: Record<string, unknown>) => c.text || "").join("")
+                      : "";
                 this.broadcast(session, {
                   type: "tool_result",
                   id: item.tool_use_id,
@@ -469,7 +490,11 @@ class SessionManager {
         // Result — turn complete
         if (msg.type === "result") {
           // If resume failed, retry without resume
-          if (msg.is_error && typeof msg.result === "string" && msg.result.includes("No conversation found")) {
+          if (
+            msg.is_error &&
+            typeof msg.result === "string" &&
+            msg.result.includes("No conversation found")
+          ) {
             session.claudeSessionId = null;
             // Retry the query without resume
             delete (queryParams.options as Record<string, unknown>).resume;
@@ -558,7 +583,6 @@ class SessionManager {
   }
 }
 
-
 /* ------------------------------------------------------------------ */
 /*  Origin validation                                                  */
 /* ------------------------------------------------------------------ */
@@ -578,7 +602,9 @@ function isOriginAllowed(origin: string | undefined): boolean {
   // Default: allow same-host origins (any port)
   try {
     const url = new URL(origin);
-    return url.hostname === "localhost" || url.hostname === "127.0.0.1" || origin.includes(".viksi.ai");
+    return (
+      url.hostname === "localhost" || url.hostname === "127.0.0.1" || origin.includes(".viksi.ai")
+    );
   } catch {
     return false;
   }

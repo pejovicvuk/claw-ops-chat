@@ -18,7 +18,9 @@ export function MobileFileSheet({ open, onClose, onCopyPath, onFileOpen }: Mobil
     if (!open) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    return () => { document.body.style.overflow = prev; };
+    return () => {
+      document.body.style.overflow = prev;
+    };
   }, [open]);
 
   if (!open) return null;
@@ -48,10 +50,7 @@ export function MobileFileSheet({ open, onClose, onCopyPath, onFileOpen }: Mobil
           </button>
         </div>
         <div className="file-panel-fill min-h-0 flex-1">
-          <FileBrowser
-            onFileClick={onCopyPath}
-            onFileOpen={onFileOpen}
-          />
+          <FileBrowser onFileClick={onCopyPath} onFileOpen={onFileOpen} />
         </div>
       </div>
     </>

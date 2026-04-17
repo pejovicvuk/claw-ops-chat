@@ -59,7 +59,9 @@ export async function GET(request: Request) {
                   break;
                 }
               }
-            } catch { /* skip malformed lines */ }
+            } catch {
+              /* skip malformed lines */
+            }
           }
 
           sessions.push({
@@ -67,7 +69,9 @@ export async function GET(request: Request) {
             display,
             timestamp: fileStat.mtimeMs,
           });
-        } catch { /* skip unreadable files */ }
+        } catch {
+          /* skip unreadable files */
+        }
       }
     }
 

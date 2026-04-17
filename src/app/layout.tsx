@@ -18,9 +18,7 @@ export const metadata: Metadata = {
       { url: "/chat/icons/icon-192.png", sizes: "192x192", type: "image/png" },
       { url: "/chat/icons/icon-512.png", sizes: "512x512", type: "image/png" },
     ],
-    apple: [
-      { url: "/chat/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" },
-    ],
+    apple: [{ url: "/chat/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
   },
   formatDetection: {
     telephone: false,
@@ -39,8 +37,7 @@ export const viewport: Viewport = {
   ],
 };
 
-const runtimeApiOrigin =
-  process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080";
+const runtimeApiOrigin = process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080";
 
 export default function RootLayout({
   children,

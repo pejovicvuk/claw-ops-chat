@@ -1,0 +1,93 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(git *)",
+      "Bash(vitest *)",
+      "Bash(npx vitest *)",
+      "Bash(tsx *)",
+      "Bash(npx tsx *)",
+      "Bash(next *)",
+      "Bash(npx next *)",
+      "Bash(npx eslint *)",
+      "Bash(npx tsc *)",
+      "Bash(npx prettier *)",
+      "Bash(docker *)",
+      "Bash(docker compose *)",
+      "Edit(src/**)",
+      "Edit(server.ts)",
+      "Edit(CLAUDE.md)",
+      "Edit(.claude/**)",
+      "Write(src/**)",
+      "Write(server.ts)",
+      "Write(CLAUDE.md)",
+      "Write(.claude/**)"
+    ],
+    "deny": [
+      "Bash(rm -rf *)",
+      "Write(.env)",
+      "Write(.env.*)",
+      "Edit(.env)",
+      "Edit(.env.*)",
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "Bash(git push * main)",
+      "Bash(git push * master)",
+      "Bash(git push origin main)",
+      "Bash(git push origin master)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/protect-files.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/block-main-push.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/block-force-push.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/auto-format.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/auto-lint.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .claude/hooks/stop-verify.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

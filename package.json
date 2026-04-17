@@ -9,7 +9,9 @@
     "start": "node server.js",
     "lint": "eslint",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.107",
@@ -33,6 +35,8 @@
     "@types/ws": "^8.18.1",
     "eslint": "^9",
     "eslint-config-next": "16.2.3",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.3",
     "tailwindcss": "^4.2.2",
     "tsx": "^4.21.0",
     "typescript": "^5",

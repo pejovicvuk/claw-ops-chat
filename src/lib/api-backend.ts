@@ -39,10 +39,7 @@ export class ApiError extends Error {
 /*  Auth endpoints                                                     */
 /* ------------------------------------------------------------------ */
 
-export async function loginApi(
-  email: string,
-  password: string,
-): Promise<TokenResponse> {
+export async function loginApi(email: string, password: string): Promise<TokenResponse> {
   const res = await apiFetch("/api/v1/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -65,16 +62,13 @@ export async function meApi(): Promise<AuthUser> {
   return res.json() as Promise<AuthUser>;
 }
 
-export async function refreshTokenApi(
-  refreshToken: string,
-): Promise<TokenResponse> {
+export async function refreshTokenApi(refreshToken: string): Promise<TokenResponse> {
   const res = await fetch(buildApiUrl("/api/v1/auth/refresh"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ refreshToken }),
   });
-  if (!res.ok)
-    throw new ApiError(res.status, "Session expired. Please sign in again.");
+  if (!res.ok) throw new ApiError(res.status, "Session expired. Please sign in again.");
   return res.json() as Promise<TokenResponse>;
 }
 

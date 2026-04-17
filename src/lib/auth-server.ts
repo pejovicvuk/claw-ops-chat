@@ -5,8 +5,7 @@ const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days in seconds
 
 /** HMAC key for signing session cookies. Auto-generated if not provided. */
-const SESSION_SECRET =
-  process.env.SESSION_SECRET || randomBytes(32).toString("hex");
+const SESSION_SECRET = process.env.SESSION_SECRET || randomBytes(32).toString("hex");
 
 /* ------------------------------------------------------------------ */
 /*  HMAC-signed session cookie                                         */
@@ -33,9 +32,7 @@ export function signSession(email: string): string {
 /**
  * Verify a signed session cookie. Returns the payload or null.
  */
-export function verifySession(
-  cookie: string,
-): SessionPayload | null {
+export function verifySession(cookie: string): SessionPayload | null {
   const dotIdx = cookie.indexOf(".");
   if (dotIdx === -1) return null;
 
@@ -53,9 +50,7 @@ export function verifySession(
 
   // Decode payload
   try {
-    const payload = JSON.parse(
-      Buffer.from(data, "base64url").toString(),
-    ) as SessionPayload;
+    const payload = JSON.parse(Buffer.from(data, "base64url").toString()) as SessionPayload;
     // Check expiry
     if (payload.exp < Math.floor(Date.now() / 1000)) return null;
     return payload;
@@ -72,9 +67,7 @@ export function verifySession(
  * Extract and verify session from a Next.js Request object.
  * Reads the httpOnly cookie.
  */
-export function extractSession(
-  request: Request,
-): SessionPayload | null {
+export function extractSession(request: Request): SessionPayload | null {
   const cookieHeader = request.headers.get("Cookie");
   if (!cookieHeader) return null;
   const cookieValue = parseCookieValue(cookieHeader, COOKIE_NAME);

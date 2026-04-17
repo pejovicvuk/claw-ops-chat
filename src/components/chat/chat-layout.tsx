@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiMessageCircle, FiX, FiFolder, FiCheck, FiChevronsLeft, FiMessageSquare, FiUpload } from "react-icons/fi";
+import {
+  FiMessageCircle,
+  FiX,
+  FiFolder,
+  FiCheck,
+  FiChevronsLeft,
+  FiMessageSquare,
+  FiUpload,
+} from "react-icons/fi";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
 import { Z_INDEX } from "@/lib/z-index";
@@ -58,17 +66,25 @@ export function ChatLayout({
 
   const handleCopyPath = useCallback((path: string) => {
     const atPath = `@${path}`;
-    navigator.clipboard.writeText(atPath).then(() => {
-      setCopiedPath(path);
-      setTimeout(() => setCopiedPath(null), 1500);
-    }).catch(() => {});
+    navigator.clipboard
+      .writeText(atPath)
+      .then(() => {
+        setCopiedPath(path);
+        setTimeout(() => setCopiedPath(null), 1500);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
     const observer = new MutationObserver((mutations) => {
       for (const mutation of mutations) {
         for (const node of mutation.addedNodes) {
-          if (node instanceof HTMLElement && node.style.left && node.style.top && getComputedStyle(node).position === "fixed") {
+          if (
+            node instanceof HTMLElement &&
+            node.style.left &&
+            node.style.top &&
+            getComputedStyle(node).position === "fixed"
+          ) {
             requestAnimationFrame(() => {
               const rect = node.getBoundingClientRect();
               const maxLeft = window.innerWidth - rect.width - 8;
@@ -86,7 +102,7 @@ export function ChatLayout({
 
   const handleFileOpen = useCallback((file: FileEntry) => {
     const key = `file:${file.path}`;
-    setOpenFiles((prev) => prev.some((e) => e.key === key) ? prev : [...prev, { key, file }]);
+    setOpenFiles((prev) => (prev.some((e) => e.key === key) ? prev : [...prev, { key, file }]));
     setFocusOrder((prev) => [...prev.filter((k) => k !== key), key]);
   }, []);
 
@@ -99,15 +115,18 @@ export function ChatLayout({
     setFocusOrder((prev) => [...prev.filter((k) => k !== key), key]);
   }, []);
 
-  const handleUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files) return;
-    for (let i = 0; i < files.length; i++) {
-      await uploadFile(currentBrowserPath, files[i]);
-    }
-    fileBrowserRef.current?.navigateTo(currentBrowserPath);
-    e.target.value = "";
-  }, [currentBrowserPath]);
+  const handleUpload = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files) return;
+      for (let i = 0; i < files.length; i++) {
+        await uploadFile(currentBrowserPath, files[i]);
+      }
+      fileBrowserRef.current?.navigateTo(currentBrowserPath);
+      e.target.value = "";
+    },
+    [currentBrowserPath],
+  );
 
   const fileEditors = openFiles.map((entry) => (
     <FileEditorPanel
@@ -131,19 +150,22 @@ export function ChatLayout({
     }
   }, []);
 
-  const handleTouchMove = useCallback((e: React.TouchEvent) => {
-    if (!touchStartRef.current || sidebarOpen) return;
-    const touch = e.touches[0];
-    const dx = touch.clientX - touchStartRef.current.x;
-    const dy = Math.abs(touch.clientY - touchStartRef.current.y);
-    // If mostly horizontal and moved enough
-    if (dx > 10 && dx > dy * 1.5 && swipeOverlayRef.current) {
-      const progress = Math.min(dx / 280, 1);
-      swipeOverlayRef.current.style.opacity = String(progress * 0.3);
-      swipeOverlayRef.current.style.pointerEvents = "none";
-      swipeOverlayRef.current.style.display = "block";
-    }
-  }, [sidebarOpen]);
+  const handleTouchMove = useCallback(
+    (e: React.TouchEvent) => {
+      if (!touchStartRef.current || sidebarOpen) return;
+      const touch = e.touches[0];
+      const dx = touch.clientX - touchStartRef.current.x;
+      const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+      // If mostly horizontal and moved enough
+      if (dx > 10 && dx > dy * 1.5 && swipeOverlayRef.current) {
+        const progress = Math.min(dx / 280, 1);
+        swipeOverlayRef.current.style.opacity = String(progress * 0.3);
+        swipeOverlayRef.current.style.pointerEvents = "none";
+        swipeOverlayRef.current.style.display = "block";
+      }
+    },
+    [sidebarOpen],
+  );
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     if (!touchStartRef.current) return;
@@ -204,7 +226,13 @@ export function ChatLayout({
             headerless
             fileButton={
               <div className="flex items-center">
-                <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUpload} />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  className="hidden"
+                  onChange={handleUpload}
+                />
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
@@ -259,8 +287,14 @@ export function ChatLayout({
                   selectedSessionId={selectedSessionId}
                   sessions={sessions}
                   loading={sessionsLoading}
-                  onSelectSession={(sid) => { onSelectSession(sid); setSidebarOpen(false); }}
-                  onNewChat={() => { onNewChat(); setSidebarOpen(false); }}
+                  onSelectSession={(sid) => {
+                    onSelectSession(sid);
+                    setSidebarOpen(false);
+                  }}
+                  onNewChat={() => {
+                    onNewChat();
+                    setSidebarOpen(false);
+                  }}
                   onRefresh={onRefreshSessions}
                   runningSessionIds={runningSessionIds}
                 />
@@ -279,7 +313,10 @@ export function ChatLayout({
         {fileEditors}
 
         {copiedPath && (
-          <div className="fixed left-1/2 top-20 -translate-x-1/2 flex items-center gap-1.5 rounded-full bg-green-600 px-3 py-1.5 shadow-lg" style={{ zIndex: Z_INDEX.TOAST }}>
+          <div
+            className="fixed left-1/2 top-20 -translate-x-1/2 flex items-center gap-1.5 rounded-full bg-green-600 px-3 py-1.5 shadow-lg"
+            style={{ zIndex: Z_INDEX.TOAST }}
+          >
             <FiCheck size={12} className="text-white" />
             <span className="text-[11px] font-medium text-white">Path copied</span>
           </div>
@@ -294,9 +331,11 @@ export function ChatLayout({
     <>
       <div className="flex h-full">
         {/* Left sidebar */}
-        <aside className={`flex shrink-0 flex-col border-r border-canvas-border bg-canvas-bg overflow-hidden transition-all duration-200 ${
-          sidebarCollapsed ? "w-10" : "w-[260px]"
-        }`}>
+        <aside
+          className={`flex shrink-0 flex-col border-r border-canvas-border bg-canvas-bg overflow-hidden transition-all duration-200 ${
+            sidebarCollapsed ? "w-10" : "w-[260px]"
+          }`}
+        >
           {sidebarCollapsed ? (
             <button
               type="button"
@@ -343,15 +382,23 @@ export function ChatLayout({
         </main>
 
         {/* Right: File panel */}
-        <aside className={`flex shrink-0 flex-col border-l border-canvas-border bg-canvas-bg overflow-hidden transition-all duration-200 ${
-          filesPanelOpen ? "w-[300px] h-full" : "w-10"
-        }`}>
+        <aside
+          className={`flex shrink-0 flex-col border-l border-canvas-border bg-canvas-bg overflow-hidden transition-all duration-200 ${
+            filesPanelOpen ? "w-[300px] h-full" : "w-10"
+          }`}
+        >
           {filesPanelOpen ? (
             <>
               <div className="flex h-12 shrink-0 items-center justify-between border-b border-canvas-border px-3">
                 <span className="text-[12px] font-medium text-canvas-muted">Files</span>
                 <div className="flex items-center gap-1">
-                  <input ref={fileInputRef} type="file" multiple className="hidden" onChange={handleUpload} />
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={handleUpload}
+                  />
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
@@ -384,10 +431,13 @@ export function ChatLayout({
                   onFileOpen={handleFileOpen}
                   hideRunOption
                   onCopyPath={(path) => {
-                    navigator.clipboard.writeText(`@${path}`).then(() => {
-                      setCopiedPath(path);
-                      setTimeout(() => setCopiedPath(null), 1500);
-                    }).catch(() => {});
+                    navigator.clipboard
+                      .writeText(`@${path}`)
+                      .then(() => {
+                        setCopiedPath(path);
+                        setTimeout(() => setCopiedPath(null), 1500);
+                      })
+                      .catch(() => {});
                   }}
                 />
               </div>
@@ -408,7 +458,10 @@ export function ChatLayout({
       {fileEditors}
 
       {copiedPath && (
-        <div className="fixed left-1/2 top-20 -translate-x-1/2 flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 shadow-lg" style={{ zIndex: Z_INDEX.TOAST }}>
+        <div
+          className="fixed left-1/2 top-20 -translate-x-1/2 flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 shadow-lg"
+          style={{ zIndex: Z_INDEX.TOAST }}
+        >
           <FiCheck size={12} className="text-white" />
           <span className="text-[11px] font-medium text-white">Path copied</span>
         </div>

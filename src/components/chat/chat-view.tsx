@@ -7,6 +7,7 @@ import { useClaudeChat } from "@/lib/use-claude-chat";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
 import { fetchSessionMessages } from "@/lib/api";
 import { StatusIndicator } from "./status-indicator";
+import { ContextIndicator } from "./context-indicator";
 import { MessageBubble } from "./message-bubble";
 import { ChatInput } from "./chat-input";
 import { SetupGuard } from "./setup-guard";
@@ -60,6 +61,22 @@ function getPermDescForModal(toolName: string, input?: Record<string, unknown>):
   return JSON.stringify(input).slice(0, 200);
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  disconnected: "Disconnected",
+  connecting: "Connecting...",
+  idle: "Ready",
+  thinking: "Thinking...",
+  tool_running: "Running tool...",
+  awaiting_permission: "Needs approval",
+  awaiting_input: "Needs your input",
+};
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
 interface ChatViewProps {
   sessionId: string;
   resumeSessionId?: string | null;
@@ -77,6 +94,7 @@ export function ChatView({
   fileButton,
   onSessionCreated,
 }: ChatViewProps) {
+  const [sessionCwd, setSessionCwd] = useState<string | null>(null);
   const {
     messages,
     status,
@@ -84,13 +102,16 @@ export function ChatView({
     claudeSessionId,
     sendMessage,
     stopGeneration,
+    setupRequired,
+    contextUsage,
     respondPermission,
     respondQuestion,
     setPermissionMode,
     setEffort,
     reconnect,
     setInitialMessages,
-  } = useClaudeChat(sessionId);
+    setInitialContextUsage,
+  } = useClaudeChat(sessionId, sessionCwd);
   const notifiedSessionRef = useRef<string | null>(null);
   const { viewportHeight } = useVisualViewport();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -103,10 +124,24 @@ export function ChatView({
   });
   const [effortLevel, setEffortLevel] = useState<string | null>(null);
   const [showModeMenu, setShowModeMenu] = useState(false);
+  const [openPopup, setOpenPopup] = useState<"status" | "context" | null>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
   const [infoMessages, setInfoMessages] = useState<
     Array<{ id: string; content: string; timestamp: number }>
   >([]);
   const bridgeSyncedRef = useRef(false);
+
+  // Outside-click dismissal for indicator popups.
+  useEffect(() => {
+    if (!openPopup) return;
+    function handleClick(e: MouseEvent) {
+      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
+        setOpenPopup(null);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [openPopup]);
 
   useEffect(() => {
     try {
@@ -135,9 +170,11 @@ export function ChatView({
     if (!resumeSessionId) return;
     let cancelled = false;
     fetchSessionMessages(resumeSessionId)
-      .then((msgs) => {
+      .then((data) => {
         if (!cancelled) {
-          setInitialMessages(msgs);
+          setInitialMessages(data.messages);
+          setInitialContextUsage(data.contextUsage);
+          setSessionCwd(data.sessionCwd);
           setLoadingHistory(false);
         }
       })
@@ -147,7 +184,7 @@ export function ChatView({
     return () => {
       cancelled = true;
     };
-  }, [resumeSessionId, setInitialMessages]);
+  }, [resumeSessionId, setInitialMessages, setInitialContextUsage]);
 
   useEffect(() => {
     if (userScrolledUpRef.current) return;
@@ -204,7 +241,63 @@ export function ChatView({
           <div className="min-w-0 flex-1">
             <p className="truncate text-[14px] font-semibold text-canvas-fg">Claude</p>
           </div>
-          <StatusIndicator status={status} activeTool={activeTool} onReconnect={reconnect} />
+          <div className="relative flex items-center gap-0.5" ref={popupRef}>
+            <StatusIndicator
+              status={status}
+              isOpen={openPopup === "status"}
+              onClick={() => setOpenPopup((p) => (p === "status" ? null : "status"))}
+            />
+            <ContextIndicator
+              percentage={contextUsage?.percentage ?? null}
+              isOpen={openPopup === "context"}
+              onClick={() => setOpenPopup((p) => (p === "context" ? null : "context"))}
+            />
+
+            {openPopup === "status" && (
+              <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[140px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl">
+                <p className="px-1 py-0.5 text-[12px] font-medium text-canvas-fg">
+                  {status === "tool_running" && activeTool
+                    ? `Running ${activeTool.name}...`
+                    : STATUS_LABELS[status]}
+                </p>
+                {status === "disconnected" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      reconnect();
+                      setOpenPopup(null);
+                    }}
+                    className="mt-1 w-full rounded-md bg-canvas-surface-hover px-2 py-1 text-[11px] font-medium text-canvas-fg hover:bg-canvas-border"
+                  >
+                    Reconnect
+                  </button>
+                )}
+              </div>
+            )}
+
+            {openPopup === "context" && (
+              <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[180px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
+                {contextUsage ? (
+                  <>
+                    <p className="text-[18px] font-semibold text-canvas-fg">
+                      {contextUsage.percentage}%
+                    </p>
+                    <p className="mt-0.5 text-[11px] text-canvas-muted">
+                      {formatTokens(contextUsage.used)} of {formatTokens(contextUsage.max)} tokens
+                    </p>
+                    <p className="mt-1 text-[10px] text-canvas-muted">Context window usage</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[12px] font-medium text-canvas-fg">No usage yet</p>
+                    <p className="mt-0.5 text-[11px] text-canvas-muted">
+                      Send a message to see context usage.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -254,7 +347,63 @@ export function ChatView({
 
         {headerless && (
           <div className="ml-auto">
-            <StatusIndicator status={status} activeTool={activeTool} onReconnect={reconnect} />
+            <div className="relative flex items-center gap-0.5" ref={popupRef}>
+              <StatusIndicator
+                status={status}
+                isOpen={openPopup === "status"}
+                onClick={() => setOpenPopup((p) => (p === "status" ? null : "status"))}
+              />
+              <ContextIndicator
+                percentage={contextUsage?.percentage ?? null}
+                isOpen={openPopup === "context"}
+                onClick={() => setOpenPopup((p) => (p === "context" ? null : "context"))}
+              />
+
+              {openPopup === "status" && (
+                <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[140px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl">
+                  <p className="px-1 py-0.5 text-[12px] font-medium text-canvas-fg">
+                    {status === "tool_running" && activeTool
+                      ? `Running ${activeTool.name}...`
+                      : STATUS_LABELS[status]}
+                  </p>
+                  {status === "disconnected" && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        reconnect();
+                        setOpenPopup(null);
+                      }}
+                      className="mt-1 w-full rounded-md bg-canvas-surface-hover px-2 py-1 text-[11px] font-medium text-canvas-fg hover:bg-canvas-border"
+                    >
+                      Reconnect
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {openPopup === "context" && (
+                <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[180px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
+                  {contextUsage ? (
+                    <>
+                      <p className="text-[18px] font-semibold text-canvas-fg">
+                        {contextUsage.percentage}%
+                      </p>
+                      <p className="mt-0.5 text-[11px] text-canvas-muted">
+                        {formatTokens(contextUsage.used)} of {formatTokens(contextUsage.max)} tokens
+                      </p>
+                      <p className="mt-1 text-[10px] text-canvas-muted">Context window usage</p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-[12px] font-medium text-canvas-fg">No usage yet</p>
+                      <p className="mt-0.5 text-[11px] text-canvas-muted">
+                        Send a message to see context usage.
+                      </p>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
 
@@ -445,7 +594,7 @@ export function ChatView({
         })()}
       </div>
 
-      <SetupGuard>
+      <SetupGuard forceShow={setupRequired}>
         <ChatInput
           status={status}
           onSend={sendMessage}

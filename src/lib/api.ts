@@ -23,10 +23,19 @@ export async function fetchSessions(): Promise<ChatSession[]> {
   return res.json();
 }
 
-export async function fetchSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+export interface SessionMessagesResponse {
+  messages: ChatMessage[];
+  contextUsage: { used: number; max: number; percentage: number } | null;
+  sessionCwd: string | null;
+}
+
+export async function fetchSessionMessages(sessionId: string): Promise<SessionMessagesResponse> {
   const res = await authFetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}/messages`);
   if (!res.ok) throw new Error("Failed to fetch session messages");
-  return res.json();
+  const data = await res.json();
+  // Backward compat: if the server returns a bare array, wrap it.
+  if (Array.isArray(data)) return { messages: data, contextUsage: null, sessionCwd: null };
+  return data as SessionMessagesResponse;
 }
 
 /* ── Files ── */

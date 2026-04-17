@@ -10,6 +10,10 @@ const nextConfig: NextConfig = {
   basePath: "/chat",
   reactStrictMode: true,
   poweredByHeader: false,
+  // Disable the client-side router cache so refreshes always show the latest code.
+  experimental: {
+    staleTimes: { dynamic: 0, static: 30 },
+  },
   headers: async () => [
     {
       source: "/(.*)",

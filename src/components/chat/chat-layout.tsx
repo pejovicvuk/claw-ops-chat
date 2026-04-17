@@ -12,6 +12,7 @@ import {
 } from "react-icons/fi";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
+import { useUrlState } from "@/lib/use-url-state";
 import { Z_INDEX } from "@/lib/z-index";
 import { uploadFile } from "@/lib/api";
 import type { ChatSession, FileEntry } from "@/lib/types";
@@ -44,9 +45,15 @@ export function ChatLayout({
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
   useVisualViewport();
+  const { params, setParam } = useUrlState();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [filesPanelOpen, setFilesPanelOpen] = useState(false);
+  // URL-driven: ?files=1 = open, absent/0 = closed
+  const filesPanelOpen = params.get("files") === "1";
+  const setFilesPanelOpen = useCallback(
+    (open: boolean) => setParam("files", open ? "1" : null),
+    [setParam],
+  );
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
   const [openFiles, setOpenFiles] = useState<{ key: string; file: FileEntry }[]>([]);
@@ -54,7 +61,12 @@ export function ChatLayout({
 
   const fileBrowserRef = useRef<FileBrowserHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [currentBrowserPath] = useState("~");
+  // URL-driven: ?path=<folder-path> (defaults to "~")
+  const currentBrowserPath = params.get("path") || "~";
+  const setCurrentBrowserPath = useCallback(
+    (path: string) => setParam("path", path === "~" ? null : path),
+    [setParam],
+  );
 
   // Stable session ID — only changes when user explicitly picks a session or clicks New Chat.
   const [sessionId, setSessionId] = useState(() => selectedSessionId || "new-" + Date.now());
@@ -428,6 +440,8 @@ export function ChatLayout({
               <div className="file-panel-fill min-h-0 flex-1">
                 <FileBrowser
                   ref={fileBrowserRef}
+                  initialPath={currentBrowserPath}
+                  onPathChange={setCurrentBrowserPath}
                   onFileClick={handleCopyPath}
                   onFileOpen={handleFileOpen}
                   hideRunOption

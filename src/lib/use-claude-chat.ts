@@ -9,11 +9,17 @@ const MAX_RECONNECT_DELAY = 30_000;
 /** Base reconnection delay in ms. */
 const BASE_RECONNECT_DELAY = 1_000;
 
-export function useClaudeChat(sessionId: string | null) {
+export function useClaudeChat(sessionId: string | null, sessionCwd?: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ClaudeStatus>("disconnected");
   const [activeTool, setActiveTool] = useState<ActiveToolInfo | null>(null);
   const [claudeSessionId, setClaudeSessionId] = useState<string | null>(null);
+  const [setupRequired, setSetupRequired] = useState(false);
+  const [contextUsage, setContextUsage] = useState<{
+    used: number;
+    max: number;
+    percentage: number;
+  } | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const currentAssistantRef = useRef<string | null>(null);
@@ -29,6 +35,14 @@ export function useClaudeChat(sessionId: string | null) {
   const setInitialMessages = useCallback((msgs: ChatMessage[]) => {
     setMessages(msgs);
   }, []);
+
+  /* ── Seed context usage from loaded history ── */
+  const setInitialContextUsage = useCallback(
+    (usage: { used: number; max: number; percentage: number } | null) => {
+      setContextUsage(usage);
+    },
+    [],
+  );
 
   /* ── Append or update streaming assistant text ── */
   const upsertAssistantText = useCallback((delta: string) => {
@@ -222,6 +236,20 @@ export function useClaudeChat(sessionId: string | null) {
       }
 
       if (type === "result") {
+        // If the response came through a non-streamed path (no text_delta events),
+        // no assistant message was created during streaming. Create it now from evt.text.
+        if (!evt.isError && evt.text && !currentAssistantRef.current) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "assistant" as const,
+              type: "text" as const,
+              content: evt.text as string,
+              timestamp: Date.now(),
+            },
+          ]);
+        }
         currentAssistantRef.current = null;
         currentThinkingRef.current = null;
         setActiveTool(null);
@@ -238,6 +266,24 @@ export function useClaudeChat(sessionId: string | null) {
             },
           ]);
         }
+        return;
+      }
+
+      if (type === "context_usage") {
+        setContextUsage({
+          used: (evt.used as number) || 0,
+          max: (evt.max as number) || 0,
+          percentage: (evt.percentage as number) || 0,
+        });
+        return;
+      }
+
+      if (type === "setup_required") {
+        currentAssistantRef.current = null;
+        currentThinkingRef.current = null;
+        setActiveTool(null);
+        setStatus("idle");
+        setSetupRequired(true);
         return;
       }
 
@@ -289,7 +335,8 @@ export function useClaudeChat(sessionId: string | null) {
     // Also pass the access token as query param fallback.
     const accessToken = getAccessToken();
     const tokenParam = accessToken ? `&token=${encodeURIComponent(accessToken)}` : "";
-    const wsUrl = `${proto}//${window.location.host}/chat/ws/chat?session=${encodeURIComponent(sessionId)}${tokenParam}`;
+    const cwdParam = sessionCwd ? `&cwd=${encodeURIComponent(sessionCwd)}` : "";
+    const wsUrl = `${proto}//${window.location.host}/chat/ws/chat?session=${encodeURIComponent(sessionId)}${tokenParam}${cwdParam}`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -324,7 +371,7 @@ export function useClaudeChat(sessionId: string | null) {
     ws.onerror = () => {
       // onclose will fire after onerror, so reconnection is handled there
     };
-  }, [sessionId, handleEvent]);
+  }, [sessionId, sessionCwd, handleEvent]);
 
   /* ── Exponential backoff reconnection ── */
   const scheduleReconnect = useCallback(() => {
@@ -470,6 +517,8 @@ export function useClaudeChat(sessionId: string | null) {
     status,
     activeTool,
     claudeSessionId,
+    setupRequired,
+    contextUsage,
     sendMessage,
     stopGeneration,
     respondPermission,
@@ -478,5 +527,6 @@ export function useClaudeChat(sessionId: string | null) {
     setEffort,
     reconnect,
     setInitialMessages,
+    setInitialContextUsage,
   };
 }

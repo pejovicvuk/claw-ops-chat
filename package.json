@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "tsx server.ts",
+    "dev": "tsc server.ts --outDir . --esModuleInterop --module commonjs --target ES2020 --skipLibCheck && node server.js",
+    "dev:tsx": "tsx server.ts",
     "dev:next": "next dev",
     "build": "next build && tsc server.ts --outDir . --esModuleInterop --module commonjs --target ES2020 --skipLibCheck",
     "start": "node server.js",
@@ -14,7 +15,7 @@
     "format:check": "prettier --check ."
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.107",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.112",
     "dotenv": "^17.4.2",
     "lightningcss": "^1.32.0",
     "next": "16.2.3",

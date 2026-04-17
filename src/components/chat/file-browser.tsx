@@ -23,6 +23,10 @@ interface FileBrowserProps {
   onFileOpen?: (file: FileEntry) => void;
   onCopyPath?: (path: string) => void;
   hideRunOption?: boolean;
+  /** Initial directory to show (defaults to "~"). */
+  initialPath?: string;
+  /** Called when the user navigates to a different directory. */
+  onPathChange?: (path: string) => void;
 }
 
 function formatSize(bytes: number): string {
@@ -33,10 +37,10 @@ function formatSize(bytes: number): string {
 }
 
 export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(function FileBrowser(
-  { onFileClick, onFileOpen, onCopyPath },
+  { onFileClick, onFileOpen, onCopyPath, initialPath, onPathChange },
   ref,
 ) {
-  const [currentPath, setCurrentPath] = useState("~");
+  const [currentPath, setCurrentPath] = useState(initialPath || "~");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,43 +48,48 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
     null,
   );
 
-  const loadDir = useCallback(async (path: string) => {
-    setError(null);
+  const loadDir = useCallback(
+    async (path: string) => {
+      setError(null);
 
-    // Show cached data immediately if available
-    const cached = getCachedDir(path);
-    if (cached) {
-      setEntries(cached);
-      setCurrentPath(path);
-    }
-
-    // If cache is still fresh, skip the network request
-    if (cached && isCacheFresh(path)) return;
-
-    // Only show spinner when there's no cached data to display
-    if (!cached) setLoading(true);
-
-    try {
-      const files = await listFiles(path);
-      setEntries(files);
-      setCurrentPath(path);
-      setCachedDir(path, files);
-    } catch (err) {
-      // If we have cached data, keep showing it (stale-while-revalidate)
-      if (!cached) {
-        setEntries([]);
-        if (err instanceof FileApiError) {
-          if (err.status === 403) setError("Access denied — check CLAUDE_CWD setting");
-          else if (err.status === 401) setError("Session expired — please log in again");
-          else setError(err.message);
-        } else {
-          setError("Failed to load files — check your connection");
-        }
+      // Show cached data immediately if available
+      const cached = getCachedDir(path);
+      if (cached) {
+        setEntries(cached);
+        setCurrentPath(path);
+        onPathChange?.(path);
       }
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+
+      // If cache is still fresh, skip the network request
+      if (cached && isCacheFresh(path)) return;
+
+      // Only show spinner when there's no cached data to display
+      if (!cached) setLoading(true);
+
+      try {
+        const files = await listFiles(path);
+        setEntries(files);
+        setCurrentPath(path);
+        onPathChange?.(path);
+        setCachedDir(path, files);
+      } catch (err) {
+        // If we have cached data, keep showing it (stale-while-revalidate)
+        if (!cached) {
+          setEntries([]);
+          if (err instanceof FileApiError) {
+            if (err.status === 403) setError("Access denied — check CLAUDE_CWD setting");
+            else if (err.status === 401) setError("Session expired — please log in again");
+            else setError(err.message);
+          } else {
+            setError("Failed to load files — check your connection");
+          }
+        }
+      } finally {
+        setLoading(false);
+      }
+    },
+    [onPathChange],
+  );
 
   useImperativeHandle(ref, () => ({
     navigateTo: (path: string) => loadDir(path),

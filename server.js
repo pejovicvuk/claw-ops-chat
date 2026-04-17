@@ -7,12 +7,33 @@ require("dotenv/config");
 const http_1 = require("http");
 const url_1 = require("url");
 const fs_1 = require("fs");
+const child_process_1 = require("child_process");
 const path_1 = require("path");
 const os_1 = require("os");
 const next_1 = __importDefault(require("next"));
 const ws_1 = require("ws");
-const claude_agent_sdk_1 = require("@anthropic-ai/claude-agent-sdk");
+/* SDK loaded via sdk-loader.js (plain CJS) to prevent tsx/esbuild from
+   transforming the require and breaking the SDK's import.meta.url resolution. */
+const sdk_loader_js_1 = __importDefault(require("./sdk-loader.js"));
+const { query } = sdk_loader_js_1.default;
 const auth_server_1 = require("./src/lib/auth-server");
+const claude_status_1 = require("./src/lib/claude-status");
+// Bundled cli.js path with forward slashes — Windows backslashes break Node spawn.
+const SDK_CLI_PATH = (0, path_1.join)((0, path_1.dirname)(require.resolve("@anthropic-ai/claude-agent-sdk")), "cli.js")
+    .split(path_1.sep)
+    .join("/");
+// Custom spawn that normalizes paths (fixes Windows backslash ENOENT).
+function spawnClaude(opts) {
+    const cmd = opts.command.split(path_1.sep).join("/");
+    const args = opts.args.map((a) => a.split(path_1.sep).join("/"));
+    return (0, child_process_1.spawn)(cmd, args, {
+        cwd: opts.cwd,
+        env: opts.env,
+        stdio: ["pipe", "pipe", "pipe"],
+        signal: opts.signal,
+        windowsHide: true,
+    });
+}
 /* ------------------------------------------------------------------ */
 /*  Config                                                             */
 /* ------------------------------------------------------------------ */
@@ -21,7 +42,10 @@ const port = parseInt(process.env.PORT || "3100", 10);
 const ALLOWED_EMAIL = process.env.ALLOWED_EMAIL || "";
 const API_ORIGIN = (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080").replace(/\/+$/, "");
 /** Allowed origins for WebSocket connections. Auto-populated from ALLOWED_ORIGINS env or defaults. */
-const ALLOWED_ORIGINS = new Set((process.env.ALLOWED_ORIGINS || "").split(",").map((s) => s.trim()).filter(Boolean));
+const ALLOWED_ORIGINS = new Set((process.env.ALLOWED_ORIGINS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean));
 /** Permission/question response timeout in ms (default: 5 minutes). */
 const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "300000", 10);
 /* Load MCP servers from ~/.claude.json */
@@ -40,8 +64,13 @@ catch {
 const HEARTBEAT_INTERVAL_MS = 30000;
 /** Maximum WebSocket messages per second per session (default: 20). */
 const WS_RATE_LIMIT = parseInt(process.env.WS_RATE_LIMIT || "20", 10);
-/** Session cleanup delay after all clients disconnect (default: 60s). */
-const SESSION_CLEANUP_MS = 60000;
+const claudeInfo = (0, claude_status_1.detectClaude)();
+if (claudeInfo.available) {
+    console.log(`> Claude Code: ${claudeInfo.version} at ${claudeInfo.path}`);
+}
+else {
+    console.warn(`> Claude Code: not available — ${claudeInfo.error}`);
+}
 if (!ALLOWED_EMAIL) {
     console.error("FATAL: ALLOWED_EMAIL environment variable is required");
     process.exit(1);
@@ -92,18 +121,24 @@ class SessionManager {
                 messageTimestamps: [],
                 eventHistory: [],
                 lastActivity: Date.now(),
+                abortController: null,
+                sessionCwd: null,
             };
             this.sessions.set(sessionId, session);
         }
         return session;
     }
-    connect(ws, sessionId) {
+    connect(ws, sessionId, sessionCwd) {
         const session = this.getOrCreateSession(sessionId);
         session.clients.add(ws);
         // If sessionId looks like a UUID, set it as the claudeSessionId for resume
         const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
         if (!session.claudeSessionId && UUID_RE.test(sessionId)) {
             session.claudeSessionId = sessionId;
+        }
+        // Store the original cwd so SDK resume can find the session file.
+        if (sessionCwd && !session.sessionCwd) {
+            session.sessionCwd = sessionCwd;
         }
         // Send current state to the new client
         this.send(ws, { type: "ready" });
@@ -196,6 +231,13 @@ class SessionManager {
             session.accumulatedText = "";
             return;
         }
+        if (type === "stop") {
+            if (session.abortController && session.isProcessing) {
+                session.abortController.abort();
+                this.broadcast(session, { type: "result", text: "Stopped by user", isError: false });
+            }
+            return;
+        }
         if (type === "set_effort") {
             session.effort = msg.effort || null;
             return;
@@ -208,6 +250,8 @@ class SessionManager {
     async handleUserMessage(session, text) {
         session.isProcessing = true;
         session.accumulatedText = "";
+        const abortController = new AbortController();
+        session.abortController = abortController;
         let toolInputAccum = "";
         let pendingToolUse = null;
         const getToolDescription = (toolName, input) => {
@@ -222,7 +266,10 @@ class SessionManager {
             return "";
         };
         const queryOptions = {
-            cwd: process.env.CLAUDE_CWD || "/root",
+            // Prefer the original cwd from JSONL (for resume to find the session file).
+            // Fall back to CLAUDE_CWD env, then homedir() (works cross-platform).
+            // `/root` (Docker default) doesn't exist on Windows/Mac and causes spawn ENOENT.
+            cwd: session.sessionCwd || process.env.CLAUDE_CWD || (0, os_1.homedir)(),
             includePartialMessages: true,
             canUseTool: async (toolName, input) => {
                 // Handle AskUserQuestion
@@ -242,7 +289,16 @@ class SessionManager {
                     return { behavior: "allow", updatedInput: input };
                 }
                 // Mode-aware auto-approval
-                const SAFE_TOOLS = new Set(["Read", "Glob", "Grep", "Agent", "TaskCreate", "TaskUpdate", "TaskGet", "TaskList"]);
+                const SAFE_TOOLS = new Set([
+                    "Read",
+                    "Glob",
+                    "Grep",
+                    "Agent",
+                    "TaskCreate",
+                    "TaskUpdate",
+                    "TaskGet",
+                    "TaskList",
+                ]);
                 const EDIT_TOOLS = new Set(["Write", "Edit"]);
                 const mode = session.permissionMode;
                 if (mode === "acceptEdits") {
@@ -277,6 +333,9 @@ class SessionManager {
             },
             ...(session.effort ? { effort: session.effort } : {}),
             ...(mcpServers ? { mcpServers } : {}),
+            abortController,
+            pathToClaudeCodeExecutable: SDK_CLI_PATH,
+            spawnClaudeCodeProcess: spawnClaude,
         };
         const queryParams = { prompt: text, options: queryOptions };
         const resumeId = session.claudeSessionId;
@@ -286,7 +345,7 @@ class SessionManager {
         try {
             let messageStream;
             try {
-                messageStream = (0, claude_agent_sdk_1.query)(queryParams);
+                messageStream = query(queryParams);
                 // Try to get the first message to detect resume failures early
                 const first = await messageStream.next();
                 if (!first.done) {
@@ -304,7 +363,7 @@ class SessionManager {
                 if (errMsg.includes("No conversation found") || errMsg.includes("session")) {
                     delete queryParams.options.resume;
                     session.claudeSessionId = null;
-                    messageStream = (0, claude_agent_sdk_1.query)(queryParams);
+                    messageStream = query(queryParams);
                 }
                 else {
                     throw resumeErr;
@@ -352,7 +411,9 @@ class SessionManager {
                             try {
                                 parsedInput = JSON.parse(toolInputAccum);
                             }
-                            catch { /* empty */ }
+                            catch {
+                                /* empty */
+                            }
                             this.broadcast(session, {
                                 type: "tool_use_start",
                                 id: pendingToolUse.id,
@@ -375,7 +436,9 @@ class SessionManager {
                             if (item.type === "tool_result") {
                                 const resultContent = typeof item.content === "string"
                                     ? item.content
-                                    : Array.isArray(item.content) ? item.content.map((c) => c.text || "").join("") : "";
+                                    : Array.isArray(item.content)
+                                        ? item.content.map((c) => c.text || "").join("")
+                                        : "";
                                 this.broadcast(session, {
                                     type: "tool_result",
                                     id: item.tool_use_id,
@@ -387,13 +450,22 @@ class SessionManager {
                     }
                     continue;
                 }
-                // Assistant messages with completed tool uses
+                // Assistant messages with completed tool uses or final text response
                 if (msg.type === "assistant") {
                     const assistantMsg = msg.message;
+                    // Broadcast live context usage from assistant usage field.
+                    // The assistant.message.usage has input_tokens, cache_read_input_tokens, cache_creation_input_tokens.
+                    const usage = assistantMsg?.usage;
+                    if (usage) {
+                        this.broadcastAssistantUsage(session, usage);
+                    }
                     const content = assistantMsg?.content;
+                    let hasToolUse = false;
+                    let textContent = "";
                     if (Array.isArray(content)) {
                         for (const block of content) {
                             if (block.type === "tool_use") {
+                                hasToolUse = true;
                                 this.broadcast(session, {
                                     type: "tool_use_complete",
                                     id: block.id,
@@ -401,14 +473,40 @@ class SessionManager {
                                     input: block.input,
                                 });
                             }
+                            if (block.type === "text" && block.text) {
+                                textContent += block.text;
+                            }
                         }
+                    }
+                    // If the assistant message has text but no tool_use, it's the final response.
+                    // The SDK may not send a separate "result" event — treat this as completion.
+                    if (!hasToolUse && textContent) {
+                        session.claudeSessionId = msg.session_id || session.claudeSessionId;
+                        session.accumulatedText = "";
+                        this.broadcast(session, {
+                            type: "result",
+                            text: textContent,
+                            sessionId: session.claudeSessionId,
+                            isError: false,
+                        });
+                        session.eventHistory = [];
+                        // Close the stream — the SDK won't send a "result" event
+                        try {
+                            messageStream.close?.();
+                        }
+                        catch {
+                            /* already closed */
+                        }
+                        break;
                     }
                     continue;
                 }
                 // Result — turn complete
                 if (msg.type === "result") {
                     // If resume failed, retry without resume
-                    if (msg.is_error && typeof msg.result === "string" && msg.result.includes("No conversation found")) {
+                    if (msg.is_error &&
+                        typeof msg.result === "string" &&
+                        msg.result.includes("No conversation found")) {
                         session.claudeSessionId = null;
                         // Retry the query without resume
                         delete queryParams.options.resume;
@@ -425,6 +523,7 @@ class SessionManager {
                         isError: msg.is_error || false,
                         permissionDenials: msg.permission_denials || [],
                     });
+                    this.broadcastContextUsage(session, msg.modelUsage);
                     // Clear event history after turn completes — JSONL has the persisted record
                     session.eventHistory = [];
                     continue;
@@ -433,15 +532,24 @@ class SessionManager {
         }
         catch (err) {
             session.accumulatedText = "";
-            const safeMessage = err instanceof Error ? err.message : "Unknown error";
-            // Don't leak stack traces or internal paths to clients
-            this.broadcast(session, {
-                type: "error",
-                message: safeMessage.includes("/") ? "Internal server error" : safeMessage,
-            });
+            const rawMessage = err instanceof Error ? err.message : "Unknown error";
             console.error(`[session=${session.id}] Query error:`, err);
+            // Detect SDK executable-not-found errors and send a special type
+            // so the client can show the install popup instead of a generic error.
+            if (rawMessage.includes("executable not found") ||
+                rawMessage.includes("native binary not found")) {
+                this.broadcast(session, {
+                    type: "setup_required",
+                    message: "Claude Code CLI could not be started. The SDK bundled binary may be missing or incompatible.",
+                });
+            }
+            else {
+                const safeMessage = rawMessage.includes("/") ? "Internal server error" : rawMessage;
+                this.broadcast(session, { type: "error", message: safeMessage });
+            }
         }
         session.isProcessing = false;
+        session.abortController = null;
         // Process queued messages
         if (session.messageQueue.length > 0) {
             const next = session.messageQueue.shift();
@@ -488,6 +596,43 @@ class SessionManager {
             ws.send(JSON.stringify(event));
         }
     }
+    /** Broadcast context usage from the final `result.modelUsage` (authoritative). */
+    broadcastContextUsage(session, modelUsage) {
+        if (!modelUsage || typeof modelUsage !== "object")
+            return;
+        const firstModel = Object.values(modelUsage)[0];
+        if (!firstModel || !firstModel.contextWindow)
+            return;
+        const used = (firstModel.inputTokens || 0) +
+            (firstModel.cacheReadInputTokens || 0) +
+            (firstModel.cacheCreationInputTokens || 0);
+        const max = firstModel.contextWindow;
+        this.broadcast(session, {
+            type: "context_usage",
+            used,
+            max,
+            percentage: Math.round((used / max) * 100),
+        });
+    }
+    /** Broadcast live context usage from an assistant message's `usage` field. */
+    broadcastAssistantUsage(session, usage) {
+        // The assistant message has raw API usage (input_tokens snake_case).
+        const used = (usage.input_tokens || 0) +
+            (usage.cache_read_input_tokens || 0) +
+            (usage.cache_creation_input_tokens || 0);
+        // Context window isn't in assistant usage — infer from observed usage.
+        // If usage exceeds 200k, it must be a 1M variant; otherwise assume 200k.
+        // The final `result` event corrects this with the real contextWindow.
+        const max = used > 200000 ? 1000000 : 200000;
+        if (used === 0)
+            return;
+        this.broadcast(session, {
+            type: "context_usage",
+            used,
+            max,
+            percentage: Math.round((used / max) * 100),
+        });
+    }
 }
 /* ------------------------------------------------------------------ */
 /*  Origin validation                                                  */
@@ -506,7 +651,7 @@ function isOriginAllowed(origin) {
     // Default: allow same-host origins (any port)
     try {
         const url = new URL(origin);
-        return url.hostname === "localhost" || url.hostname === "127.0.0.1" || origin.includes(".viksi.ai");
+        return (url.hostname === "localhost" || url.hostname === "127.0.0.1" || origin.includes(".viksi.ai"));
     }
     catch {
         return false;
@@ -559,8 +704,9 @@ app.prepare().then(() => {
             }
         }
         const sessionId = qs.session || "default";
+        const cwdParam = qs.cwd || undefined;
         wss.handleUpgrade(req, socket, head, (ws) => {
-            sessionManager.connect(ws, sessionId);
+            sessionManager.connect(ws, sessionId, cwdParam);
         });
     });
     server.listen(port, () => {

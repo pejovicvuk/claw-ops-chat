@@ -11,6 +11,21 @@ interface MessageEntry {
   timestamp: number;
 }
 
+interface SessionMessagesResponse {
+  messages: MessageEntry[];
+  contextUsage: { used: number; max: number; percentage: number } | null;
+  /** Original cwd used when the session was created — needed for SDK resume. */
+  sessionCwd: string | null;
+}
+
+/**
+ * Context window size. Always 1M — the JSONL doesn't reliably distinguish
+ * 200k vs 1M variants, so we optimistically assume the larger window.
+ */
+function getContextWindow(): number {
+  return 1_000_000;
+}
+
 /** Extract plain text from a Claude Code message content field */
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
@@ -32,6 +47,12 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   const { id: sessionId } = await params;
   const projectsDir = join(homedir(), ".claude", "projects");
   const messages: MessageEntry[] = [];
+  // Wrap in object so we can mutate without `let` (prevents prettier's no-let-reassign churn).
+  const usageRef: {
+    value: { input: number; cacheRead: number; cacheCreate: number; model: string } | null;
+  } = { value: null };
+  // Track original cwd from the JSONL — needed for SDK resume to find the session.
+  const cwdRef: { value: string | null } = { value: null };
 
   try {
     // Find the session file across all project directories
@@ -58,6 +79,11 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     for (const line of lines) {
       try {
         const entry = JSON.parse(line);
+
+        // Capture the cwd from the first entry that has it (all entries share the same cwd).
+        if (!cwdRef.value && typeof entry.cwd === "string" && entry.cwd) {
+          cwdRef.value = entry.cwd;
+        }
 
         // User messages — two formats:
         //   CLI: {type: "user", message: {role: "user", content: "plain string"}}
@@ -91,6 +117,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 
         // Assistant messages: {type: "assistant", message: {role: "assistant", content: [{type: "text", text: "..."}, ...]}}
         if (entry.type === "assistant" && entry.message?.role === "assistant") {
+          // Track latest usage for context indicator
+          const usage = entry.message.usage;
+          if (usage && typeof usage === "object") {
+            usageRef.value = {
+              input: usage.input_tokens || 0,
+              cacheRead: usage.cache_read_input_tokens || 0,
+              cacheCreate: usage.cache_creation_input_tokens || 0,
+              model: entry.message.model || "",
+            };
+          }
           const text = extractText(entry.message.content);
           if (text) {
             messages.push({
@@ -107,7 +143,21 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
       }
     }
 
-    return Response.json(messages);
+    const contextUsage: SessionMessagesResponse["contextUsage"] = usageRef.value
+      ? (() => {
+          const u = usageRef.value!;
+          const used = u.input + u.cacheRead + u.cacheCreate;
+          const max = getContextWindow();
+          return { used, max, percentage: Math.round((used / max) * 100) };
+        })()
+      : null;
+
+    const response: SessionMessagesResponse = {
+      messages,
+      contextUsage,
+      sessionCwd: cwdRef.value,
+    };
+    return Response.json(response);
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Failed to read session" },

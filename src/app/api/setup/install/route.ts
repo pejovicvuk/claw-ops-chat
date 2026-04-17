@@ -16,39 +16,68 @@ export async function POST(request: Request) {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       }
 
-      send("Installing Claude Code CLI...");
-      send(`> npm install -g @anthropic-ai/claude-code`);
-
       const isWindows = process.platform === "win32";
       const npmCmd = isWindows ? "npm.cmd" : "npm";
 
-      const child = spawn(npmCmd, ["install", "-g", "@anthropic-ai/claude-code"], {
+      // Step 1: Reinstall the SDK with optional deps (gets the native binary)
+      send("Step 1/2: Reinstalling Claude Agent SDK with native binaries...");
+      send("> npm install @anthropic-ai/claude-agent-sdk");
+
+      const step1 = spawn(npmCmd, ["install", "@anthropic-ai/claude-agent-sdk"], {
         stdio: ["ignore", "pipe", "pipe"],
         shell: isWindows,
+        cwd: process.cwd(),
       });
 
-      child.stdout.on("data", (chunk: Buffer) => {
-        const lines = chunk.toString().split("\n").filter(Boolean);
-        for (const line of lines) send(line);
+      step1.stdout.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString().split("\n").filter(Boolean)) send(line);
+      });
+      step1.stderr.on("data", (chunk: Buffer) => {
+        for (const line of chunk.toString().split("\n").filter(Boolean)) send(line);
       });
 
-      child.stderr.on("data", (chunk: Buffer) => {
-        const lines = chunk.toString().split("\n").filter(Boolean);
-        for (const line of lines) send(line);
-      });
-
-      child.on("close", (code) => {
-        if (code === 0) {
-          send("Claude Code installed successfully.");
-          sendEvent("done", { success: true });
+      step1.on("close", (code1) => {
+        if (code1 !== 0) {
+          send(`SDK reinstall failed (exit ${code1}). Trying global install...`);
         } else {
-          send(`Installation failed with exit code ${code}`);
-          sendEvent("done", { success: false, code });
+          send("SDK reinstalled successfully.");
         }
-        controller.close();
+
+        // Step 2: Install Claude Code CLI globally
+        send("Step 2/2: Installing Claude Code CLI globally...");
+        send("> npm install -g @anthropic-ai/claude-code");
+
+        const step2 = spawn(npmCmd, ["install", "-g", "@anthropic-ai/claude-code"], {
+          stdio: ["ignore", "pipe", "pipe"],
+          shell: isWindows,
+        });
+
+        step2.stdout.on("data", (chunk: Buffer) => {
+          for (const line of chunk.toString().split("\n").filter(Boolean)) send(line);
+        });
+        step2.stderr.on("data", (chunk: Buffer) => {
+          for (const line of chunk.toString().split("\n").filter(Boolean)) send(line);
+        });
+
+        step2.on("close", (code2) => {
+          if (code1 === 0 || code2 === 0) {
+            send("Installation complete. Please restart the dev server (npm run dev).");
+            sendEvent("done", { success: true });
+          } else {
+            send(`Installation failed (SDK: ${code1}, CLI: ${code2})`);
+            sendEvent("done", { success: false });
+          }
+          controller.close();
+        });
+
+        step2.on("error", (err) => {
+          send(`Error: ${err.message}`);
+          sendEvent("done", { success: false, error: err.message });
+          controller.close();
+        });
       });
 
-      child.on("error", (err) => {
+      step1.on("error", (err) => {
         send(`Error: ${err.message}`);
         sendEvent("done", { success: false, error: err.message });
         controller.close();

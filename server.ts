@@ -2,13 +2,41 @@ import "dotenv/config";
 import { createServer, IncomingMessage } from "http";
 import { parse } from "url";
 import { readFileSync } from "fs";
-import { join } from "path";
+import { spawn, type ChildProcess } from "child_process";
+import { join, dirname, sep } from "path";
 import { homedir } from "os";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+/* SDK loaded via sdk-loader.js (plain CJS) to prevent tsx/esbuild from
+   transforming the require and breaking the SDK's import.meta.url resolution. */
+import sdk from "./sdk-loader.js";
+const { query } = sdk as typeof import("@anthropic-ai/claude-agent-sdk");
 import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
+
+// Bundled cli.js path with forward slashes — Windows backslashes break Node spawn.
+const SDK_CLI_PATH = join(dirname(require.resolve("@anthropic-ai/claude-agent-sdk")), "cli.js")
+  .split(sep)
+  .join("/");
+
+// Custom spawn that normalizes paths (fixes Windows backslash ENOENT).
+function spawnClaude(opts: {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  signal: AbortSignal;
+}): ChildProcess {
+  const cmd = opts.command.split(sep).join("/");
+  const args = opts.args.map((a) => a.split(sep).join("/"));
+  return spawn(cmd, args, {
+    cwd: opts.cwd,
+    env: opts.env,
+    stdio: ["pipe", "pipe", "pipe"],
+    signal: opts.signal,
+    windowsHide: true,
+  });
+}
 
 /* ------------------------------------------------------------------ */
 /*  Config                                                             */
@@ -52,7 +80,6 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 const WS_RATE_LIMIT = parseInt(process.env.WS_RATE_LIMIT || "20", 10);
 
 const claudeInfo = detectClaude();
-const claudeExecutablePath = claudeInfo.path;
 if (claudeInfo.available) {
   console.log(`> Claude Code: ${claudeInfo.version} at ${claudeInfo.path}`);
 } else {
@@ -88,6 +115,8 @@ interface ChatSession {
   lastActivity: number;
   /** Abort controller for the current query — allows stopping mid-stream. */
   abortController: AbortController | null;
+  /** Original cwd for resume (the cwd where this session was first created). */
+  sessionCwd: string | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -137,13 +166,14 @@ class SessionManager {
         eventHistory: [],
         lastActivity: Date.now(),
         abortController: null,
+        sessionCwd: null,
       };
       this.sessions.set(sessionId, session);
     }
     return session;
   }
 
-  connect(ws: WebSocket, sessionId: string) {
+  connect(ws: WebSocket, sessionId: string, sessionCwd?: string) {
     const session = this.getOrCreateSession(sessionId);
     session.clients.add(ws);
 
@@ -151,6 +181,11 @@ class SessionManager {
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!session.claudeSessionId && UUID_RE.test(sessionId)) {
       session.claudeSessionId = sessionId;
+    }
+
+    // Store the original cwd so SDK resume can find the session file.
+    if (sessionCwd && !session.sessionCwd) {
+      session.sessionCwd = sessionCwd;
     }
 
     // Send current state to the new client
@@ -294,7 +329,10 @@ class SessionManager {
     };
 
     const queryOptions: Record<string, unknown> = {
-      cwd: process.env.CLAUDE_CWD || "/root",
+      // Prefer the original cwd from JSONL (for resume to find the session file).
+      // Fall back to CLAUDE_CWD env, then homedir() (works cross-platform).
+      // `/root` (Docker default) doesn't exist on Windows/Mac and causes spawn ENOENT.
+      cwd: session.sessionCwd || process.env.CLAUDE_CWD || homedir(),
       includePartialMessages: true,
       canUseTool: async (toolName: string, input: Record<string, unknown>) => {
         // Handle AskUserQuestion
@@ -362,8 +400,9 @@ class SessionManager {
       },
       ...(session.effort ? { effort: session.effort } : {}),
       ...(mcpServers ? { mcpServers } : {}),
-      ...(claudeExecutablePath ? { pathToClaudeCodeExecutable: claudeExecutablePath } : {}),
       abortController,
+      pathToClaudeCodeExecutable: SDK_CLI_PATH,
+      spawnClaudeCodeProcess: spawnClaude,
     };
 
     const queryParams: Record<string, unknown> = { prompt: text, options: queryOptions };
@@ -489,13 +528,23 @@ class SessionManager {
           continue;
         }
 
-        // Assistant messages with completed tool uses
+        // Assistant messages with completed tool uses or final text response
         if (msg.type === "assistant") {
           const assistantMsg = msg.message as Record<string, unknown>;
+          // Broadcast live context usage from assistant usage field.
+          // The assistant.message.usage has input_tokens, cache_read_input_tokens, cache_creation_input_tokens.
+          const usage = assistantMsg?.usage as Record<string, number> | undefined;
+          if (usage) {
+            this.broadcastAssistantUsage(session, usage);
+          }
           const content = assistantMsg?.content;
+          let hasToolUse = false;
+          let textContent = "";
+
           if (Array.isArray(content)) {
             for (const block of content) {
               if (block.type === "tool_use") {
+                hasToolUse = true;
                 this.broadcast(session, {
                   type: "tool_use_complete",
                   id: block.id,
@@ -503,7 +552,31 @@ class SessionManager {
                   input: block.input,
                 });
               }
+              if (block.type === "text" && block.text) {
+                textContent += block.text;
+              }
             }
+          }
+
+          // If the assistant message has text but no tool_use, it's the final response.
+          // The SDK may not send a separate "result" event — treat this as completion.
+          if (!hasToolUse && textContent) {
+            session.claudeSessionId = (msg.session_id as string) || session.claudeSessionId;
+            session.accumulatedText = "";
+            this.broadcast(session, {
+              type: "result",
+              text: textContent,
+              sessionId: session.claudeSessionId,
+              isError: false,
+            });
+            session.eventHistory = [];
+            // Close the stream — the SDK won't send a "result" event
+            try {
+              (messageStream as { close?: () => void }).close?.();
+            } catch {
+              /* already closed */
+            }
+            break;
           }
           continue;
         }
@@ -532,6 +605,7 @@ class SessionManager {
             isError: msg.is_error || false,
             permissionDenials: msg.permission_denials || [],
           });
+          this.broadcastContextUsage(session, msg.modelUsage);
           // Clear event history after turn completes — JSONL has the persisted record
           session.eventHistory = [];
           continue;
@@ -539,13 +613,24 @@ class SessionManager {
       }
     } catch (err) {
       session.accumulatedText = "";
-      const safeMessage = err instanceof Error ? err.message : "Unknown error";
-      // Don't leak stack traces or internal paths to clients
-      this.broadcast(session, {
-        type: "error",
-        message: safeMessage.includes("/") ? "Internal server error" : safeMessage,
-      });
+      const rawMessage = err instanceof Error ? err.message : "Unknown error";
       console.error(`[session=${session.id}] Query error:`, err);
+
+      // Detect SDK executable-not-found errors and send a special type
+      // so the client can show the install popup instead of a generic error.
+      if (
+        rawMessage.includes("executable not found") ||
+        rawMessage.includes("native binary not found")
+      ) {
+        this.broadcast(session, {
+          type: "setup_required",
+          message:
+            "Claude Code CLI could not be started. The SDK bundled binary may be missing or incompatible.",
+        });
+      } else {
+        const safeMessage = rawMessage.includes("/") ? "Internal server error" : rawMessage;
+        this.broadcast(session, { type: "error", message: safeMessage });
+      }
     }
 
     session.isProcessing = false;
@@ -602,6 +687,53 @@ class SessionManager {
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(event));
     }
+  }
+
+  /** Broadcast context usage from the final `result.modelUsage` (authoritative). */
+  private broadcastContextUsage(session: ChatSession, modelUsage: unknown): void {
+    if (!modelUsage || typeof modelUsage !== "object") return;
+    const firstModel = Object.values(modelUsage as Record<string, unknown>)[0] as
+      | {
+          inputTokens?: number;
+          cacheReadInputTokens?: number;
+          cacheCreationInputTokens?: number;
+          contextWindow?: number;
+        }
+      | undefined;
+    if (!firstModel || !firstModel.contextWindow) return;
+
+    const used =
+      (firstModel.inputTokens || 0) +
+      (firstModel.cacheReadInputTokens || 0) +
+      (firstModel.cacheCreationInputTokens || 0);
+    const max = firstModel.contextWindow;
+
+    this.broadcast(session, {
+      type: "context_usage",
+      used,
+      max,
+      percentage: Math.round((used / max) * 100),
+    });
+  }
+
+  /** Broadcast live context usage from an assistant message's `usage` field. */
+  private broadcastAssistantUsage(session: ChatSession, usage: Record<string, number>): void {
+    // The assistant message has raw API usage (input_tokens snake_case).
+    const used =
+      (usage.input_tokens || 0) +
+      (usage.cache_read_input_tokens || 0) +
+      (usage.cache_creation_input_tokens || 0);
+    // Context window isn't in assistant usage — assume 1M.
+    // The final `result` event corrects this with the real contextWindow from modelUsage.
+    const max = 1_000_000;
+    if (used === 0) return;
+
+    this.broadcast(session, {
+      type: "context_usage",
+      used,
+      max,
+      percentage: Math.round((used / max) * 100),
+    });
   }
 }
 
@@ -688,9 +820,10 @@ app.prepare().then(() => {
     }
 
     const sessionId = (qs.session as string) || "default";
+    const cwdParam = (qs.cwd as string) || undefined;
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      sessionManager.connect(ws, sessionId);
+      sessionManager.connect(ws, sessionId, cwdParam);
     });
   });
 

@@ -1,7 +1,8 @@
 "use client";
 
-import { FiPlus, FiRefreshCw } from "react-icons/fi";
+import { FiPlus, FiRefreshCw, FiSettings } from "react-icons/fi";
 import type { ChatSession } from "@/lib/types";
+import { useUrlState } from "@/lib/use-url-state";
 
 function formatRelativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -34,8 +35,11 @@ export function SessionList({
   onRefresh,
   runningSessionIds,
 }: SessionListProps) {
+  const { setParam } = useUrlState();
+  const openSettings = () => setParam("settings", "1");
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-3 py-2.5">
         <span className="text-[13px] font-semibold text-canvas-fg">Chats</span>
         <div className="flex items-center gap-1">
@@ -108,6 +112,18 @@ export function SessionList({
             })}
           </div>
         )}
+      </div>
+
+      {/* Footer — Settings */}
+      <div className="shrink-0 border-t border-canvas-border px-2 py-2">
+        <button
+          type="button"
+          onClick={openSettings}
+          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+        >
+          <FiSettings size={14} />
+          Settings
+        </button>
       </div>
     </div>
   );

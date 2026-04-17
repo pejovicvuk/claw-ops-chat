@@ -620,10 +620,9 @@ class SessionManager {
         const used = (usage.input_tokens || 0) +
             (usage.cache_read_input_tokens || 0) +
             (usage.cache_creation_input_tokens || 0);
-        // Context window isn't in assistant usage — infer from observed usage.
-        // If usage exceeds 200k, it must be a 1M variant; otherwise assume 200k.
-        // The final `result` event corrects this with the real contextWindow.
-        const max = used > 200000 ? 1000000 : 200000;
+        // Context window isn't in assistant usage — assume 1M.
+        // The final `result` event corrects this with the real contextWindow from modelUsage.
+        const max = 1000000;
         if (used === 0)
             return;
         this.broadcast(session, {

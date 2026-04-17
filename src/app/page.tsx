@@ -11,6 +11,7 @@ import {
 import type { ChatSession } from "@/lib/types";
 import { ChatLayout } from "@/components/chat/chat-layout";
 import { AuthGuard } from "@/components/auth/auth-guard";
+import { SettingsOverlay } from "@/components/settings/settings-overlay";
 import { useUrlState } from "@/lib/use-url-state";
 
 const STORAGE_KEY = "claw-chat-session:v1";
@@ -120,6 +121,7 @@ export default function ChatPage() {
           sessionsLoading={sessionsLoading}
           onSessionCreated={handleSessionCreated}
         />
+        <SettingsOverlay />
       </div>
     </AuthGuard>
   );

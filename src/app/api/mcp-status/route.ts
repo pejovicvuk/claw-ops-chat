@@ -14,13 +14,34 @@ export interface McpServerInfo {
  * Known Claude.ai hosted connectors we care about.
  * Keys are the exact names that appear in `claude mcp list` output
  * after the `claude.ai ` prefix.
+ *
+ * `cliName` is the short name we pass to `claude mcp add` when initiating
+ * in-app OAuth. `url` is the hosted HTTP MCP endpoint for that connector.
  */
-const KNOWN_SERVERS: Record<string, { id: string }> = {
-  Gmail: { id: "gmail" },
-  "Google Drive": { id: "google-drive" },
-  "Google Calendar": { id: "google-calendar" },
-  "Microsoft 365": { id: "microsoft-365" },
+export const KNOWN_SERVERS: Record<string, { id: string; cliName: string; url: string | null }> = {
+  Gmail: { id: "gmail", cliName: "gmail", url: "https://gmail.mcp.claude.com/mcp" },
+  "Google Drive": {
+    id: "google-drive",
+    cliName: "google-drive",
+    url: "https://drivemcp.googleapis.com/mcp/v1",
+  },
+  "Google Calendar": {
+    id: "google-calendar",
+    cliName: "google-calendar",
+    url: "https://calendar.mcp.claude.com/mcp",
+  },
+  "Microsoft 365": { id: "microsoft-365", cliName: "microsoft-365", url: null },
 };
+
+/** Look up a hosted connector entry by our short id. */
+export function findKnownServerById(
+  id: string,
+): { id: string; cliName: string; url: string | null } | null {
+  for (const entry of Object.values(KNOWN_SERVERS)) {
+    if (entry.id === id) return entry;
+  }
+  return null;
+}
 
 /** Run `claude mcp list` with a short timeout and return stdout. */
 function runMcpList(): Promise<string> {

@@ -34,5 +34,6 @@ export async function GET(request: Request) {
     // "connected" means both credentials are saved AND the MCP server is registered
     // (meaning authorize has been run at least once).
     connected: !!creds && registered,
+    platform: process.platform,
   });
 }

@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FiAlertTriangle,
   FiCheck,
   FiCopy,
+  FiDownload,
   FiExternalLink,
   FiKey,
   FiLoader,
@@ -16,10 +17,20 @@ import { authFetch } from "@/lib/auth";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
+type ServerPlatform = "win32" | "linux" | "darwin" | string;
+
 interface Status {
   uvxInstalled: boolean;
   credentialsConfigured: boolean;
   connected: boolean;
+  platform?: ServerPlatform;
+}
+
+function platformLabel(p: ServerPlatform | undefined): string {
+  if (p === "win32") return "Windows";
+  if (p === "linux") return "Linux";
+  if (p === "darwin") return "macOS";
+  return "this server";
 }
 
 type UiMode = "loading" | "setup" | "authorizing" | "connected" | "error";
@@ -310,7 +321,7 @@ export function GoogleCustomWizard() {
         your machine.
       </p>
 
-      {/* Step 1: uvx check */}
+      {/* Step 1: uvx check + installer */}
       <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
         <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-canvas-muted">
           Step 1 — Prerequisites
@@ -321,33 +332,7 @@ export function GoogleCustomWizard() {
             <code className="text-[11px]">uvx</code> is installed
           </div>
         ) : (
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-[12px] text-orange-500">
-              <FiAlertTriangle size={13} />
-              <code className="text-[11px]">uvx</code> is not installed
-            </div>
-            <p className="text-[11px] text-canvas-muted">Run one of these to install it:</p>
-            <div className="flex items-center gap-2 rounded-lg bg-canvas-bg px-3 py-2">
-              <FiTerminal size={11} className="text-canvas-muted" />
-              <code className="select-all text-[11px] text-canvas-muted">
-                powershell -c &quot;irm https://astral.sh/uv/install.ps1 | iex&quot;
-              </code>
-            </div>
-            <div className="flex items-center gap-2 rounded-lg bg-canvas-bg px-3 py-2">
-              <FiTerminal size={11} className="text-canvas-muted" />
-              <code className="select-all text-[11px] text-canvas-muted">
-                curl -LsSf https://astral.sh/uv/install.sh | sh
-              </code>
-            </div>
-            <button
-              type="button"
-              onClick={() => void refreshStatus()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-1.5 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
-            >
-              <FiRefreshCw size={10} />
-              Check again
-            </button>
-          </div>
+          <PrereqInstaller serverPlatform={status.platform} onInstalled={refreshStatus} />
         )}
       </div>
 
@@ -519,6 +504,210 @@ export function GoogleCustomWizard() {
 
       {authorizedEmail && (
         <p className="text-[11px] text-green-500">Authorized as {authorizedEmail}</p>
+      )}
+    </div>
+  );
+}
+
+interface PrereqInstallerProps {
+  serverPlatform: ServerPlatform | undefined;
+  onInstalled: () => void | Promise<void>;
+}
+
+/**
+ * Inline installer for `uv` / `uvx`. Streams output from
+ * /api/prereqs/install-uv (SSE) and auto-refreshes status on success.
+ */
+function PrereqInstaller({ serverPlatform, onInstalled }: PrereqInstallerProps) {
+  const [installing, setInstalling] = useState(false);
+  const [logs, setLogs] = useState<string[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const isWindows = serverPlatform === "win32";
+  const isUnix = serverPlatform === "linux" || serverPlatform === "darwin";
+
+  const startInstall = useCallback(async () => {
+    setInstalling(true);
+    setLogs([]);
+    setError(null);
+    setDone(false);
+
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
+    try {
+      const res = await authFetch(`${BASE}/api/prereqs/install-uv`, {
+        method: "POST",
+        signal: ac.signal,
+      });
+      if (!res.ok || !res.body) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || "Failed to start installer");
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done: streamDone, value } = await reader.read();
+        if (streamDone) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() || "";
+        for (const block of blocks) {
+          const line = block.trim();
+          if (!line.startsWith("data:")) continue;
+          try {
+            const evt = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
+            if (evt.type === "log") {
+              setLogs((prev) => [...prev, evt.line as string].slice(-200));
+            } else if (evt.type === "status") {
+              setLogs((prev) => [...prev, `> ${evt.message as string}`].slice(-200));
+            } else if (evt.type === "done") {
+              if (evt.success) {
+                setDone(true);
+                await onInstalled();
+              } else {
+                setError((evt.error as string) || "Install failed");
+              }
+              return;
+            }
+          } catch {
+            /* malformed event */
+          }
+        }
+      }
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setError(err instanceof Error ? err.message : "Install error");
+    } finally {
+      setInstalling(false);
+    }
+  }, [onInstalled]);
+
+  const cancel = useCallback(async () => {
+    abortRef.current?.abort();
+    try {
+      await authFetch(`${BASE}/api/prereqs/install-uv/cancel`, { method: "POST" });
+    } catch {
+      /* best-effort */
+    }
+    setInstalling(false);
+  }, []);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 text-[12px] text-orange-500">
+        <FiAlertTriangle size={13} />
+        <code className="text-[11px]">uvx</code> is not installed
+      </div>
+      <p className="text-[11px] text-canvas-muted">
+        Detected server OS: <span className="text-canvas-fg">{platformLabel(serverPlatform)}</span>.
+        Click Install to run the official installer — it places{" "}
+        <code className="text-[11px]">uv</code> in your home directory (no sudo needed).
+      </p>
+
+      {/* OS-labeled command references */}
+      <div
+        className={`flex items-start gap-2 rounded-lg px-3 py-2 ${
+          isUnix ? "bg-accent/10 ring-1 ring-accent/30" : "bg-canvas-bg"
+        }`}
+      >
+        <FiTerminal size={11} className="mt-0.5 shrink-0 text-canvas-muted" />
+        <div className="min-w-0 flex-1">
+          <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-canvas-muted">
+            Linux / macOS
+          </p>
+          <code className="block select-all break-all text-[11px] text-canvas-muted">
+            curl -LsSf https://astral.sh/uv/install.sh | sh
+          </code>
+        </div>
+      </div>
+      <div
+        className={`flex items-start gap-2 rounded-lg px-3 py-2 ${
+          isWindows ? "bg-accent/10 ring-1 ring-accent/30" : "bg-canvas-bg"
+        }`}
+      >
+        <FiTerminal size={11} className="mt-0.5 shrink-0 text-canvas-muted" />
+        <div className="min-w-0 flex-1">
+          <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-canvas-muted">
+            Windows
+          </p>
+          <code className="block select-all break-all text-[11px] text-canvas-muted">
+            powershell -c &quot;irm https://astral.sh/uv/install.ps1 | iex&quot;
+          </code>
+        </div>
+      </div>
+
+      {/* Action row */}
+      <div className="flex flex-wrap gap-2 pt-1">
+        {installing ? (
+          <button
+            type="button"
+            onClick={cancel}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-1.5 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+          >
+            Cancel
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={startInstall}
+            disabled={!serverPlatform}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+          >
+            <FiDownload size={11} />
+            Install uv on {platformLabel(serverPlatform)}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => void onInstalled()}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-1.5 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+        >
+          <FiRefreshCw size={10} />
+          Check again
+        </button>
+      </div>
+
+      {installing && (
+        <div className="flex items-center gap-2 text-[11px] text-canvas-muted">
+          <FiLoader size={11} className="animate-spin" />
+          Installing… this can take a minute.
+        </div>
+      )}
+
+      {done && (
+        <div className="flex items-center gap-2 text-[11px] text-green-500">
+          <FiCheck size={11} />
+          uv installed. If it still shows missing, open a new shell so the updated PATH is picked
+          up, then click Check again.
+        </div>
+      )}
+
+      {error && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 p-2 text-[11px] text-red-500">
+          <FiAlertTriangle size={11} className="mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      {logs.length > 0 && (
+        <details
+          className="rounded-lg border border-canvas-border bg-canvas-bg p-2 text-[11px] text-canvas-muted"
+          open={installing}
+        >
+          <summary className="cursor-pointer select-none px-1 py-0.5">
+            Installer output ({logs.length})
+          </summary>
+          <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap px-1 font-mono text-[10px] leading-relaxed">
+            {logs.join("\n")}
+          </pre>
+        </details>
       )}
     </div>
   );

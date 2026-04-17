@@ -9,10 +9,17 @@ import { Z_INDEX } from "@/lib/z-index";
 import { SettingsMainPage } from "./pages/settings-main-page";
 import { SettingsConnectionsPage } from "./pages/settings-connections-page";
 import { SettingsClaudePage } from "./pages/settings-claude-page";
+import { SettingsGooglePage } from "./pages/settings-google-page";
+import { SettingsMicrosoftPage } from "./pages/settings-microsoft-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
-type PageKey = "main" | "connections" | "connections/claude";
+type PageKey =
+  | "main"
+  | "connections"
+  | "connections/claude"
+  | "connections/google"
+  | "connections/microsoft";
 
 interface PageInfo {
   /** Display title in the overlay header. */
@@ -25,6 +32,8 @@ const PAGES: Record<PageKey, PageInfo> = {
   main: { title: "Settings", parent: null },
   connections: { title: "Connections", parent: "main" },
   "connections/claude": { title: "Claude Code", parent: "connections" },
+  "connections/google": { title: "Google Workspace", parent: "connections" },
+  "connections/microsoft": { title: "Microsoft 365", parent: "connections" },
 };
 
 /**
@@ -135,6 +144,8 @@ export function SettingsOverlay() {
           {page === "main" && <SettingsMainPage />}
           {page === "connections" && <SettingsConnectionsPage />}
           {page === "connections/claude" && <SettingsClaudePage />}
+          {page === "connections/google" && <SettingsGooglePage />}
+          {page === "connections/microsoft" && <SettingsMicrosoftPage />}
         </div>
 
         {/* Footer — only on main page */}

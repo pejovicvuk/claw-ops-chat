@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { FiTerminal, FiGithub, FiGitBranch, FiMail, FiInbox } from "react-icons/fi";
 import { authFetch } from "@/lib/auth";
+import { useUrlState } from "@/lib/use-url-state";
 import { ConnectionRow, type ConnectionStatus } from "../connection-row";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -13,19 +14,25 @@ const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
  */
 export function SettingsConnectionsPage() {
   const [claudeStatus, setClaudeStatus] = useState<ConnectionStatus>("unknown");
+  const { setParam } = useUrlState();
 
-  // Fetch Claude Code availability from the existing health endpoint.
+  // Fetch Claude Code availability — combines health check AND OAuth credential check.
   useEffect(() => {
     let cancelled = false;
-    authFetch(`${BASE}/api/health`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (cancelled) return;
-        setClaudeStatus(data?.claude?.available ? "connected" : "disconnected");
-      })
-      .catch(() => {
-        if (!cancelled) setClaudeStatus("disconnected");
-      });
+    Promise.all([
+      authFetch(`${BASE}/api/health`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+      authFetch(`${BASE}/api/claude-auth/status`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null),
+    ]).then(([health, auth]) => {
+      if (cancelled) return;
+      const binaryAvailable = !!health?.claude?.available;
+      const authConnected = !!auth?.connected;
+      // Show "connected" only if both CLI is installed AND user is logged in.
+      setClaudeStatus(binaryAvailable && authConnected ? "connected" : "disconnected");
+    });
     return () => {
       cancelled = true;
     };
@@ -43,6 +50,7 @@ export function SettingsConnectionsPage() {
         name="Claude Code"
         description="Local CLI for AI-powered development"
         status={claudeStatus}
+        onClick={() => setParam("settings", "connections/claude")}
       />
 
       <ConnectionRow

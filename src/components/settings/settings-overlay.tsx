@@ -8,31 +8,41 @@ import { useUrlState } from "@/lib/use-url-state";
 import { Z_INDEX } from "@/lib/z-index";
 import { SettingsMainPage } from "./pages/settings-main-page";
 import { SettingsConnectionsPage } from "./pages/settings-connections-page";
+import { SettingsClaudePage } from "./pages/settings-claude-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
-type Page = "main" | "connections";
+type PageKey = "main" | "connections" | "connections/claude";
 
-/** Parse the current settings page from the URL param value. */
-function parsePage(raw: string | null): Page | null {
-  if (raw === null) return null;
-  if (raw === "connections") return "connections";
-  // "main", "1" (back-compat), anything else → main page
-  return "main";
+interface PageInfo {
+  /** Display title in the overlay header. */
+  title: string;
+  /** Where the back arrow goes. `null` = no back arrow (main page). */
+  parent: PageKey | null;
 }
 
-const PAGE_TITLES: Record<Page, string> = {
-  main: "Settings",
-  connections: "Connections",
+const PAGES: Record<PageKey, PageInfo> = {
+  main: { title: "Settings", parent: null },
+  connections: { title: "Connections", parent: "main" },
+  "connections/claude": { title: "Claude Code", parent: "connections" },
 };
 
 /**
- * Full-screen settings overlay. Open/closed state + active page are both
- * driven by the ?settings= URL param:
- *   ?settings=main        → main page
- *   ?settings=connections → connections list page
- *   absent                → closed
- *   ?settings=1           → treated as "main" (back-compat)
+ * Parse the current settings page from the URL param value.
+ * Returns null when the overlay should be closed.
+ */
+function parsePage(raw: string | null): PageKey | null {
+  if (raw === null) return null;
+  // Back-compat: "1" was the original open flag.
+  if (raw === "1") return "main";
+  if (raw in PAGES) return raw as PageKey;
+  // Unknown page → fall back to main (rather than close).
+  return "main";
+}
+
+/**
+ * Full-screen settings overlay. Open/closed state + active page are driven
+ * by the ?settings= URL param. Supports nested paths like "connections/claude".
  */
 export function SettingsOverlay() {
   const { params, setParam } = useUrlState();
@@ -44,9 +54,11 @@ export function SettingsOverlay() {
     setParam("settings", null);
   }, [setParam]);
 
-  const goToMain = useCallback(() => {
-    setParam("settings", "main");
-  }, [setParam]);
+  const goBack = useCallback(() => {
+    if (!page) return;
+    const parent = PAGES[page].parent;
+    setParam("settings", parent ?? null);
+  }, [page, setParam]);
 
   // Escape key dismissal + focus entry point on open.
   useEffect(() => {
@@ -72,8 +84,8 @@ export function SettingsOverlay() {
 
   if (!open || !page) return null;
 
-  const isSubPage = page !== "main";
-  const title = PAGE_TITLES[page];
+  const info = PAGES[page];
+  const hasBack = info.parent !== null;
 
   return (
     <div
@@ -91,11 +103,11 @@ export function SettingsOverlay() {
         {/* Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-5 py-3.5">
           <div className="flex min-w-0 items-center gap-2">
-            {isSubPage ? (
+            {hasBack ? (
               <button
                 type="button"
-                onClick={goToMain}
-                aria-label="Back to settings"
+                onClick={goBack}
+                aria-label="Back"
                 className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
               >
                 <FiArrowLeft size={14} />
@@ -104,7 +116,7 @@ export function SettingsOverlay() {
               <FiSettings size={16} className="shrink-0 text-canvas-muted" />
             )}
             <h2 id="settings-title" className="truncate text-[14px] font-semibold text-canvas-fg">
-              {title}
+              {info.title}
             </h2>
           </div>
           <button
@@ -122,6 +134,7 @@ export function SettingsOverlay() {
         <div className="flex-1 overflow-y-auto px-5 py-5">
           {page === "main" && <SettingsMainPage />}
           {page === "connections" && <SettingsConnectionsPage />}
+          {page === "connections/claude" && <SettingsClaudePage />}
         </div>
 
         {/* Footer — only on main page */}

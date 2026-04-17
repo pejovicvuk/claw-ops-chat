@@ -3,10 +3,13 @@ import { resolve, basename, sep } from "path";
 import { homedir } from "os";
 
 /**
- * Base directory for all file operations. Defaults to CLAUDE_CWD or "/workspace".
- * All resolved paths must be within this directory to prevent path traversal.
+ * Base directory for all file operations.
+ * - Production: CLAUDE_CWD env var, or "/workspace" (Docker default).
+ * - Development: CLAUDE_CWD env var, or user's home directory (so the file
+ *   browser works out of the box on dev machines without extra config).
  */
-const BASE_DIR = process.env.CLAUDE_CWD || "/workspace";
+const dev = process.env.NODE_ENV !== "production";
+const BASE_DIR = process.env.CLAUDE_CWD || (dev ? homedir() : "/workspace");
 
 /**
  * Resolves a user-provided file path and validates it stays within the allowed

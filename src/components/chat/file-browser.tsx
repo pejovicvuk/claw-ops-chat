@@ -1,8 +1,17 @@
 "use client";
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useState } from "react";
-import { FiFolder, FiFile, FiChevronRight, FiDownload, FiTrash2, FiCopy } from "react-icons/fi";
-import { listFiles, downloadFile, deleteFile, uploadFile } from "@/lib/api";
+import {
+  FiFolder,
+  FiFile,
+  FiChevronRight,
+  FiDownload,
+  FiTrash2,
+  FiCopy,
+  FiRefreshCw,
+} from "react-icons/fi";
+import { listFiles, downloadFile, deleteFile, uploadFile, FileApiError } from "@/lib/api";
+import { getCachedDir, isCacheFresh, setCachedDir, invalidateDir } from "@/lib/file-cache";
 import type { FileEntry } from "@/lib/types";
 
 export interface FileBrowserHandle {
@@ -30,18 +39,44 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
   const [currentPath, setCurrentPath] = useState("~");
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: FileEntry } | null>(
     null,
   );
 
   const loadDir = useCallback(async (path: string) => {
-    setLoading(true);
+    setError(null);
+
+    // Show cached data immediately if available
+    const cached = getCachedDir(path);
+    if (cached) {
+      setEntries(cached);
+      setCurrentPath(path);
+    }
+
+    // If cache is still fresh, skip the network request
+    if (cached && isCacheFresh(path)) return;
+
+    // Only show spinner when there's no cached data to display
+    if (!cached) setLoading(true);
+
     try {
       const files = await listFiles(path);
       setEntries(files);
       setCurrentPath(path);
-    } catch {
-      setEntries([]);
+      setCachedDir(path, files);
+    } catch (err) {
+      // If we have cached data, keep showing it (stale-while-revalidate)
+      if (!cached) {
+        setEntries([]);
+        if (err instanceof FileApiError) {
+          if (err.status === 403) setError("Access denied — check CLAUDE_CWD setting");
+          else if (err.status === 401) setError("Session expired — please log in again");
+          else setError(err.message);
+        } else {
+          setError("Failed to load files — check your connection");
+        }
+      }
     } finally {
       setLoading(false);
     }
@@ -91,6 +126,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       for (let i = 0; i < files.length; i++) {
         await uploadFile(currentPath, files[i]);
       }
+      invalidateDir(currentPath);
       loadDir(currentPath);
     },
     [currentPath, loadDir],
@@ -134,7 +170,21 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           </div>
         )}
 
-        {!loading && entries.length === 0 && (
+        {!loading && error && (
+          <div className="flex flex-col items-center gap-2 px-4 py-8">
+            <p className="text-center text-[12px] text-red-400">{error}</p>
+            <button
+              type="button"
+              onClick={() => loadDir(currentPath)}
+              className="flex items-center gap-1 text-[11px] text-blue-400 hover:underline"
+            >
+              <FiRefreshCw size={10} />
+              Retry
+            </button>
+          </div>
+        )}
+
+        {!loading && !error && entries.length === 0 && (
           <p className="py-8 text-center text-[12px] text-canvas-muted">Empty directory</p>
         )}
 
@@ -214,6 +264,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
             type="button"
             onClick={async () => {
               await deleteFile(contextMenu.entry.path);
+              invalidateDir(currentPath);
               loadDir(currentPath);
               closeMenu();
             }}

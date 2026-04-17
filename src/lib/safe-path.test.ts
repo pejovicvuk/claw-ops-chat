@@ -3,7 +3,9 @@ import { safePath, safeFilename, SafePathError } from "./safe-path";
 import { resolve } from "path";
 import { homedir } from "os";
 
-const BASE_DIR = process.env.CLAUDE_CWD || "/workspace";
+// Must match the logic in safe-path.ts
+const dev = process.env.NODE_ENV !== "production";
+const BASE_DIR = process.env.CLAUDE_CWD || (dev ? homedir() : "/workspace");
 const RESOLVED_BASE = resolve(BASE_DIR);
 
 describe("safePath", () => {

@@ -5,6 +5,16 @@ import type { ChatSession, ChatMessage, FileEntry } from "@/lib/types";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
+export class FileApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "FileApiError";
+  }
+}
+
 /* ── Sessions ── */
 
 export async function fetchSessions(): Promise<ChatSession[]> {
@@ -23,7 +33,10 @@ export async function fetchSessionMessages(sessionId: string): Promise<ChatMessa
 
 export async function listFiles(path: string): Promise<FileEntry[]> {
   const res = await authFetch(`${BASE}/api/files/list?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error("Failed to list files");
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new FileApiError(res.status, body.error || `Failed to list files (${res.status})`);
+  }
   return res.json();
 }
 

@@ -456,12 +456,22 @@ export function useClaudeChat(sessionId: string | null) {
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, [sessionId, connect]);
 
+  /* ── Stop generation ── */
+  const stopGeneration = useCallback(() => {
+    sendToServer({ type: "stop" });
+    setStatus("idle");
+    setActiveTool(null);
+    currentAssistantRef.current = null;
+    currentThinkingRef.current = null;
+  }, [sendToServer]);
+
   return {
     messages,
     status,
     activeTool,
     claudeSessionId,
     sendMessage,
+    stopGeneration,
     respondPermission,
     respondQuestion,
     setPermissionMode,

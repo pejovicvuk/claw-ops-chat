@@ -9,6 +9,7 @@ import { fetchSessionMessages } from "@/lib/api";
 import { StatusIndicator } from "./status-indicator";
 import { MessageBubble } from "./message-bubble";
 import { ChatInput } from "./chat-input";
+import { SetupGuard } from "./setup-guard";
 
 const MODE_STORAGE_KEY = "claw-chat-mode:v1";
 
@@ -82,6 +83,7 @@ export function ChatView({
     activeTool,
     claudeSessionId,
     sendMessage,
+    stopGeneration,
     respondPermission,
     respondQuestion,
     setPermissionMode,
@@ -443,7 +445,14 @@ export function ChatView({
         })()}
       </div>
 
-      <ChatInput status={status} onSend={sendMessage} fileButton={fileButton} />
+      <SetupGuard>
+        <ChatInput
+          status={status}
+          onSend={sendMessage}
+          onStop={stopGeneration}
+          fileButton={fileButton}
+        />
+      </SetupGuard>
     </div>
   );
 }

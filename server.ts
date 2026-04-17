@@ -8,6 +8,7 @@ import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
+import { detectClaude } from "./src/lib/claude-status";
 
 /* ------------------------------------------------------------------ */
 /*  Config                                                             */
@@ -50,6 +51,14 @@ const HEARTBEAT_INTERVAL_MS = 30_000;
 /** Maximum WebSocket messages per second per session (default: 20). */
 const WS_RATE_LIMIT = parseInt(process.env.WS_RATE_LIMIT || "20", 10);
 
+const claudeInfo = detectClaude();
+const claudeExecutablePath = claudeInfo.path;
+if (claudeInfo.available) {
+  console.log(`> Claude Code: ${claudeInfo.version} at ${claudeInfo.path}`);
+} else {
+  console.warn(`> Claude Code: not available — ${claudeInfo.error}`);
+}
+
 if (!ALLOWED_EMAIL) {
   console.error("FATAL: ALLOWED_EMAIL environment variable is required");
   process.exit(1);
@@ -77,6 +86,8 @@ interface ChatSession {
   eventHistory: Record<string, unknown>[];
   /** Last activity timestamp (for idle cleanup). */
   lastActivity: number;
+  /** Abort controller for the current query — allows stopping mid-stream. */
+  abortController: AbortController | null;
 }
 
 /* ------------------------------------------------------------------ */
@@ -125,6 +136,7 @@ class SessionManager {
         messageTimestamps: [],
         eventHistory: [],
         lastActivity: Date.now(),
+        abortController: null,
       };
       this.sessions.set(sessionId, session);
     }
@@ -245,6 +257,14 @@ class SessionManager {
       return;
     }
 
+    if (type === "stop") {
+      if (session.abortController && session.isProcessing) {
+        session.abortController.abort();
+        this.broadcast(session, { type: "result", text: "Stopped by user", isError: false });
+      }
+      return;
+    }
+
     if (type === "set_effort") {
       session.effort = (msg.effort as string) || null;
       return;
@@ -259,6 +279,8 @@ class SessionManager {
   private async handleUserMessage(session: ChatSession, text: string) {
     session.isProcessing = true;
     session.accumulatedText = "";
+    const abortController = new AbortController();
+    session.abortController = abortController;
     let toolInputAccum = "";
     let pendingToolUse: { id: string; name: string } | null = null;
 
@@ -340,6 +362,8 @@ class SessionManager {
       },
       ...(session.effort ? { effort: session.effort } : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      ...(claudeExecutablePath ? { pathToClaudeCodeExecutable: claudeExecutablePath } : {}),
+      abortController,
     };
 
     const queryParams: Record<string, unknown> = { prompt: text, options: queryOptions };
@@ -525,6 +549,7 @@ class SessionManager {
     }
 
     session.isProcessing = false;
+    session.abortController = null;
 
     // Process queued messages
     if (session.messageQueue.length > 0) {

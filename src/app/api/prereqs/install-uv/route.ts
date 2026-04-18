@@ -6,68 +6,34 @@ import {
   broadcastToPrereqSession,
   type PrereqSession,
 } from "@/lib/prereq-sessions";
+import { buildUvInstallCommand, detectPlatform } from "@/lib/platform-detect";
 
 /**
  * Install the `uv` / `uvx` CLI on the server where this app runs.
  *
- * Commands are hardcoded to the official Astral installer — no user input
- * is passed to the shell. `uv` installs to `$HOME/.local/bin` on Linux/macOS
- * and `%USERPROFILE%\.local\bin` on Windows by default, so no sudo/admin
- * privileges are required.
+ * `buildUvInstallCommand()` picks the right executable (resolved PowerShell
+ * on Windows, curl-or-wget on Unix) and returns a spawn triplet we use
+ * *without* `shell: true`. On Windows that is the critical fix — wrapping
+ * the PowerShell pipeline in cmd.exe caused cmd to interpret `|` as its
+ * own pipe, breaking `iex`.
  *
- * Stream stdout/stderr as SSE so the user can watch progress live.
+ * The installer targets `$HOME/.local/bin` (Unix) or
+ * `%USERPROFILE%\.local\bin` (Windows), so no sudo/admin is needed.
  */
-
-type Platform = "win32" | "linux" | "darwin" | "other";
-
-function detectPlatform(): Platform {
-  if (process.platform === "win32") return "win32";
-  if (process.platform === "linux") return "linux";
-  if (process.platform === "darwin") return "darwin";
-  return "other";
-}
-
-interface InstallCommand {
-  shell: string;
-  args: string[];
-  human: string;
-}
-
-function buildInstallCommand(platform: Platform): InstallCommand | null {
-  if (platform === "win32") {
-    const cmd = "irm https://astral.sh/uv/install.ps1 | iex";
-    return {
-      shell: "powershell",
-      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", cmd],
-      human: `powershell -Command "${cmd}"`,
-    };
-  }
-  if (platform === "linux" || platform === "darwin") {
-    const cmd = "curl -LsSf https://astral.sh/uv/install.sh | sh";
-    return {
-      shell: "sh",
-      args: ["-c", cmd],
-      human: cmd,
-    };
-  }
-  return null;
-}
 
 export async function POST(request: Request) {
   const session = extractSession(request);
   if (!session) return unauthorized();
 
   const platform = detectPlatform();
-  const command = buildInstallCommand(platform);
-  if (!command) {
-    return Response.json({ error: `Unsupported platform: ${process.platform}` }, { status: 400 });
+  const built = await buildUvInstallCommand();
+  if ("error" in built) {
+    return Response.json({ error: built.error }, { status: 400 });
   }
 
-  const child = spawn(command.shell, command.args, {
+  const child = spawn(built.shell, built.args, {
     stdio: ["ignore", "pipe", "pipe"],
-    // On Windows, spawn needs `shell: true` to resolve `powershell.exe`
-    // via PATH when not given an absolute path.
-    shell: platform === "win32",
+    shell: false,
     windowsHide: true,
   });
 
@@ -76,7 +42,7 @@ export async function POST(request: Request) {
   const installSession = setPrereqSession(email, prereqId, child);
 
   broadcastToPrereqSession(email, prereqId, "status", {
-    message: `Running: ${command.human}`,
+    message: `Running: ${built.human}`,
     platform,
   });
 

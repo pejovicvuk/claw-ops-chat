@@ -21,9 +21,12 @@ type ServerPlatform = "win32" | "linux" | "darwin" | string;
 
 interface Status {
   uvxInstalled: boolean;
+  uvBinaryFound?: boolean;
   credentialsConfigured: boolean;
   connected: boolean;
   platform?: ServerPlatform;
+  powershell?: string | null;
+  downloader?: "curl" | "wget" | null;
 }
 
 function platformLabel(p: ServerPlatform | undefined): string {
@@ -332,7 +335,7 @@ export function GoogleCustomWizard() {
             <code className="text-[11px]">uvx</code> is installed
           </div>
         ) : (
-          <PrereqInstaller serverPlatform={status.platform} onInstalled={refreshStatus} />
+          <PrereqInstaller status={status} onInstalled={refreshStatus} />
         )}
       </div>
 
@@ -510,7 +513,7 @@ export function GoogleCustomWizard() {
 }
 
 interface PrereqInstallerProps {
-  serverPlatform: ServerPlatform | undefined;
+  status: Status;
   onInstalled: () => void | Promise<void>;
 }
 
@@ -518,7 +521,8 @@ interface PrereqInstallerProps {
  * Inline installer for `uv` / `uvx`. Streams output from
  * /api/prereqs/install-uv (SSE) and auto-refreshes status on success.
  */
-function PrereqInstaller({ serverPlatform, onInstalled }: PrereqInstallerProps) {
+function PrereqInstaller({ status, onInstalled }: PrereqInstallerProps) {
+  const serverPlatform = status.platform;
   const [installing, setInstalling] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -527,6 +531,22 @@ function PrereqInstaller({ serverPlatform, onInstalled }: PrereqInstallerProps) 
 
   const isWindows = serverPlatform === "win32";
   const isUnix = serverPlatform === "linux" || serverPlatform === "darwin";
+
+  // Reason the Install button can't run, if any.
+  let blockReason: string | null = null;
+  if (isWindows && status.powershell === null) {
+    blockReason =
+      "No PowerShell found on this server. Install PowerShell 7 (pwsh) or run the install command manually.";
+  } else if (isUnix && status.downloader === null) {
+    blockReason = "Neither curl nor wget is installed. Install one of them and try again.";
+  } else if (!isWindows && !isUnix) {
+    blockReason = `Unsupported platform: ${serverPlatform ?? "unknown"}.`;
+  }
+
+  const unixCmd =
+    status.downloader === "wget"
+      ? "wget -qO- https://astral.sh/uv/install.sh | sh"
+      : "curl -LsSf https://astral.sh/uv/install.sh | sh";
 
   const startInstall = useCallback(async () => {
     setInstalling(true);
@@ -606,10 +626,34 @@ function PrereqInstaller({ serverPlatform, onInstalled }: PrereqInstallerProps) 
         <code className="text-[11px]">uvx</code> is not installed
       </div>
       <p className="text-[11px] text-canvas-muted">
-        Detected server OS: <span className="text-canvas-fg">{platformLabel(serverPlatform)}</span>.
-        Click Install to run the official installer — it places{" "}
+        Detected server OS: <span className="text-canvas-fg">{platformLabel(serverPlatform)}</span>
+        {isWindows && status.powershell && (
+          <>
+            {" "}
+            · PowerShell: <code className="text-canvas-fg">{status.powershell}</code>
+          </>
+        )}
+        {isUnix && status.downloader && (
+          <>
+            {" "}
+            · Downloader: <code className="text-canvas-fg">{status.downloader}</code>
+          </>
+        )}
+        . Click Install to run the official installer — it places{" "}
         <code className="text-[11px]">uv</code> in your home directory (no sudo needed).
       </p>
+
+      {/* "uv installed but not yet on PATH" hint */}
+      {status.uvBinaryFound && !status.uvxInstalled && (
+        <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-2 text-[11px] text-canvas-fg">
+          <FiAlertTriangle size={11} className="mt-0.5 shrink-0 text-yellow-500" />
+          <span>
+            <code className="text-[11px]">uv</code> is installed but not on this server&apos;s PATH.
+            Click <span className="font-medium">Check again</span> — if that doesn&apos;t pick it
+            up, restart the app.
+          </span>
+        </div>
+      )}
 
       {/* OS-labeled command references */}
       <div
@@ -623,7 +667,7 @@ function PrereqInstaller({ serverPlatform, onInstalled }: PrereqInstallerProps) 
             Linux / macOS
           </p>
           <code className="block select-all break-all text-[11px] text-canvas-muted">
-            curl -LsSf https://astral.sh/uv/install.sh | sh
+            {unixCmd}
           </code>
         </div>
       </div>
@@ -638,10 +682,19 @@ function PrereqInstaller({ serverPlatform, onInstalled }: PrereqInstallerProps) 
             Windows
           </p>
           <code className="block select-all break-all text-[11px] text-canvas-muted">
-            powershell -c &quot;irm https://astral.sh/uv/install.ps1 | iex&quot;
+            powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;irm
+            https://astral.sh/uv/install.ps1 | iex&quot;
           </code>
         </div>
       </div>
+
+      {/* Blocker (PowerShell/curl missing) */}
+      {blockReason && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 p-2 text-[11px] text-red-500">
+          <FiAlertTriangle size={11} className="mt-0.5 shrink-0" />
+          <span>{blockReason}</span>
+        </div>
+      )}
 
       {/* Action row */}
       <div className="flex flex-wrap gap-2 pt-1">
@@ -657,8 +710,9 @@ function PrereqInstaller({ serverPlatform, onInstalled }: PrereqInstallerProps) 
           <button
             type="button"
             onClick={startInstall}
-            disabled={!serverPlatform}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+            disabled={!serverPlatform || !!blockReason}
+            title={blockReason ?? undefined}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
           >
             <FiDownload size={11} />
             Install uv on {platformLabel(serverPlatform)}

@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "child_process";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { loadCredentials, registerMcpServer } from "@/lib/google-custom-config";
+import { augmentPathWithLocalBin } from "@/lib/platform-detect";
 
 /**
  * Spawn `uvx workspace-mcp` with the saved OAuth credentials and stream
@@ -39,11 +40,11 @@ export async function POST(request: Request) {
           stdio: ["pipe", "pipe", "pipe"],
           shell: true,
           windowsHide: true,
-          env: {
+          env: augmentPathWithLocalBin({
             ...process.env,
             GOOGLE_OAUTH_CLIENT_ID: creds.clientId,
             GOOGLE_OAUTH_CLIENT_SECRET: creds.clientSecret,
-          },
+          }),
         });
       } catch (err) {
         write({

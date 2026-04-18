@@ -1,11 +1,43 @@
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "fs";
+import { join } from "path";
 
 const COOKIE_NAME = "claw-session";
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days in seconds
 
+/**
+ * Persist a generated SESSION_SECRET to .env.local in development so the
+ * next server restart doesn't invalidate every existing session cookie.
+ * In production we keep the old generate-and-warn behavior to avoid
+ * writing into container filesystems.
+ */
+function persistGeneratedSecret(value: string): void {
+  if (IS_PRODUCTION) return;
+  try {
+    const envPath = join(process.cwd(), ".env.local");
+    if (existsSync(envPath)) {
+      const existing = readFileSync(envPath, "utf-8");
+      if (/^SESSION_SECRET=/m.test(existing)) return;
+      const prefix = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+      appendFileSync(envPath, `${prefix}SESSION_SECRET=${value}\n`);
+    } else {
+      writeFileSync(envPath, `SESSION_SECRET=${value}\n`);
+    }
+    console.log("[auth] Generated SESSION_SECRET and persisted to .env.local");
+  } catch (err) {
+    console.warn("[auth] Failed to persist SESSION_SECRET:", err);
+  }
+}
+
 /** HMAC key for signing session cookies. Auto-generated if not provided. */
-const SESSION_SECRET = process.env.SESSION_SECRET || randomBytes(32).toString("hex");
+const SESSION_SECRET =
+  process.env.SESSION_SECRET ||
+  (() => {
+    const key = randomBytes(32).toString("hex");
+    persistGeneratedSecret(key);
+    return key;
+  })();
 
 /* ------------------------------------------------------------------ */
 /*  HMAC-signed session cookie                                         */

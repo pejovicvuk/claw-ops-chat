@@ -9,10 +9,27 @@ export class FileApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    public code?: string,
   ) {
     super(message);
     this.name = "FileApiError";
   }
+}
+
+/**
+ * Assert a `Response` is OK, otherwise throw a `FileApiError` built from the
+ * server's JSON body (`{ error, code }`). Used by every file API helper so
+ * that callers can distinguish 401/403/413 and the machine-readable `code`.
+ */
+async function assertOk(res: Response, fallback: string): Promise<void> {
+  if (res.ok) return;
+  let body: { error?: string; code?: string } = {};
+  try {
+    body = await res.json();
+  } catch {
+    /* non-JSON error body — keep going with the fallback message */
+  }
+  throw new FileApiError(res.status, body.error || `${fallback} (${res.status})`, body.code);
 }
 
 /* ── Sessions ── */
@@ -33,7 +50,6 @@ export async function fetchSessionMessages(sessionId: string): Promise<SessionMe
   const res = await authFetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}/messages`);
   if (!res.ok) throw new Error("Failed to fetch session messages");
   const data = await res.json();
-  // Backward compat: if the server returns a bare array, wrap it.
   if (Array.isArray(data)) return { messages: data, contextUsage: null, sessionCwd: null };
   return data as SessionMessagesResponse;
 }
@@ -42,17 +58,14 @@ export async function fetchSessionMessages(sessionId: string): Promise<SessionMe
 
 export async function listFiles(path: string): Promise<FileEntry[]> {
   const res = await authFetch(`${BASE}/api/files/list?path=${encodeURIComponent(path)}`);
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new FileApiError(res.status, body.error || `Failed to list files (${res.status})`);
-  }
+  await assertOk(res, "Failed to list files");
   return res.json();
 }
 
 export async function readFile(path: string): Promise<string> {
   const res = await authFetch(`${BASE}/api/files/read?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error("Failed to read file");
-  const data = await res.json();
+  await assertOk(res, "Failed to read file");
+  const data = (await res.json()) as { content: string };
   return data.content;
 }
 
@@ -62,17 +75,41 @@ export async function writeFile(path: string, content: string): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, content }),
   });
-  if (!res.ok) throw new Error("Failed to write file");
+  await assertOk(res, "Failed to write file");
 }
 
-export async function uploadFile(dirPath: string, file: File): Promise<void> {
+export interface UploadResult {
+  path: string;
+  /** True when an existing file at the destination was replaced. */
+  overwritten?: boolean;
+}
+
+export interface UploadOptions {
+  onProgress?: (fraction: number) => void;
+  signal?: AbortSignal;
+}
+
+export async function uploadFile(
+  dirPath: string,
+  file: File,
+  options?: UploadOptions,
+): Promise<UploadResult> {
+  // Prefer XHR so progress events are available; fall back to fetch
+  // (which the browser already sends credentials for via authFetch's
+  // credentials: "same-origin") when XHR is unavailable (old SSR, JSDOM).
+  if (typeof XMLHttpRequest !== "undefined") {
+    const { uploadFileXhr } = await import("@/lib/upload-xhr");
+    return uploadFileXhr(dirPath, file, options);
+  }
   const formData = new FormData();
   formData.append("file", file);
   const res = await authFetch(`${BASE}/api/files/upload?path=${encodeURIComponent(dirPath)}`, {
     method: "POST",
     body: formData,
+    signal: options?.signal,
   });
-  if (!res.ok) throw new Error("Failed to upload file");
+  await assertOk(res, "Failed to upload file");
+  return (await res.json()) as UploadResult;
 }
 
 /**
@@ -81,12 +118,11 @@ export async function uploadFile(dirPath: string, file: File): Promise<void> {
  */
 export async function downloadFile(path: string): Promise<void> {
   const res = await authFetch(`${BASE}/api/files/download?path=${encodeURIComponent(path)}`);
-  if (!res.ok) throw new Error("Failed to download file");
+  await assertOk(res, "Failed to download file");
 
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
 
-  // Extract filename from Content-Disposition header or fall back to path basename
   let filename = path.split("/").pop() || "download";
   const disposition = res.headers.get("Content-Disposition");
   if (disposition) {
@@ -103,9 +139,10 @@ export async function downloadFile(path: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-export async function deleteFile(path: string): Promise<void> {
-  const res = await authFetch(`${BASE}/api/files/delete?path=${encodeURIComponent(path)}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new Error("Failed to delete file");
+export async function deleteFile(path: string, recursive = false): Promise<void> {
+  const query = recursive
+    ? `path=${encodeURIComponent(path)}&recursive=true`
+    : `path=${encodeURIComponent(path)}`;
+  const res = await authFetch(`${BASE}/api/files/delete?${query}`, { method: "DELETE" });
+  await assertOk(res, "Failed to delete");
 }

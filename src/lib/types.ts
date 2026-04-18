@@ -58,4 +58,6 @@ export interface FileEntry {
   path: string;
   directory: boolean;
   size: number;
+  /** Last modified time (ms since epoch). 0 if unavailable. */
+  mtime?: number;
 }

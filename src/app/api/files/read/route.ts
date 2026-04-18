@@ -18,15 +18,18 @@ export async function GET(request: Request) {
     filePath = await safePath(rawPath);
   } catch (err) {
     if (err instanceof SafePathError) {
-      return Response.json({ error: "Access denied" }, { status: 403 });
+      return Response.json({ error: "Access denied", code: "safe_path" }, { status: 403 });
     }
-    return Response.json({ error: "Invalid path" }, { status: 400 });
+    return Response.json({ error: "Invalid path", code: "invalid_path" }, { status: 400 });
   }
 
   try {
     const s = await stat(filePath);
     if (s.size > MAX_SIZE) {
-      return Response.json({ error: "File too large (max 1MB)" }, { status: 413 });
+      return Response.json(
+        { error: "File too large (max 1MB)", code: "too_large" },
+        { status: 413 },
+      );
     }
 
     const content = await readFile(filePath, "utf-8");

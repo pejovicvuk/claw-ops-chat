@@ -14,9 +14,9 @@ export async function GET(request: Request) {
     dirPath = await safePath(rawPath);
   } catch (err) {
     if (err instanceof SafePathError) {
-      return Response.json({ error: "Access denied" }, { status: 403 });
+      return Response.json({ error: "Access denied", code: "safe_path" }, { status: 403 });
     }
-    return Response.json({ error: "Invalid path" }, { status: 400 });
+    return Response.json({ error: "Invalid path", code: "invalid_path" }, { status: 400 });
   }
 
   try {
@@ -28,15 +28,15 @@ export async function GET(request: Request) {
           const fullPath = join(dirPath, entry.name);
           const isDir = entry.isDirectory();
           let size = 0;
+          let mtime = 0;
           try {
-            if (!isDir) {
-              const s = await stat(fullPath);
-              size = s.size;
-            }
+            const s = await stat(fullPath);
+            if (!isDir) size = s.size;
+            mtime = s.mtimeMs;
           } catch {
             /* skip */
           }
-          return { name: entry.name, path: fullPath, directory: isDir, size };
+          return { name: entry.name, path: fullPath, directory: isDir, size, mtime };
         }),
     );
 

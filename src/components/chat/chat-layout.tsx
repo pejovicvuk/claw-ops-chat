@@ -21,6 +21,7 @@ import { SessionList } from "./session-list";
 import { MobileFileSheet } from "./mobile-file-sheet";
 import { FileBrowser, type FileBrowserHandle } from "./file-browser";
 import { FileEditorPanel } from "./file-editor-panel";
+import { ErrorBoundary } from "@/components/error-boundary";
 
 interface ChatLayoutProps {
   sessions: ChatSession[];
@@ -88,30 +89,19 @@ export function ChatLayout({
       .catch(() => {});
   }, []);
 
-  useEffect(() => {
-    const observer = new MutationObserver((mutations) => {
-      for (const mutation of mutations) {
-        for (const node of mutation.addedNodes) {
-          if (
-            node instanceof HTMLElement &&
-            node.style.left &&
-            node.style.top &&
-            getComputedStyle(node).position === "fixed"
-          ) {
-            requestAnimationFrame(() => {
-              const rect = node.getBoundingClientRect();
-              const maxLeft = window.innerWidth - rect.width - 8;
-              if (rect.left > maxLeft) node.style.left = `${Math.max(8, maxLeft)}px`;
-              const maxTop = window.innerHeight - rect.height - 8;
-              if (rect.top > maxTop) node.style.top = `${Math.max(8, maxTop)}px`;
-            });
-          }
-        }
-      }
-    });
-    observer.observe(document.body, { childList: true });
-    return () => observer.disconnect();
-  }, []);
+  // Viewport clamping for editor panels is now handled inside the panel
+  // itself via `clampRectToViewport` — no global MutationObserver needed.
+
+  const handleRevealInBrowser = useCallback(
+    (path: string) => {
+      setFilesPanelOpen(true);
+      // Ref updates after the panel mounts, so schedule the navigate.
+      requestAnimationFrame(() => {
+        fileBrowserRef.current?.navigateTo(path);
+      });
+    },
+    [setFilesPanelOpen],
+  );
 
   const handleFileOpen = useCallback((file: FileEntry) => {
     const key = `file:${file.path}`;
@@ -141,14 +131,17 @@ export function ChatLayout({
     [currentBrowserPath],
   );
 
-  const fileEditors = openFiles.map((entry) => (
-    <FileEditorPanel
-      key={entry.key}
-      file={entry.file}
-      zIndex={Z_INDEX.MODAL + focusOrder.indexOf(entry.key)}
-      onFocus={() => handleFileFocus(entry.key)}
-      onClose={() => handleFileClose(entry.key)}
-    />
+  const fileEditors = openFiles.map((entry, idx) => (
+    <ErrorBoundary key={entry.key} label="the file editor">
+      <FileEditorPanel
+        file={entry.file}
+        stackIndex={idx}
+        zIndex={Z_INDEX.MODAL + focusOrder.indexOf(entry.key)}
+        onFocus={() => handleFileFocus(entry.key)}
+        onClose={() => handleFileClose(entry.key)}
+        onRevealInBrowser={handleRevealInBrowser}
+      />
+    </ErrorBoundary>
   ));
 
   /* ── Swipe-right to open sidebar (mobile) ── */
@@ -438,23 +431,25 @@ export function ChatLayout({
               )}
 
               <div className="file-panel-fill min-h-0 flex-1">
-                <FileBrowser
-                  ref={fileBrowserRef}
-                  initialPath={currentBrowserPath}
-                  onPathChange={setCurrentBrowserPath}
-                  onFileClick={handleCopyPath}
-                  onFileOpen={handleFileOpen}
-                  hideRunOption
-                  onCopyPath={(path) => {
-                    navigator.clipboard
-                      .writeText(`@${path}`)
-                      .then(() => {
-                        setCopiedPath(path);
-                        setTimeout(() => setCopiedPath(null), 1500);
-                      })
-                      .catch(() => {});
-                  }}
-                />
+                <ErrorBoundary label="the file browser">
+                  <FileBrowser
+                    ref={fileBrowserRef}
+                    initialPath={currentBrowserPath}
+                    onPathChange={setCurrentBrowserPath}
+                    onFileClick={handleCopyPath}
+                    onFileOpen={handleFileOpen}
+                    hideRunOption
+                    onCopyPath={(path) => {
+                      navigator.clipboard
+                        .writeText(`@${path}`)
+                        .then(() => {
+                          setCopiedPath(path);
+                          setTimeout(() => setCopiedPath(null), 1500);
+                        })
+                        .catch(() => {});
+                    }}
+                  />
+                </ErrorBoundary>
               </div>
             </>
           ) : (

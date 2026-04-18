@@ -29,9 +29,9 @@ export async function GET(request: Request) {
     filePath = await safePath(rawPath);
   } catch (err) {
     if (err instanceof SafePathError) {
-      return Response.json({ error: "Access denied" }, { status: 403 });
+      return Response.json({ error: "Access denied", code: "safe_path" }, { status: 403 });
     }
-    return Response.json({ error: "Invalid path" }, { status: 400 });
+    return Response.json({ error: "Invalid path", code: "invalid_path" }, { status: 400 });
   }
 
   try {

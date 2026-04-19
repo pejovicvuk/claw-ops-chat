@@ -11,9 +11,20 @@ interface MobileFileSheetProps {
   onClose: () => void;
   onCopyPath?: (path: string) => void;
   onFileOpen?: (file: FileEntry) => void;
+  /** Directory to start in when the sheet (re)opens. Defaults to "~". */
+  initialPath?: string;
+  /** Notify parent when the user navigates so URL stays in sync. */
+  onPathChange?: (path: string) => void;
 }
 
-export function MobileFileSheet({ open, onClose, onCopyPath, onFileOpen }: MobileFileSheetProps) {
+export function MobileFileSheet({
+  open,
+  onClose,
+  onCopyPath,
+  onFileOpen,
+  initialPath,
+  onPathChange,
+}: MobileFileSheetProps) {
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -50,7 +61,12 @@ export function MobileFileSheet({ open, onClose, onCopyPath, onFileOpen }: Mobil
           </button>
         </div>
         <div className="file-panel-fill min-h-0 flex-1">
-          <FileBrowser onFileClick={onCopyPath} onFileOpen={onFileOpen} />
+          <FileBrowser
+            initialPath={initialPath}
+            onPathChange={onPathChange}
+            onFileClick={onCopyPath}
+            onFileOpen={onFileOpen}
+          />
         </div>
       </div>
     </>

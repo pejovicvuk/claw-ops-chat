@@ -8,11 +8,45 @@ exports.unauthorized = unauthorized;
 exports.makeSessionCookie = makeSessionCookie;
 exports.makeClearSessionCookie = makeClearSessionCookie;
 const crypto_1 = require("crypto");
+const fs_1 = require("fs");
+const path_1 = require("path");
 const COOKIE_NAME = "claw-session";
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 const SESSION_MAX_AGE = 60 * 60 * 24 * 7; // 7 days in seconds
+/**
+ * Persist a generated SESSION_SECRET to .env.local in development so the
+ * next server restart doesn't invalidate every existing session cookie.
+ * In production we keep the old generate-and-warn behavior to avoid
+ * writing into container filesystems.
+ */
+function persistGeneratedSecret(value) {
+    if (IS_PRODUCTION)
+        return;
+    try {
+        const envPath = (0, path_1.join)(process.cwd(), ".env.local");
+        if ((0, fs_1.existsSync)(envPath)) {
+            const existing = (0, fs_1.readFileSync)(envPath, "utf-8");
+            if (/^SESSION_SECRET=/m.test(existing))
+                return;
+            const prefix = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
+            (0, fs_1.appendFileSync)(envPath, `${prefix}SESSION_SECRET=${value}\n`);
+        }
+        else {
+            (0, fs_1.writeFileSync)(envPath, `SESSION_SECRET=${value}\n`);
+        }
+        console.log("[auth] Generated SESSION_SECRET and persisted to .env.local");
+    }
+    catch (err) {
+        console.warn("[auth] Failed to persist SESSION_SECRET:", err);
+    }
+}
 /** HMAC key for signing session cookies. Auto-generated if not provided. */
-const SESSION_SECRET = process.env.SESSION_SECRET || (0, crypto_1.randomBytes)(32).toString("hex");
+const SESSION_SECRET = process.env.SESSION_SECRET ||
+    (() => {
+        const key = (0, crypto_1.randomBytes)(32).toString("hex");
+        persistGeneratedSecret(key);
+        return key;
+    })();
 /**
  * Sign a session payload: base64(JSON) + "." + hmac_hex
  */

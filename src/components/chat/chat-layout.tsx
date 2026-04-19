@@ -94,13 +94,17 @@ export function ChatLayout({
 
   const handleRevealInBrowser = useCallback(
     (path: string) => {
+      // Sync URL first — the mobile sheet remounts its FileBrowser every
+      // time it opens with `initialPath` bound to `currentBrowserPath`,
+      // so this makes sure mobile starts at the right folder.
+      setCurrentBrowserPath(path);
       setFilesPanelOpen(true);
-      // Ref updates after the panel mounts, so schedule the navigate.
+      // Desktop panel stays mounted; poke its ref to navigate in place.
       requestAnimationFrame(() => {
         fileBrowserRef.current?.navigateTo(path);
       });
     },
-    [setFilesPanelOpen],
+    [setCurrentBrowserPath, setFilesPanelOpen],
   );
 
   const handleFileOpen = useCallback((file: FileEntry) => {
@@ -312,6 +316,8 @@ export function ChatLayout({
         <MobileFileSheet
           open={filesPanelOpen}
           onClose={() => setFilesPanelOpen(false)}
+          initialPath={currentBrowserPath}
+          onPathChange={setCurrentBrowserPath}
           onCopyPath={handleCopyPath}
           onFileOpen={handleFileOpen}
         />

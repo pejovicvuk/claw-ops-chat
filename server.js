@@ -18,6 +18,23 @@ const sdk_loader_js_1 = __importDefault(require("./sdk-loader.js"));
 const { query } = sdk_loader_js_1.default;
 const auth_server_1 = require("./src/lib/auth-server");
 const claude_status_1 = require("./src/lib/claude-status");
+const terminal_shell_1 = require("./src/lib/terminal-shell");
+let ptyModule = null;
+let ptyLoadError = null;
+function loadPty() {
+    if (ptyModule)
+        return ptyModule;
+    if (ptyLoadError)
+        throw ptyLoadError;
+    try {
+        ptyModule = require("node-pty");
+        return ptyModule;
+    }
+    catch (err) {
+        ptyLoadError = err instanceof Error ? err : new Error("Failed to load node-pty");
+        throw ptyLoadError;
+    }
+}
 // Bundled cli.js path with forward slashes — Windows backslashes break Node spawn.
 const SDK_CLI_PATH = (0, path_1.join)((0, path_1.dirname)(require.resolve("@anthropic-ai/claude-agent-sdk")), "cli.js")
     .split(path_1.sep)
@@ -634,6 +651,93 @@ class SessionManager {
     }
 }
 /* ------------------------------------------------------------------ */
+/*  Terminal (PTY over WebSocket)                                      */
+/* ------------------------------------------------------------------ */
+/**
+ * Wire up a fresh interactive shell over a WebSocket.
+ * The client streams raw stdin bytes as text frames; JSON control frames
+ * ({type:"resize",cols,rows} / {type:"close"}) are handled specially.
+ */
+function handleTerminalConnection(ws, email) {
+    let pty = null;
+    try {
+        const { shell, args } = (0, terminal_shell_1.resolveShell)();
+        const lib = loadPty();
+        pty = lib.spawn(shell, args, {
+            name: "xterm-256color",
+            cols: 80,
+            rows: 24,
+            cwd: process.env.CLAUDE_CWD || (0, os_1.homedir)(),
+            env: process.env,
+        });
+        console.log(`[terminal] opened (${email}) using ${shell}`);
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : "Failed to start terminal";
+        try {
+            ws.send(`\r\n\x1b[31m[terminal] ${msg}\x1b[0m\r\n`);
+        }
+        catch {
+            /* socket already dead */
+        }
+        try {
+            ws.close();
+        }
+        catch {
+            /* ignore */
+        }
+        return;
+    }
+    pty.onData((data) => {
+        if (ws.readyState === ws_1.WebSocket.OPEN) {
+            try {
+                ws.send(data);
+            }
+            catch {
+                /* closing */
+            }
+        }
+    });
+    pty.onExit(() => {
+        try {
+            ws.close();
+        }
+        catch {
+            /* ignore */
+        }
+    });
+    ws.on("message", (raw) => {
+        const str = raw.toString();
+        // Try to parse as a JSON control message first; fall back to raw stdin.
+        if (str.length > 0 && str[0] === "{") {
+            try {
+                const msg = JSON.parse(str);
+                if (msg.type === "resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
+                    pty?.resize(Math.max(1, msg.cols | 0), Math.max(1, msg.rows | 0));
+                    return;
+                }
+                if (msg.type === "close") {
+                    pty?.kill();
+                    return;
+                }
+            }
+            catch {
+                /* not JSON — treat as stdin */
+            }
+        }
+        pty?.write(str);
+    });
+    ws.on("close", () => {
+        console.log(`[terminal] closed (${email})`);
+        try {
+            pty?.kill();
+        }
+        catch {
+            /* already dead */
+        }
+    });
+}
+/* ------------------------------------------------------------------ */
 /*  Origin validation                                                  */
 /* ------------------------------------------------------------------ */
 function isOriginAllowed(origin) {
@@ -672,9 +776,17 @@ app.prepare().then(() => {
     const nextUpgradeHandler = app.getUpgradeHandler();
     server.on("upgrade", async (req, socket, head) => {
         const { pathname, query: qs } = (0, url_1.parse)(req.url || "/", true);
-        if (pathname !== "/ws/chat" && pathname !== "/chat/ws/chat") {
+        const isChatWs = pathname === "/ws/chat" || pathname === "/chat/ws/chat";
+        const isTerminalWs = pathname === "/ws/terminal" || pathname === "/chat/ws/terminal";
+        if (!isChatWs && !isTerminalWs) {
             // Pass to Next.js for HMR and other internal WebSockets
             nextUpgradeHandler(req, socket, head);
+            return;
+        }
+        // Terminal kill-switch for locked-down production deployments.
+        if (isTerminalWs && process.env.DISABLE_TERMINAL === "1") {
+            socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+            socket.destroy();
             return;
         }
         // Origin validation — prevent cross-site WebSocket hijacking
@@ -701,6 +813,13 @@ app.prepare().then(() => {
                 socket.destroy();
                 return;
             }
+        }
+        if (isTerminalWs) {
+            const email = sessionPayload?.email ?? "anonymous";
+            wss.handleUpgrade(req, socket, head, (ws) => {
+                handleTerminalConnection(ws, email);
+            });
+            return;
         }
         const sessionId = qs.session || "default";
         const cwdParam = qs.cwd || undefined;

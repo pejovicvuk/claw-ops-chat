@@ -13,6 +13,24 @@ import sdk from "./sdk-loader.js";
 const { query } = sdk as typeof import("@anthropic-ai/claude-agent-sdk");
 import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
+import { resolveShell } from "./src/lib/terminal-shell";
+
+// node-pty has a native binding — require it lazily so the server can still
+// start if the binding is missing, and only blow up when the terminal is used.
+type NodePty = typeof import("node-pty");
+let ptyModule: NodePty | null = null;
+let ptyLoadError: Error | null = null;
+function loadPty(): NodePty {
+  if (ptyModule) return ptyModule;
+  if (ptyLoadError) throw ptyLoadError;
+  try {
+    ptyModule = require("node-pty") as NodePty;
+    return ptyModule;
+  } catch (err) {
+    ptyLoadError = err instanceof Error ? err : new Error("Failed to load node-pty");
+    throw ptyLoadError;
+  }
+}
 
 // Bundled cli.js path with forward slashes — Windows backslashes break Node spawn.
 const SDK_CLI_PATH = join(dirname(require.resolve("@anthropic-ai/claude-agent-sdk")), "cli.js")
@@ -738,6 +756,92 @@ class SessionManager {
 }
 
 /* ------------------------------------------------------------------ */
+/*  Terminal (PTY over WebSocket)                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Wire up a fresh interactive shell over a WebSocket.
+ * The client streams raw stdin bytes as text frames; JSON control frames
+ * ({type:"resize",cols,rows} / {type:"close"}) are handled specially.
+ */
+function handleTerminalConnection(ws: WebSocket, email: string): void {
+  let pty: import("node-pty").IPty | null = null;
+  try {
+    const { shell, args } = resolveShell();
+    const lib = loadPty();
+    pty = lib.spawn(shell, args, {
+      name: "xterm-256color",
+      cols: 80,
+      rows: 24,
+      cwd: process.env.CLAUDE_CWD || homedir(),
+      env: process.env as Record<string, string>,
+    });
+    console.log(`[terminal] opened (${email}) using ${shell}`);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to start terminal";
+    try {
+      ws.send(`\r\n\x1b[31m[terminal] ${msg}\x1b[0m\r\n`);
+    } catch {
+      /* socket already dead */
+    }
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+
+  pty.onData((data) => {
+    if (ws.readyState === WebSocket.OPEN) {
+      try {
+        ws.send(data);
+      } catch {
+        /* closing */
+      }
+    }
+  });
+
+  pty.onExit(() => {
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+  });
+
+  ws.on("message", (raw) => {
+    const str = raw.toString();
+    // Try to parse as a JSON control message first; fall back to raw stdin.
+    if (str.length > 0 && str[0] === "{") {
+      try {
+        const msg = JSON.parse(str) as { type?: string; cols?: number; rows?: number };
+        if (msg.type === "resize" && typeof msg.cols === "number" && typeof msg.rows === "number") {
+          pty?.resize(Math.max(1, msg.cols | 0), Math.max(1, msg.rows | 0));
+          return;
+        }
+        if (msg.type === "close") {
+          pty?.kill();
+          return;
+        }
+      } catch {
+        /* not JSON — treat as stdin */
+      }
+    }
+    pty?.write(str);
+  });
+
+  ws.on("close", () => {
+    console.log(`[terminal] closed (${email})`);
+    try {
+      pty?.kill();
+    } catch {
+      /* already dead */
+    }
+  });
+}
+
+/* ------------------------------------------------------------------ */
 /*  Origin validation                                                  */
 /* ------------------------------------------------------------------ */
 
@@ -786,9 +890,19 @@ app.prepare().then(() => {
   server.on("upgrade", async (req: IncomingMessage, socket, head) => {
     const { pathname, query: qs } = parse(req.url || "/", true);
 
-    if (pathname !== "/ws/chat" && pathname !== "/chat/ws/chat") {
+    const isChatWs = pathname === "/ws/chat" || pathname === "/chat/ws/chat";
+    const isTerminalWs = pathname === "/ws/terminal" || pathname === "/chat/ws/terminal";
+
+    if (!isChatWs && !isTerminalWs) {
       // Pass to Next.js for HMR and other internal WebSockets
       nextUpgradeHandler(req, socket, head);
+      return;
+    }
+
+    // Terminal kill-switch for locked-down production deployments.
+    if (isTerminalWs && process.env.DISABLE_TERMINAL === "1") {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
       return;
     }
 
@@ -817,6 +931,14 @@ app.prepare().then(() => {
         socket.destroy();
         return;
       }
+    }
+
+    if (isTerminalWs) {
+      const email = sessionPayload?.email ?? "anonymous";
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        handleTerminalConnection(ws, email);
+      });
+      return;
     }
 
     const sessionId = (qs.session as string) || "default";

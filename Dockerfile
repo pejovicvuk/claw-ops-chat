@@ -1,6 +1,10 @@
 # ── Stage 1: Install dependencies ──
 FROM node:24-alpine AS deps
 WORKDIR /app
+# node-pty has a native addon. Alpine's musl prebuilts aren't shipped,
+# so we install a build toolchain to compile it at install time.
+# These packages are only present in this stage — not copied to the runner.
+RUN apk add --no-cache python3 make g++ linux-headers
 COPY package.json ./
 RUN npm install
 

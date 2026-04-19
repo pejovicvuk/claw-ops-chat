@@ -11,6 +11,7 @@ import { SettingsConnectionsPage } from "./pages/settings-connections-page";
 import { SettingsClaudePage } from "./pages/settings-claude-page";
 import { SettingsGooglePage } from "./pages/settings-google-page";
 import { SettingsMicrosoftPage } from "./pages/settings-microsoft-page";
+import { SettingsTerminalPage } from "./pages/settings-terminal-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -19,13 +20,16 @@ type PageKey =
   | "connections"
   | "connections/claude"
   | "connections/google"
-  | "connections/microsoft";
+  | "connections/microsoft"
+  | "terminal";
 
 interface PageInfo {
   /** Display title in the overlay header. */
   title: string;
   /** Where the back arrow goes. `null` = no back arrow (main page). */
   parent: PageKey | null;
+  /** If true, use a wider/taller modal (useful for the terminal). */
+  wide?: boolean;
 }
 
 const PAGES: Record<PageKey, PageInfo> = {
@@ -34,6 +38,7 @@ const PAGES: Record<PageKey, PageInfo> = {
   "connections/claude": { title: "Claude Code", parent: "connections" },
   "connections/google": { title: "Google Workspace", parent: "connections" },
   "connections/microsoft": { title: "Microsoft 365", parent: "connections" },
+  terminal: { title: "Terminal", parent: "main", wide: true },
 };
 
 /**
@@ -95,6 +100,10 @@ export function SettingsOverlay() {
 
   const info = PAGES[page];
   const hasBack = info.parent !== null;
+  const wide = info.wide === true;
+  const modalClasses = wide
+    ? "animate-modal-in flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(800px,90vh)] sm:w-[min(960px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl"
+    : "animate-modal-in flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(640px,85vh)] sm:w-[min(760px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl";
 
   return (
     <div
@@ -105,10 +114,7 @@ export function SettingsOverlay() {
       aria-modal="true"
       aria-labelledby="settings-title"
     >
-      <div
-        className="animate-modal-in flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(640px,85vh)] sm:w-[min(760px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className={modalClasses} onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-5 py-3.5">
           <div className="flex min-w-0 items-center gap-2">
@@ -146,6 +152,7 @@ export function SettingsOverlay() {
           {page === "connections/claude" && <SettingsClaudePage />}
           {page === "connections/google" && <SettingsGooglePage />}
           {page === "connections/microsoft" && <SettingsMicrosoftPage />}
+          {page === "terminal" && <SettingsTerminalPage />}
         </div>
 
         {/* Footer — only on main page */}

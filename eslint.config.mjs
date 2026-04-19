@@ -17,6 +17,7 @@ const eslintConfig = defineConfig([
     "server.js",
     "src/lib/auth-server.js",
     "src/lib/claude-status.js",
+    "src/lib/terminal-shell.js",
     "sdk-loader.js",
   ]),
   // server.ts uses require() for the SDK to work around tsx/esbuild import.meta.url issues.

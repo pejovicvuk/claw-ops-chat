@@ -90,7 +90,9 @@
       "Bash(node -e \"const fs=require\\('fs'\\); const d=fs.readFileSync\\('e:/Reputeo/claw-ops-chat/node_modules/@anthropic-ai/claude-agent-sdk/sdk.d.ts','utf-8'\\); const idx=d.indexOf\\('mcp_servers'\\); if\\(idx>0\\){console.log\\(d.substring\\(Math.max\\(0,idx-500\\),idx+1500\\)\\)}\")",
       "Bash(C:/Users/Vule/.local/bin/claude.exe mcp *)",
       "WebFetch(domain:github.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(node -e \"const os=require\\('os'\\); console.log\\('homedir\\(\\):', os.homedir\\(\\)\\)\")",
+      "Bash(node -e \"const pty = require\\('node-pty'\\); console.log\\('node-pty loaded, spawn fn:', typeof pty.spawn\\);\")"
     ],
     "deny": [
       "Bash(rm -rf *)",

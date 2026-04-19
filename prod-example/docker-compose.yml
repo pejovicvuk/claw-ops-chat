@@ -1,0 +1,49 @@
+services:
+  claw-chat:
+    image: teslicvukasin/claw-ops-chat:latest
+    container_name: claw-chat
+    env_file: .env
+    volumes:
+      # Host filesystem access for Claude Code tools — matches CLAUDE_CWD=/root.
+      # The container needs the Claude creds + session history that live under /root/.claude.
+      - /root:/root
+      # Optional: Bitbucket MCP skill (clone the repo on the server if you want this).
+      # - ./skills/bitbucket:/opt/skills/bitbucket:ro
+    expose:
+      - "${PORT:-3100}"
+    init: true
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:${PORT:-3100}/chat/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks:
+      - clawnet
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: claw-nginx
+    depends_on:
+      claw-chat:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      # Uncomment once TLS certs are mounted (see nginx/default.conf).
+      # - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      # Place fullchain.pem + privkey.pem here to enable HTTPS.
+      # - ./nginx/certs:/etc/nginx/certs:ro
+    restart: unless-stopped
+    networks:
+      - clawnet
+
+networks:
+  clawnet:
+    driver: bridge

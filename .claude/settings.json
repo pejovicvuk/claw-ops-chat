@@ -92,7 +92,10 @@
       "WebFetch(domain:github.com)",
       "WebSearch",
       "Bash(node -e \"const os=require\\('os'\\); console.log\\('homedir\\(\\):', os.homedir\\(\\)\\)\")",
-      "Bash(node -e \"const pty = require\\('node-pty'\\); console.log\\('node-pty loaded, spawn fn:', typeof pty.spawn\\);\")"
+      "Bash(node -e \"const pty = require\\('node-pty'\\); console.log\\('node-pty loaded, spawn fn:', typeof pty.spawn\\);\")",
+      "Bash(cp e:/Reputeo/claw-ops-chat/prod-example/env.example e:/Reputeo/claw-ops-chat/prod-example/dot-env.test)",
+      "Bash(sed 's|env_file: .env|env_file: dot-env.test|' docker-compose.yml)",
+      "Bash(rm -f e:/Reputeo/claw-ops-chat/prod-example/dot-env.test /tmp/claw-compose.yml)"
     ],
     "deny": [
       "Bash(rm -rf *)",
@@ -108,7 +111,8 @@
       "Bash(git push origin master)"
     ],
     "additionalDirectories": [
-      "e:\\Reputeo\\claw-ops-chat"
+      "e:\\Reputeo\\claw-ops-chat",
+      "\\tmp"
     ]
   },
   "hooks": {

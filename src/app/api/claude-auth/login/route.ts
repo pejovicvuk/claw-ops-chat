@@ -15,6 +15,7 @@ import {
 export async function POST(request: Request) {
   const session = extractSession(request);
   if (!session) return unauthorized();
+  const { email } = session;
 
   const body = (await request.json().catch(() => ({}))) as { method?: string };
   const method = body.method === "console" || body.method === "token" ? body.method : "claudeai";
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
     windowsHide: true,
   });
 
-  const loginSession = setLoginSession(session.email, child, method);
+  const loginSession = setLoginSession(email, child, method);
 
   // URL regex — matches any https:// link printed by the CLI.
   const URL_RE = /(https?:\/\/[^\s"'`]+)/;
@@ -48,17 +49,17 @@ export async function POST(request: Request) {
       const match = trimmed.match(URL_RE);
       if (match) {
         urlEmitted = true;
-        broadcastToSession(session.email, "url", { url: match[1] });
+        broadcastToSession(email, "url", { url: match[1] });
       }
     }
 
     // Detect prompts asking for the code (varies by CLI version).
     if (!promptEmitted && /code|paste/i.test(trimmed) && /\?|:/.test(trimmed)) {
       promptEmitted = true;
-      broadcastToSession(session.email, "prompt", { message: trimmed });
+      broadcastToSession(email, "prompt", { message: trimmed });
     }
 
-    broadcastToSession(session.email, "log", { line: trimmed });
+    broadcastToSession(email, "log", { line: trimmed });
   }
 
   child.stdout.on("data", (chunk: Buffer) => {
@@ -69,14 +70,14 @@ export async function POST(request: Request) {
   });
 
   child.on("close", (code) => {
-    broadcastToSession(session.email, "done", {
+    broadcastToSession(email, "done", {
       success: code === 0,
       ...(code !== 0 ? { error: `Process exited with code ${code}` } : {}),
     });
   });
 
   child.on("error", (err) => {
-    broadcastToSession(session.email, "done", {
+    broadcastToSession(email, "done", {
       success: false,
       error: err.message,
     });
@@ -102,13 +103,13 @@ export async function POST(request: Request) {
 
       // Cleanup when the stream closes (client disconnect).
       const onAbort = () => {
-        const current: LoginSession | undefined = getLoginSession(session.email);
+        const current: LoginSession | undefined = getLoginSession(email);
         current?.subscribers.delete(write);
       };
       request.signal.addEventListener("abort", onAbort);
     },
     cancel() {
-      const current = getLoginSession(session.email);
+      const current = getLoginSession(email);
       if (current) {
         for (const sub of current.subscribers) {
           if (sub) current.subscribers.delete(sub);

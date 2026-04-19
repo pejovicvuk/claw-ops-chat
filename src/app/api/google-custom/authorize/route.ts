@@ -13,10 +13,11 @@ import { augmentPathWithLocalBin } from "@/lib/platform-detect";
 export async function POST(request: Request) {
   if (!extractSession(request)) return unauthorized();
 
-  const creds = await loadCredentials();
-  if (!creds) {
+  const loadedCreds = await loadCredentials();
+  if (!loadedCreds) {
     return Response.json({ error: "No credentials configured. Save them first." }, { status: 400 });
   }
+  const creds = loadedCreds;
 
   const encoder = new TextEncoder();
 

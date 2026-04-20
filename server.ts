@@ -16,6 +16,11 @@ import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
 import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
+import {
+  setSessionStatus,
+  clearSessionStatus,
+  type SessionStatus,
+} from "./src/lib/session-status-store";
 
 // node-pty has a native binding — require it lazily so the server can still
 // start if the binding is missing, and only blow up when the terminal is used.
@@ -137,6 +142,12 @@ interface ChatSession {
   abortController: AbortController | null;
   /** Original cwd for resume (the cwd where this session was first created). */
   sessionCwd: string | null;
+  /**
+   * Current high-level status of this session. Mirrored into the shared
+   * session-status-store so the REST /api/sessions/status endpoint can
+   * surface it to the sidebar without going through a WebSocket.
+   */
+  status: SessionStatus;
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,10 +198,24 @@ class SessionManager {
         lastActivity: Date.now(),
         abortController: null,
         sessionCwd: null,
+        status: "idle",
       };
       this.sessions.set(sessionId, session);
+      setSessionStatus(sessionId, "idle");
     }
     return session;
+  }
+
+  /**
+   * Update session.status, mirror into the shared status store (for the
+   * REST sidebar endpoint), and broadcast to any connected clients.
+   * All other `broadcast({ type: "status", ... })` call sites are now
+   * replaced with this helper so the two sources of truth can't drift.
+   */
+  private setStatus(session: ChatSession, status: SessionStatus) {
+    session.status = status;
+    setSessionStatus(session.id, status);
+    this.broadcast(session, { type: "status", status });
   }
 
   connect(ws: WebSocket, sessionId: string, sessionCwd?: string) {
@@ -221,9 +246,12 @@ class SessionManager {
       }
     }
 
-    if (session.isProcessing) {
-      this.send(ws, { type: "status", status: "thinking" });
-    }
+    // Always send the current status snapshot on reconnect. Without this,
+    // a browser that reconnected after a status change (e.g. after a
+    // tool finished running) would sit on whatever state it had before
+    // the disconnect — often showing "thinking…" forever, or worse,
+    // silently missing the fact that a permission prompt is pending.
+    this.send(ws, { type: "status", status: session.status });
 
     // Heartbeat: detect dead connections
     let alive = true;
@@ -267,6 +295,7 @@ class SessionManager {
               // Check if truly idle for a while
               if (Date.now() - session.lastActivity > 30 * 60 * 1000) {
                 this.sessions.delete(session.id);
+                clearSessionStatus(session.id);
               }
             }
           },
@@ -316,6 +345,7 @@ class SessionManager {
       if (session.abortController && session.isProcessing) {
         session.abortController.abort();
         this.broadcast(session, { type: "result", text: "Stopped by user", isError: false });
+        this.setStatus(session, "idle");
       }
       return;
     }
@@ -336,6 +366,9 @@ class SessionManager {
     session.accumulatedText = "";
     const abortController = new AbortController();
     session.abortController = abortController;
+    // Kick off the status machine for this turn — sidebar dot flips blue
+    // the moment the query starts, not only once the first token streams.
+    this.setStatus(session, "thinking");
     let toolInputAccum = "";
     let pendingToolUse: { id: string; name: string } | null = null;
 
@@ -359,9 +392,9 @@ class SessionManager {
         if (toolName === "AskUserQuestion") {
           const id = `req-${++session.requestCounter}`;
           this.broadcast(session, { type: "ask_question", id, questions: input.questions || [] });
-          this.broadcast(session, { type: "status", status: "awaiting_input" });
+          this.setStatus(session, "awaiting_input");
           const response = await this.waitForResponse(session, id);
-          this.broadcast(session, { type: "status", status: "thinking" });
+          this.setStatus(session, "thinking");
           return {
             behavior: "allow",
             updatedInput: { questions: input.questions || [], answers: response.answers || {} },
@@ -406,9 +439,9 @@ class SessionManager {
         const id = `req-${++session.requestCounter}`;
         const description = getToolDescription(toolName, input);
         this.broadcast(session, { type: "permission_request", id, toolName, input, description });
-        this.broadcast(session, { type: "status", status: "awaiting_permission" });
+        this.setStatus(session, "awaiting_permission");
         const response = await this.waitForResponse(session, id);
-        this.broadcast(session, { type: "status", status: "tool_running" });
+        this.setStatus(session, "tool_running");
 
         if (response.allow) {
           if (response.allowSession) {
@@ -420,6 +453,36 @@ class SessionManager {
       },
       ...(session.effort ? { effort: session.effort } : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      // Tell Claude which permission mode it's in via systemPrompt. Without
+      // this, the server's canUseTool silently denies Bash/Edit in plan
+      // mode but Claude doesn't *know* it's in plan mode, so it can go
+      // "I'll run this command…" → denial → retry → loop. Giving it an
+      // explicit instruction avoids the loop and nudges it toward
+      // ExitPlanMode when it's ready.
+      ...(session.permissionMode === "plan"
+        ? {
+            systemPrompt: {
+              type: "preset",
+              preset: "claude_code",
+              append:
+                "\n\nYou are currently in PLAN MODE. Do not run shell commands, " +
+                "edit files, or write new files in this turn — the host will " +
+                "deny those tool calls. Instead, propose a plan and call " +
+                "ExitPlanMode when you are ready for the user to review it.",
+            },
+          }
+        : session.permissionMode === "acceptEdits"
+          ? {
+              systemPrompt: {
+                type: "preset",
+                preset: "claude_code",
+                append:
+                  "\n\nYou are in ACCEPT-EDITS MODE. File edits and writes are " +
+                  "pre-approved; proceed without asking for permission for those " +
+                  "tools. Shell commands still require explicit approval.",
+              },
+            }
+          : {}),
       // If the user saved Bitbucket creds in Settings, inject the three env
       // vars the read-only bitbucket skill at /opt/skills/bitbucket/ reads.
       // Loaded fresh from disk per-query so rotated tokens take effect
@@ -697,6 +760,9 @@ class SessionManager {
 
     session.isProcessing = false;
     session.abortController = null;
+    // Turn is done — flip the dot off. If a queued message starts next,
+    // handleUserMessage() will flip it straight back to "thinking".
+    this.setStatus(session, "idle");
 
     // Process queued messages
     if (session.messageQueue.length > 0) {
@@ -714,7 +780,7 @@ class SessionManager {
       const timer = setTimeout(() => {
         session.pendingRequests.delete(id);
         console.warn(`[session=${session.id}] Response timeout for request ${id}`);
-        this.broadcast(session, { type: "status", status: "thinking" });
+        this.setStatus(session, "thinking");
         resolve({ allow: false, message: "Response timed out", answers: {} });
       }, RESPONSE_TIMEOUT_MS);
 

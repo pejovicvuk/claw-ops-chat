@@ -17,7 +17,7 @@ set -euo pipefail
 
 : "${HOSTNAME:?HOSTNAME env var is required (e.g. chat.example.com)}"
 : "${ALLOWED_EMAIL:?ALLOWED_EMAIL env var is required (single authorized user email)}"
-: "${NEXT_PUBLIC_API_ORIGIN:=https://$HOSTNAME}"
+: "${NEXT_PUBLIC_API_ORIGIN:?NEXT_PUBLIC_API_ORIGIN env var is required (the ClawOps backend URL, e.g. https://clawops.example.com)}"
 : "${SESSION_SECRET:=$(openssl rand -hex 48 2>/dev/null || head -c 48 /dev/urandom | xxd -p | tr -d '\n')}"
 : "${ALLOWED_ORIGINS:=https://$HOSTNAME}"
 : "${APP_DIR:=/opt/claw-chat}"

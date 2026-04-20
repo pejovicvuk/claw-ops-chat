@@ -336,53 +336,57 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
   const shouldVirtualize = visibleEntries.length >= VIRTUALIZE_THRESHOLD;
 
   return (
-    <div
-      className="flex h-full flex-col outline-none"
-      tabIndex={0}
-      onKeyDown={handleKeyDown}
-      onClick={() => contextMenu && closeMenu()}
-    >
-      <Breadcrumbs path={currentPath} onNavigate={loadDir} />
-      <FileToolbar
-        key={currentPath}
-        query={query}
-        onQueryChange={setQuery}
-        sort={sort}
-        onSortChange={setSort}
-        onUpload={triggerFileInput}
-        onRefresh={() => {
-          invalidateDir(currentPath);
-          loadDir(currentPath, { bypassCache: true });
-        }}
-        loading={loading}
-      />
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        className="hidden"
-        onChange={handleInputUpload}
-      />
+    // The dropzone wraps the ENTIRE browser (breadcrumbs, toolbar, list).
+    // Wrapping only the list area made the drop target too small — users
+    // drag toward the panel header instinctively and landed outside the
+    // listener, which is why "nothing happens" was the common report.
+    <FileDropzone onUpload={handleDropUpload} className="flex h-full flex-col outline-none">
+      <div
+        className="flex h-full flex-col outline-none"
+        tabIndex={0}
+        onKeyDown={handleKeyDown}
+        onClick={() => contextMenu && closeMenu()}
+      >
+        <Breadcrumbs path={currentPath} onNavigate={loadDir} />
+        <FileToolbar
+          key={currentPath}
+          query={query}
+          onQueryChange={setQuery}
+          sort={sort}
+          onSortChange={setSort}
+          onUpload={triggerFileInput}
+          onRefresh={() => {
+            invalidateDir(currentPath);
+            loadDir(currentPath, { bypassCache: true });
+          }}
+          loading={loading}
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={handleInputUpload}
+        />
 
-      {banner && (
-        <div className="flex items-start gap-2 border-b border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
-          <FiAlertTriangle size={12} className="mt-0.5 shrink-0" />
-          <span className="min-w-0 flex-1">{banner}</span>
-          <button
-            type="button"
-            onClick={() => setBanner(null)}
-            aria-label="Dismiss"
-            className="shrink-0 rounded text-red-300/80 hover:text-red-300"
-          >
-            <FiX size={11} />
-          </button>
-        </div>
-      )}
+        {banner && (
+          <div className="flex items-start gap-2 border-b border-red-500/20 bg-red-500/10 px-3 py-2 text-[11px] text-red-300">
+            <FiAlertTriangle size={12} className="mt-0.5 shrink-0" />
+            <span className="min-w-0 flex-1">{banner}</span>
+            <button
+              type="button"
+              onClick={() => setBanner(null)}
+              aria-label="Dismiss"
+              className="shrink-0 rounded text-red-300/80 hover:text-red-300"
+            >
+              <FiX size={11} />
+            </button>
+          </div>
+        )}
 
-      <FileDropzone onUpload={handleDropUpload} className="flex-1 min-h-0">
         <div
           ref={listContainerRef}
-          className="h-full overflow-y-auto"
+          className="flex-1 min-h-0 overflow-y-auto"
           role="list"
           aria-label="Files and folders"
           aria-busy={loading}
@@ -439,7 +443,6 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
             />
           )}
         </div>
-      </FileDropzone>
 
       {uploads.length > 0 && (
         <div className="max-h-40 shrink-0 overflow-y-auto border-t border-canvas-border bg-canvas-surface/60 p-2">
@@ -563,6 +566,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           onCancel={() => setConfirm(null)}
         />
       )}
-    </div>
+      </div>
+    </FileDropzone>
   );
 });

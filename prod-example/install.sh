@@ -52,11 +52,27 @@ sudo systemctl stop nginx 2>/dev/null || true
 sudo systemctl disable nginx 2>/dev/null || true
 
 # ── 3. Detect SSL certs ────────────────────────────────────────────────
+# Important: Let's Encrypt's live/ dir contains symlinks into archive/; if we
+# bind-mount live/ straight into the nginx container, those symlinks break
+# (archive/ isn't mounted). Dereference with `cp -L` into a dedicated certs
+# dir under APP_DIR that we can mount safely.
 CERT_SRC="/etc/letsencrypt/live/$HOSTNAME"
+CERT_DST="$APP_DIR/certs"
 TLS_ENABLED=0
 if [ -f "$CERT_SRC/fullchain.pem" ] && [ -f "$CERT_SRC/privkey.pem" ]; then
   TLS_ENABLED=1
   echo "-- TLS certs found at $CERT_SRC — enabling HTTPS"
+  sudo mkdir -p "$CERT_DST"
+  sudo cp -L "$CERT_SRC/fullchain.pem" "$CERT_DST/"
+  sudo cp -L "$CERT_SRC/privkey.pem"   "$CERT_DST/"
+  # chain.pem is used for OCSP stapling in https.conf. Some older certs
+  # don't ship one; fall through to fullchain.pem in that case.
+  if [ -f "$CERT_SRC/chain.pem" ]; then
+    sudo cp -L "$CERT_SRC/chain.pem" "$CERT_DST/"
+  else
+    sudo cp -L "$CERT_SRC/fullchain.pem" "$CERT_DST/chain.pem"
+  fi
+  sudo chmod 644 "$CERT_DST"/*.pem
 else
   echo "-- No certs at $CERT_SRC — starting HTTP-only. Re-run after provisioning SSL."
 fi
@@ -73,10 +89,13 @@ SESSION_SECRET=$SESSION_SECRET
 ALLOWED_ORIGINS=$ALLOWED_ORIGINS
 EOF
 
-# docker-compose.yml — ports block + cert mount depend on TLS_ENABLED
+# docker-compose.yml — ports block + cert mount depend on TLS_ENABLED.
+# Mount the dereferenced-copy dir (./certs), NOT /etc/letsencrypt/live/...
+# directly, because that directory is full of symlinks into archive/ which
+# we haven't mounted.
 if [ "$TLS_ENABLED" = "1" ]; then
   PORTS_BLOCK=$'      - "80:80"\n      - "443:443"'
-  CERT_VOL=$'\n      - '"$CERT_SRC"':/etc/nginx/certs:ro'
+  CERT_VOL=$'\n      - ./certs:/etc/nginx/certs:ro'
 else
   PORTS_BLOCK='      - "80:80"'
   CERT_VOL=''

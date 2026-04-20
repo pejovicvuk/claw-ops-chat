@@ -29,11 +29,16 @@ RUN apk add --no-cache bash curl python3 git openssh-client \
     && ln -s /opt/uv/uv /usr/local/bin/uv \
     && ln -s /opt/uv/uvx /usr/local/bin/uvx
 
-# Copy the full app with node_modules and build output
+# Copy the full app with node_modules and build output.
+# server.js requires sibling JS files compiled from TS + the CJS SDK wrapper;
+# all four must be present in the runner image.
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/server.js ./server.js
+COPY --from=builder /app/sdk-loader.js ./sdk-loader.js
 COPY --from=builder /app/src/lib/auth-server.js ./src/lib/auth-server.js
+COPY --from=builder /app/src/lib/claude-status.js ./src/lib/claude-status.js
+COPY --from=builder /app/src/lib/terminal-shell.js ./src/lib/terminal-shell.js
 COPY --from=builder /app/next.config.ts ./next.config.ts
 COPY --from=builder /app/package.json ./package.json
 

@@ -40,6 +40,7 @@ function singleStatus(servers: McpServerInfo[] | null, id: string): ConnectionSt
 
 export function SettingsConnectionsPage() {
   const [claudeStatus, setClaudeStatus] = useState<ConnectionStatus>("unknown");
+  const [cliAvailable, setCliAvailable] = useState<boolean | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerInfo[] | null>(null);
   const { setParam } = useUrlState();
 
@@ -52,6 +53,21 @@ export function SettingsConnectionsPage() {
       .then((auth) => {
         if (cancelled) return;
         setClaudeStatus(auth?.connected ? "connected" : "disconnected");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // CLI presence — swap the row description to nudge toward install when missing.
+  useEffect(() => {
+    let cancelled = false;
+    authFetch(`${BASE}/api/setup/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((info: { available?: boolean } | null) => {
+        if (cancelled) return;
+        setCliAvailable(info?.available ?? null);
       });
     return () => {
       cancelled = true;
@@ -86,7 +102,11 @@ export function SettingsConnectionsPage() {
       <ConnectionRow
         icon={<FiTerminal size={16} className="text-accent" />}
         name="Claude Code"
-        description="Local CLI for AI-powered development"
+        description={
+          cliAvailable === false
+            ? "Install required — click to set up"
+            : "Local CLI for AI-powered development"
+        }
         status={claudeStatus}
         onClick={() => setParam("settings", "connections/claude")}
       />

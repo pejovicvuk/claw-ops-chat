@@ -5,12 +5,14 @@ import {
   FiAlertTriangle,
   FiCheck,
   FiCopy,
+  FiDownload,
   FiExternalLink,
   FiKey,
   FiLoader,
   FiLogOut,
   FiStar,
   FiTerminal,
+  FiX,
   FiZap,
 } from "react-icons/fi";
 import { authFetch } from "@/lib/auth";
@@ -18,13 +20,28 @@ import { authFetch } from "@/lib/auth";
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
 type LoginMethod = "claudeai" | "console" | "token";
-type UiState = "loading" | "connected" | "disconnected" | "logging-in" | "error";
+type UiState =
+  | "loading"
+  | "cli-missing"
+  | "cli-installing"
+  | "install-failed"
+  | "connected"
+  | "disconnected"
+  | "logging-in"
+  | "error";
 
 interface Status {
   connected: boolean;
   email: string | null;
   subscriptionType: string | null;
   expiresAt: number | null;
+}
+
+interface ClaudeInfo {
+  available: boolean;
+  version?: string;
+  path?: string;
+  error?: string;
 }
 
 /**
@@ -34,17 +51,36 @@ interface Status {
 export function SettingsClaudePage() {
   const [ui, setUi] = useState<UiState>("loading");
   const [status, setStatus] = useState<Status | null>(null);
+  const [cliInfo, setCliInfo] = useState<ClaudeInfo | null>(null);
   const [loginUrl, setLoginUrl] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [logs, setLogs] = useState<string[]>([]);
+  const [installLogs, setInstallLogs] = useState<string[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
 
-  /** Fetch current auth status and reflect into UI. */
+  /**
+   * Fetch CLI availability first, then auth status. If the CLI is missing,
+   * skip the auth fetch — login is impossible without a binary.
+   */
   const refreshStatus = useCallback(async () => {
+    try {
+      const cliRes = await authFetch(`${BASE}/api/setup/status`);
+      if (cliRes.ok) {
+        const info = (await cliRes.json()) as ClaudeInfo;
+        setCliInfo(info);
+        if (!info.available) {
+          setUi("cli-missing");
+          return;
+        }
+      }
+    } catch {
+      /* network error — fall through to auth status probe */
+    }
+
     try {
       const res = await authFetch(`${BASE}/api/claude-auth/status`);
       if (!res.ok) throw new Error("status");
@@ -64,6 +100,86 @@ export function SettingsClaudePage() {
       // Abort any live SSE stream on unmount.
       abortRef.current?.abort();
     };
+  }, [refreshStatus]);
+
+  /**
+   * Stream the install log from /api/setup/install. Emits two event kinds:
+   *   - `data: "<progress line>"`  → append to installLogs
+   *   - `event: done\ndata: {success,error?}` → transition UI state
+   */
+  const installCli = useCallback(async () => {
+    setUi("cli-installing");
+    setInstallLogs([]);
+    setErrorMsg(null);
+
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+
+    try {
+      const res = await authFetch(`${BASE}/api/setup/install`, {
+        method: "POST",
+        signal: ac.signal,
+      });
+      if (!res.ok || !res.body) throw new Error("Failed to start installation");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let doneEvent: { success: boolean; error?: string } | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split("\n\n");
+        buffer = blocks.pop() ?? "";
+
+        for (const block of blocks) {
+          const lines = block.split("\n");
+          const eventLine = lines
+            .find((l) => l.startsWith("event:"))
+            ?.slice(6)
+            .trim();
+          const dataLine = lines
+            .find((l) => l.startsWith("data:"))
+            ?.slice(5)
+            .trim();
+          if (!dataLine) continue;
+
+          if (eventLine === "done") {
+            try {
+              doneEvent = JSON.parse(dataLine) as { success: boolean; error?: string };
+            } catch {
+              doneEvent = { success: false, error: "Malformed done event" };
+            }
+            continue;
+          }
+
+          // Progress line — the route emits JSON-encoded strings.
+          try {
+            const parsed = JSON.parse(dataLine);
+            if (typeof parsed === "string") {
+              setInstallLogs((prev) => [...prev, parsed].slice(-200));
+            }
+          } catch {
+            /* ignore malformed data line */
+          }
+        }
+      }
+
+      if (doneEvent?.success) {
+        // Re-check CLI availability; fall into the normal login flow if OK.
+        await refreshStatus();
+        return;
+      }
+      setErrorMsg(doneEvent?.error ?? "Installation failed");
+      setUi("install-failed");
+    } catch (err) {
+      if ((err as Error).name === "AbortError") return;
+      setErrorMsg((err as Error).message || "Installation failed");
+      setUi("install-failed");
+    }
   }, [refreshStatus]);
 
   const startLogin = useCallback(
@@ -198,6 +314,109 @@ export function SettingsClaudePage() {
     return (
       <div className="flex items-center justify-center py-12 text-canvas-muted">
         <FiLoader size={16} className="animate-spin" />
+      </div>
+    );
+  }
+
+  if (ui === "cli-missing") {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-orange-500/20 bg-orange-500/5 p-4">
+          <div className="mb-1 flex items-center gap-2">
+            <FiAlertTriangle size={14} className="text-orange-500" />
+            <span className="text-[13px] font-medium text-canvas-fg">
+              Claude Code CLI not found
+            </span>
+          </div>
+          <p className="text-[12px] text-canvas-muted">
+            {cliInfo?.error ||
+              "The `claude` binary is missing. Install it here to continue — no terminal required."}
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={installCli}
+          className="flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-[13px] font-medium text-white transition-colors hover:opacity-90 active:scale-95"
+        >
+          <FiDownload size={13} />
+          Install Claude Code CLI
+        </button>
+
+        <div className="flex items-center gap-2 rounded-lg bg-canvas-surface px-3 py-2">
+          <FiTerminal size={12} className="text-canvas-muted" />
+          <code className="select-all text-[11px] text-canvas-muted">
+            npm i -g @anthropic-ai/claude-code
+          </code>
+          <span className="text-[10px] text-canvas-muted">— the same command, run for you</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (ui === "cli-installing") {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <FiLoader size={14} className="animate-spin text-accent" />
+            <span className="text-[13px] font-medium text-canvas-fg">
+              Installing Claude Code CLI…
+            </span>
+          </div>
+          <p className="text-[11px] text-canvas-muted">
+            This usually takes 30–120 seconds. Keep this window open.
+          </p>
+        </div>
+
+        <div className="max-h-48 overflow-y-auto rounded-lg bg-black/30 px-3 py-2 font-mono text-[11px] leading-relaxed text-canvas-muted">
+          {installLogs.length === 0 ? (
+            <p className="text-canvas-muted/60">Starting…</p>
+          ) : (
+            installLogs.map((line, i) => <div key={i}>{line}</div>)
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (ui === "install-failed") {
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-red-500/20 bg-red-500/5 p-4">
+          <div className="mb-1 flex items-center gap-2">
+            <FiX size={14} className="text-red-500" />
+            <span className="text-[13px] font-medium text-canvas-fg">Installation failed</span>
+          </div>
+          <p className="text-[12px] text-canvas-muted">{errorMsg || "Unknown error"}</p>
+        </div>
+
+        {installLogs.length > 0 && (
+          <details className="rounded-xl border border-canvas-border bg-canvas-bg p-2 text-[11px] text-canvas-muted">
+            <summary className="cursor-pointer select-none px-1 py-1">Show log</summary>
+            <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap px-1 font-mono text-[10px] leading-relaxed">
+              {installLogs.join("\n")}
+            </pre>
+          </details>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={installCli}
+            className="flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90"
+          >
+            <FiDownload size={12} />
+            Retry
+          </button>
+          <button
+            type="button"
+            onClick={() => setUi("cli-missing")}
+            className="rounded-lg px-3 py-2 text-[12px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+          >
+            Back
+          </button>
+        </div>
       </div>
     );
   }

@@ -4,12 +4,18 @@ import { homedir } from "os";
 
 /**
  * Base directory for all file operations.
- * - Production: CLAUDE_CWD env var, or "/workspace" (Docker default).
+ * - Production: CLAUDE_CWD env var, or "/" (the chat app runs as root inside
+ *   the container and needs full-server access — the single-user
+ *   ALLOWED_EMAIL gate is the trust boundary, not this path check).
  * - Development: CLAUDE_CWD env var, or user's home directory (so the file
  *   browser works out of the box on dev machines without extra config).
+ *
+ * We still run every caller through safePath() to reject null bytes and
+ * catch symlink escapes; with BASE_DIR="/" those are the only remaining
+ * protections, which is exactly what a trusted single-user tool wants.
  */
 const dev = process.env.NODE_ENV !== "production";
-const BASE_DIR = process.env.CLAUDE_CWD || (dev ? homedir() : "/workspace");
+const BASE_DIR = process.env.CLAUDE_CWD || (dev ? homedir() : "/");
 
 /**
  * Resolves a user-provided file path and validates it stays within the allowed
@@ -22,9 +28,12 @@ const BASE_DIR = process.env.CLAUDE_CWD || (dev ? homedir() : "/workspace");
 export async function safePath(userPath: string): Promise<string> {
   let p = userPath;
 
-  // Expand home directory
+  // Expand ~ to the configured base directory. Users type "~" meaning "the
+  // chat's working root"; for this single-user tool that maps to BASE_DIR,
+  // not the Node process's own homedir (which inside the container is
+  // always /root, regardless of what the user actually wants to browse).
   if (p.startsWith("~")) {
-    p = p.replace("~", homedir());
+    p = p.replace("~", BASE_DIR);
   }
 
   // Resolve to absolute path

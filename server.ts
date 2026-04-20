@@ -952,5 +952,45 @@ app.prepare().then(() => {
   server.listen(port, () => {
     console.log(`> Claw Chat ready on http://localhost:${port}`);
     console.log(`> WebSocket endpoint: ws://localhost:${port}/ws/chat`);
+    console.log(`> API_ORIGIN: ${API_ORIGIN}`);
+    // Self-loop guard — if NEXT_PUBLIC_API_ORIGIN points at the chat's own
+    // host or a localhost default, every /api/v1/auth/me call from the
+    // session-establishment route hits us instead of the ClawOps backend
+    // and login silently 401s. Warn loudly so this gets fixed instead of
+    // ending up in a debugging rabbit hole.
+    void (async () => {
+      try {
+        const url = new URL(API_ORIGIN);
+        const allowed = Array.from(ALLOWED_ORIGINS);
+        const chatHosts = allowed
+          .map((o) => { try { return new URL(o).host; } catch { return null; } })
+          .filter((h): h is string => h !== null);
+        if (chatHosts.includes(url.host) || url.host.startsWith("localhost")) {
+          console.warn(
+            `!! NEXT_PUBLIC_API_ORIGIN (${API_ORIGIN}) looks like the chat's own host — login will 401. ` +
+            `Set it to the ClawOps backend URL (e.g. https://clawops.example.com) in /opt/claw-chat/.env ` +
+            `and 'docker compose up -d --force-recreate claw-chat'.`,
+          );
+          return;
+        }
+        const probe = await fetch(`${API_ORIGIN}/api/v1/auth/me`, {
+          headers: { Authorization: "Bearer boot-probe" },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (probe.status !== 401 && probe.status !== 403) {
+          console.warn(
+            `!! API_ORIGIN probe returned ${probe.status} (expected 401/403 for invalid token). ` +
+            `Check that ${API_ORIGIN} is reachable and speaks the ClawOps auth API.`,
+          );
+        } else {
+          console.log(`> API_ORIGIN reachable (probe got ${probe.status} as expected)`);
+        }
+      } catch (err) {
+        console.warn(
+          `!! Could not reach API_ORIGIN=${API_ORIGIN}: ${(err as Error).message}. ` +
+          `Login + WebSocket auth will fail until the backend is reachable.`,
+        );
+      }
+    })();
   });
 });

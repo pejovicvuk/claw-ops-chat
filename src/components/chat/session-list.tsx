@@ -3,6 +3,24 @@
 import { FiPlus, FiRefreshCw, FiSettings } from "react-icons/fi";
 import type { ChatSession } from "@/lib/types";
 import { useUrlState } from "@/lib/use-url-state";
+import { useSessionStatuses } from "@/lib/use-session-statuses";
+import type { SessionStatus } from "@/lib/session-status-store";
+
+/**
+ * Colour + label for the dot shown next to each session in the sidebar.
+ * Orange is deliberately the only non-pulsing colour — a session that
+ * needs permission should stand out even if the user's glance misses
+ * the animation.
+ */
+const STATUS_UI: Record<
+  Exclude<SessionStatus, "idle">,
+  { dotClass: string; label: string }
+> = {
+  thinking: { dotClass: "bg-blue-400 animate-pulse", label: "Thinking" },
+  tool_running: { dotClass: "bg-purple-400 animate-pulse", label: "Running tool" },
+  awaiting_permission: { dotClass: "bg-orange-400", label: "Needs permission" },
+  awaiting_input: { dotClass: "bg-amber-400 animate-pulse", label: "Needs input" },
+};
 
 function formatRelativeTime(ts: number): string {
   const diff = Date.now() - ts;
@@ -37,6 +55,7 @@ export function SessionList({
 }: SessionListProps) {
   const { setParam } = useUrlState();
   const openSettings = () => setParam("settings", "main");
+  const statuses = useSessionStatuses();
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -84,7 +103,18 @@ export function SessionList({
           <div className="space-y-0.5">
             {sessions.map((session) => {
               const isActive = session.sessionId === selectedSessionId;
-              const isRunning = runningSessionIds?.has(session.sessionId);
+              // Prefer the live status from the polling hook; fall back to
+              // the legacy runningSessionIds boolean so any caller that
+              // still populates it (or the replayed WS status from a fresh
+              // reconnect) isn't ignored.
+              const liveStatus = statuses[session.sessionId]?.status;
+              const derivedStatus: SessionStatus | null =
+                liveStatus && liveStatus !== "idle"
+                  ? liveStatus
+                  : runningSessionIds?.has(session.sessionId)
+                    ? "thinking"
+                    : null;
+              const ui = derivedStatus ? STATUS_UI[derivedStatus] : null;
               return (
                 <button
                   key={session.sessionId}
@@ -95,16 +125,21 @@ export function SessionList({
                       ? "bg-canvas-surface-hover text-canvas-fg"
                       : "text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
                   }`}
+                  title={ui?.label}
                 >
-                  {isRunning && (
-                    <span className="mt-1.5 h-2 w-2 shrink-0 animate-pulse rounded-full bg-green-500" />
+                  {ui ? (
+                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${ui.dotClass}`} />
+                  ) : (
+                    // Reserve the same width so titles stay aligned when a
+                    // session flips idle → running → idle.
+                    <span className="mt-1.5 h-2 w-2 shrink-0" aria-hidden />
                   )}
                   <div className="min-w-0 flex-1">
                     <p className={`line-clamp-1 text-[13px] ${isActive ? "font-medium" : ""}`}>
                       {session.display}
                     </p>
                     <p className="mt-0.5 text-[10px] text-canvas-muted">
-                      {isRunning ? "Running" : formatRelativeTime(session.timestamp)}
+                      {ui?.label ?? formatRelativeTime(session.timestamp)}
                     </p>
                   </div>
                 </button>

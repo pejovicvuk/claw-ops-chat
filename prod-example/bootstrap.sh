@@ -5,8 +5,6 @@
 #   curl -fsSL https://raw.githubusercontent.com/pejovicvuk/claw-ops-chat/main/prod-example/bootstrap.sh \
 #     | sudo -E HOSTNAME=chat.example.com \
 #                ALLOWED_EMAIL=me@example.com \
-#                INSTALLER_TAG=v0.4.0 \
-#                INSTALLER_SHA256=<sha256|skip> \
 #                bash
 #
 # What this does, in order:
@@ -15,7 +13,8 @@
 #   3.  Install Docker + docker-compose-plugin; enable on boot.
 #   4.  Install Node.js 20 + npm, then @anthropic-ai/claude-code globally.
 #   5.  Clean up any stale host-nginx openclaw-managed config for $HOSTNAME.
-#   6.  Download installer.tar.gz for $INSTALLER_TAG, verify SHA256, extract.
+#   6.  Fetch install.sh + nginx templates from raw.githubusercontent.com at
+#       the pinned ref (branch, tag, or SHA — default: main).
 #   7.  exec install.sh with all env vars passed through.
 #
 # Idempotent — safe to re-run.
@@ -24,9 +23,8 @@ set -euo pipefail
 
 : "${HOSTNAME:?HOSTNAME env var is required (e.g. chat.example.com)}"
 : "${ALLOWED_EMAIL:?ALLOWED_EMAIL env var is required (single authorized user email)}"
-: "${INSTALLER_TAG:=latest}"
-: "${INSTALLER_SHA256:=skip}"
 : "${INSTALLER_REPO:=pejovicvuk/claw-ops-chat}"
+: "${INSTALLER_REF:=main}"
 : "${INSTALLER_WORK_DIR:=/tmp/claw-chat-install}"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -50,7 +48,7 @@ case "${ID:-}:${ID_LIKE:-}" in
   *) die "Unsupported distro: ID=$ID ID_LIKE=${ID_LIKE:-}" ;;
 esac
 
-step "claw-chat bootstrap — host=$HOSTNAME tag=$INSTALLER_TAG pkg=$PKG"
+step "claw-chat bootstrap — host=$HOSTNAME ref=$INSTALLER_REF pkg=$PKG"
 
 # ── 1. OS update ───────────────────────────────────────────────────────
 step "Updating OS packages"
@@ -118,7 +116,7 @@ mkdir -p /root/.claude
 # ── 5. Nginx collision cleanup ─────────────────────────────────────────
 # If host nginx has an openclaw-managed config for $HOSTNAME left over from a
 # previous SSL-first workflow, remove it so the sidecar claw-nginx can own 80/443.
-# install.sh itself will then stop + disable host nginx (lines 42-46).
+# install.sh itself will then stop + disable host nginx.
 MANAGED_CONF="/etc/nginx/openclaw-managed/${HOSTNAME}.conf"
 if [ -f "$MANAGED_CONF" ]; then
   step "Removing stale host-nginx config for $HOSTNAME"
@@ -137,34 +135,22 @@ if command -v ss >/dev/null 2>&1; then
   esac
 fi
 
-# ── 6. Fetch installer bundle ──────────────────────────────────────────
-TARBALL="/tmp/claw-chat-installer.tar.gz"
-if [ "$INSTALLER_TAG" = "latest" ]; then
-  BUNDLE_URL="https://github.com/${INSTALLER_REPO}/releases/latest/download/installer.tar.gz"
-else
-  BUNDLE_URL="https://github.com/${INSTALLER_REPO}/releases/download/${INSTALLER_TAG}/installer.tar.gz"
-fi
+# ── 6. Fetch installer files from raw.githubusercontent.com ────────────
+# No GitHub Release required — we pull install.sh and the two nginx templates
+# directly from the repo at $INSTALLER_REF (default: main). Pin to a tag or
+# commit SHA if you want reproducibility.
+BASE_URL="https://raw.githubusercontent.com/${INSTALLER_REPO}/${INSTALLER_REF}/prod-example"
 
-step "Downloading installer bundle: $BUNDLE_URL"
-curl -fsSL "$BUNDLE_URL" -o "$TARBALL"
-
-if [ "$INSTALLER_SHA256" = "skip" ]; then
-  warn "INSTALLER_SHA256=skip — skipping integrity check (acceptable only for unpinned manual runs)"
-else
-  step "Verifying SHA256"
-  echo "${INSTALLER_SHA256}  ${TARBALL}" | sha256sum -c -
-fi
-
-# ── 7. Extract + run install.sh ────────────────────────────────────────
-step "Extracting bundle into $INSTALLER_WORK_DIR"
+step "Fetching installer files from $BASE_URL"
 rm -rf "$INSTALLER_WORK_DIR"
-mkdir -p "$INSTALLER_WORK_DIR"
-tar -xzf "$TARBALL" -C "$INSTALLER_WORK_DIR"
+mkdir -p "$INSTALLER_WORK_DIR/nginx"
 
-if [ ! -x "$INSTALLER_WORK_DIR/install.sh" ]; then
-  chmod +x "$INSTALLER_WORK_DIR/install.sh" 2>/dev/null || true
-fi
+curl -fsSL "$BASE_URL/install.sh"              -o "$INSTALLER_WORK_DIR/install.sh"
+curl -fsSL "$BASE_URL/nginx/http-only.conf"    -o "$INSTALLER_WORK_DIR/nginx/http-only.conf"
+curl -fsSL "$BASE_URL/nginx/https.conf"        -o "$INSTALLER_WORK_DIR/nginx/https.conf"
+chmod +x "$INSTALLER_WORK_DIR/install.sh"
 
+# ── 7. Hand off to install.sh ──────────────────────────────────────────
 step "Handing off to install.sh"
 cd "$INSTALLER_WORK_DIR"
 exec bash "$INSTALLER_WORK_DIR/install.sh"

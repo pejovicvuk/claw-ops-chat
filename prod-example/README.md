@@ -35,13 +35,15 @@ One command on a fresh VPS, root shell:
 curl -fsSL https://raw.githubusercontent.com/pejovicvuk/claw-ops-chat/main/prod-example/bootstrap.sh \
   | sudo -E HOSTNAME=chat.example.com \
              ALLOWED_EMAIL=me@example.com \
-             INSTALLER_TAG=v0.4.0 \
-             INSTALLER_SHA256=<sha256-from-release> \
              bash
 ```
 
-`INSTALLER_TAG=latest` + `INSTALLER_SHA256=skip` works on unpinned dev
-installs, but the SHA check should be used for anything you rely on.
+Pin to a specific tag or commit SHA for reproducibility:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/pejovicvuk/claw-ops-chat/v0.4.0/prod-example/bootstrap.sh \
+  | sudo -E HOSTNAME=... ALLOWED_EMAIL=... INSTALLER_REF=v0.4.0 bash
+```
 
 Optional overrides (accepted by `install.sh`, pass them through to
 `bootstrap.sh` via the same `sudo -E` env):

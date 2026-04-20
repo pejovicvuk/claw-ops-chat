@@ -2,8 +2,9 @@ import "dotenv/config";
 import { createServer, IncomingMessage } from "http";
 import { parse } from "url";
 import { readFileSync } from "fs";
+import { access } from "fs/promises";
 import { spawn, type ChildProcess } from "child_process";
-import { join, dirname, sep } from "path";
+import { dirname, join, sep } from "path";
 import { homedir } from "os";
 import next from "next";
 import { WebSocketServer, WebSocket } from "ws";
@@ -32,12 +33,12 @@ function loadPty(): NodePty {
   }
 }
 
-// Bundled cli.js path with forward slashes — Windows backslashes break Node spawn.
-const SDK_CLI_PATH = join(dirname(require.resolve("@anthropic-ai/claude-agent-sdk")), "cli.js")
-  .split(sep)
-  .join("/");
-
 // Custom spawn that normalizes paths (fixes Windows backslash ENOENT).
+// We do NOT set pathToClaudeCodeExecutable on the SDK options — the SDK
+// resolves its own bundled entry (sdk.mjs) via package exports. The old
+// hardcoded '…/claude-agent-sdk/cli.js' worked on legacy v1.x SDK but the
+// v0.2.x Agent SDK collapsed cli.js into sdk.mjs, so the old path ENOENT'd
+// on every query and surfaced as "Claude Code process exited with code 1".
 function spawnClaude(opts: {
   command: string;
   args: string[];
@@ -419,7 +420,6 @@ class SessionManager {
       ...(session.effort ? { effort: session.effort } : {}),
       ...(mcpServers ? { mcpServers } : {}),
       abortController,
-      pathToClaudeCodeExecutable: SDK_CLI_PATH,
       spawnClaudeCodeProcess: spawnClaude,
     };
 
@@ -632,22 +632,52 @@ class SessionManager {
     } catch (err) {
       session.accumulatedText = "";
       const rawMessage = err instanceof Error ? err.message : "Unknown error";
-      console.error(`[session=${session.id}] Query error:`, err);
+      const errnoErr = err as NodeJS.ErrnoException;
+      // Dump the full error to the container log so operators have
+      // errno/code/syscall/path/stack. This app runs in a single-user
+      // trusted context — hiding paths behind 'Internal server error'
+      // bought us nothing except days of debugging last time.
+      console.error(`[session=${session.id}] Query error:`, {
+        message: rawMessage,
+        errno: errnoErr.errno,
+        code: errnoErr.code,
+        syscall: errnoErr.syscall,
+        path: errnoErr.path,
+        stack: errnoErr.stack,
+      });
 
-      // Detect SDK executable-not-found errors and send a special type
-      // so the client can show the install popup instead of a generic error.
-      if (
-        rawMessage.includes("executable not found") ||
-        rawMessage.includes("native binary not found")
-      ) {
+      // Treat ENOENT / EACCES / executable-not-found as "setup required"
+      // so the UI can nudge the user towards reinstalling instead of
+      // showing a generic error.
+      const lowered = rawMessage.toLowerCase();
+      const setupRequired =
+        errnoErr.code === "ENOENT" ||
+        errnoErr.code === "EACCES" ||
+        lowered.includes("executable not found") ||
+        lowered.includes("native binary not found") ||
+        lowered.includes("no such file");
+
+      const stderrTail =
+        typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
+          ? (errnoErr as unknown as { stderr: string }).stderr.trim().split(/\r?\n/).slice(-10).join("\n")
+          : undefined;
+
+      if (setupRequired) {
         this.broadcast(session, {
           type: "setup_required",
           message:
-            "Claude Code CLI could not be started. The SDK bundled binary may be missing or incompatible.",
+            "Claude SDK could not be started. The bundled sdk.mjs may be missing or unreachable. " +
+            `Raw error: ${rawMessage}` +
+            (errnoErr.path ? ` (path=${errnoErr.path})` : ""),
+          ...(stderrTail ? { stderrTail } : {}),
         });
       } else {
-        const safeMessage = rawMessage.includes("/") ? "Internal server error" : rawMessage;
-        this.broadcast(session, { type: "error", message: safeMessage });
+        this.broadcast(session, {
+          type: "error",
+          message: rawMessage,
+          ...(errnoErr.code ? { errorCode: errnoErr.code } : {}),
+          ...(stderrTail ? { stderrTail } : {}),
+        });
       }
     }
 
@@ -953,6 +983,30 @@ app.prepare().then(() => {
     console.log(`> Claw Chat ready on http://localhost:${port}`);
     console.log(`> WebSocket endpoint: ws://localhost:${port}/ws/chat`);
     console.log(`> API_ORIGIN: ${API_ORIGIN}`);
+
+    // SDK sanity probe. If the bundled entry can't be resolved, every chat
+    // query dies with a non-obvious ENOENT. Logging the resolved path + SDK
+    // version on boot means the operator sees the problem immediately.
+    void (async () => {
+      try {
+        const sdkEntry = require.resolve("@anthropic-ai/claude-agent-sdk");
+        await access(sdkEntry);
+        let version = "(version unknown)";
+        try {
+          const sdkPkg = JSON.parse(
+            readFileSync(join(dirname(sdkEntry), "package.json"), "utf-8"),
+          ) as { version?: string };
+          if (sdkPkg.version) version = `v${sdkPkg.version}`;
+        } catch { /* non-fatal */ }
+        console.log(`> SDK resolved: ${sdkEntry} (${version})`);
+      } catch (err) {
+        console.warn(
+          `!! Could not resolve @anthropic-ai/claude-agent-sdk: ${(err as Error).message}. ` +
+          `Chat queries will fail. Inside the container, run 'npm install' in /app.`,
+        );
+      }
+    })();
+
     // Self-loop guard — if NEXT_PUBLIC_API_ORIGIN points at the chat's own
     // host or a localhost default, every /api/v1/auth/me call from the
     // session-establishment route hits us instead of the ClawOps backend

@@ -42,9 +42,12 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/sdk-loader.js ./sdk-loader.js
-COPY --from=builder /app/src/lib/auth-server.js ./src/lib/auth-server.js
-COPY --from=builder /app/src/lib/claude-status.js ./src/lib/claude-status.js
-COPY --from=builder /app/src/lib/terminal-shell.js ./src/lib/terminal-shell.js
+# Ship the entire compiled lib dir, not hand-picked files. tsc follows
+# server.ts's import graph and can emit new src/lib/*.js any time a new
+# import lands; allowlisting specific files broke the container the
+# moment bitbucket-custom-config was imported. Directory copy removes
+# that footgun — ~20 small files, both .ts and .js, no meaningful bloat.
+COPY --from=builder /app/src/lib ./src/lib
 COPY --from=builder /app/next.config.ts ./next.config.ts
 COPY --from=builder /app/package.json ./package.json
 

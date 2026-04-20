@@ -56,9 +56,19 @@ export async function safePath(userPath: string): Promise<string> {
     }
   }
 
-  // Validate the resolved path is within the base directory
+  // Validate the resolved path is within the base directory.
+  // Special case: when BASE_DIR is filesystem root ("/"), the naive
+  //   `resolved.startsWith(normalizedBase + sep)`
+  // becomes `startsWith("//")` which no real path matches — so every
+  // child directory would 403 even though root grants everything. Treat
+  // root-as-base as "accept any absolute path".
   const normalizedBase = await getBaseDir();
-  if (!resolved.startsWith(normalizedBase + sep) && resolved !== normalizedBase) {
+  const isRootBase = normalizedBase === sep;
+  if (
+    !isRootBase &&
+    !resolved.startsWith(normalizedBase + sep) &&
+    resolved !== normalizedBase
+  ) {
     throw new SafePathError(`Access denied: path is outside the allowed directory`);
   }
 

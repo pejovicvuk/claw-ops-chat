@@ -18,6 +18,11 @@ interface McpServerInfo {
 /** IDs of MCP servers that belong to the Google Workspace group. */
 const GOOGLE_IDS = new Set(["gmail", "google-drive", "google-calendar"]);
 
+interface SimpleIntegrationStatus {
+  /** GitHub: tokenSaved + registered; Bitbucket: saved. */
+  connected: boolean;
+}
+
 /**
  * Derive an overall `ConnectionStatus` for a group of sub-services.
  * Returns "connected" only if ALL listed services are connected.
@@ -42,6 +47,8 @@ export function SettingsConnectionsPage() {
   const [claudeStatus, setClaudeStatus] = useState<ConnectionStatus>("unknown");
   const [cliAvailable, setCliAvailable] = useState<boolean | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerInfo[] | null>(null);
+  const [githubStatus, setGithubStatus] = useState<ConnectionStatus>("unknown");
+  const [bitbucketStatus, setBitbucketStatus] = useState<ConnectionStatus>("unknown");
   const { setParam } = useUrlState();
 
   // Claude Code auth status.
@@ -89,6 +96,36 @@ export function SettingsConnectionsPage() {
     };
   }, []);
 
+  // GitHub + Bitbucket are simple token-based integrations — one status probe each.
+  useEffect(() => {
+    let cancelled = false;
+    authFetch(`${BASE}/api/github-custom/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((data: { tokenSaved?: boolean; registered?: boolean } | null) => {
+        if (cancelled) return;
+        setGithubStatus(data?.tokenSaved && data?.registered ? "connected" : "disconnected");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    authFetch(`${BASE}/api/bitbucket-custom/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((data: SimpleIntegrationStatus | { saved?: boolean } | null) => {
+        if (cancelled) return;
+        const saved = (data as { saved?: boolean } | null)?.saved ?? false;
+        setBitbucketStatus(saved ? "connected" : "disconnected");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const googleStatus = aggregateStatus(mcpServers, GOOGLE_IDS);
   const microsoftStatus = singleStatus(mcpServers, "microsoft-365");
 
@@ -115,14 +152,16 @@ export function SettingsConnectionsPage() {
         icon={<FiGithub size={16} />}
         name="GitHub"
         description="Access repositories, issues, and pull requests"
-        status="coming-soon"
+        status={githubStatus}
+        onClick={() => setParam("settings", "connections/github")}
       />
 
       <ConnectionRow
         icon={<FiGitBranch size={16} />}
         name="Bitbucket"
-        description="Access repositories and pull requests"
-        status="coming-soon"
+        description="Access repositories and pull requests (read-only)"
+        status={bitbucketStatus}
+        onClick={() => setParam("settings", "connections/bitbucket")}
       />
 
       <ConnectionRow

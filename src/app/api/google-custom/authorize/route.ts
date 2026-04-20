@@ -35,6 +35,19 @@ export async function POST(request: Request) {
 
       write({ type: "status", message: "Starting workspace-mcp..." });
 
+      // workspace-mcp binds its own HTTP server for the OAuth callback. It
+      // honours PORT + WORKSPACE_MCP_PORT from the environment. The chat
+      // app is itself listening on PORT=3100, so if we let ...process.env
+      // leak through untouched, workspace-mcp picks 3100, collides with the
+      // chat, logs "Minimal OAuth server is already running" and never
+      // emits the authorization URL — the SSE stream hangs forever.
+      //
+      // Pin the MCP callback server to a high port that nothing else in
+      // the container uses. claw-nginx sidecar proxies
+      // /chat/api/google-custom/oauth-callback → localhost:MCP_PORT so
+      // Google's redirect can reach it through the chat's public URL.
+      const MCP_PORT = process.env.WORKSPACE_MCP_PORT || "8765";
+
       let child: ChildProcess;
       try {
         child = spawn("uvx", ["workspace-mcp", "--tool-tier", "core"], {
@@ -45,6 +58,8 @@ export async function POST(request: Request) {
             ...process.env,
             GOOGLE_OAUTH_CLIENT_ID: creds.clientId,
             GOOGLE_OAUTH_CLIENT_SECRET: creds.clientSecret,
+            PORT: MCP_PORT,
+            WORKSPACE_MCP_PORT: MCP_PORT,
           }),
         });
       } catch (err) {
@@ -63,16 +78,42 @@ export async function POST(request: Request) {
 
       let urlEmitted = false;
       let registered = false;
+      // Tail of recent stderr lines. Dumped when the process exits without
+      // emitting a URL so the UI can show why it stalled.
+      const stderrTail: string[] = [];
+
+      // Fail-fast timer: if no URL arrives within 45s, kill the MCP process
+      // and report what we have. Better than the UI spinning forever.
+      const URL_TIMEOUT_MS = 45_000;
+      const urlTimeout = setTimeout(() => {
+        if (!urlEmitted && !registered) {
+          write({
+            type: "done",
+            success: false,
+            error:
+              "Timed out waiting for authorization URL. workspace-mcp started but never emitted one. " +
+              "Common causes: port collision, missing OAuth credentials, or an OAuth-client-id / redirect-URI mismatch.",
+            stderrTail: stderrTail.slice(-15).join("\n"),
+          });
+          if (!child.killed) child.kill();
+        }
+      }, URL_TIMEOUT_MS);
 
       function processLine(line: string): void {
         const trimmed = line.trim();
         if (!trimmed) return;
+
+        // Keep a rolling window of the last 30 stderr-ish lines so we can
+        // dump them on timeout / error exit.
+        stderrTail.push(trimmed);
+        if (stderrTail.length > 30) stderrTail.shift();
 
         // First Google OAuth URL → forward to UI.
         if (!urlEmitted) {
           const match = trimmed.match(URL_RE);
           if (match) {
             urlEmitted = true;
+            clearTimeout(urlTimeout);
             write({ type: "url", url: match[1] });
           }
         }
@@ -112,11 +153,17 @@ export async function POST(request: Request) {
       });
 
       child.on("close", (code) => {
+        clearTimeout(urlTimeout);
         if (!registered) {
           write({
             type: "done",
             success: code === 0,
-            ...(code !== 0 ? { error: `Process exited with code ${code}` } : {}),
+            ...(code !== 0
+              ? {
+                  error: `workspace-mcp exited with code ${code} before authorization completed.`,
+                  stderrTail: stderrTail.slice(-15).join("\n"),
+                }
+              : {}),
           });
         }
         closed = true;
@@ -128,7 +175,13 @@ export async function POST(request: Request) {
       });
 
       child.on("error", (err) => {
-        write({ type: "done", success: false, error: err.message });
+        clearTimeout(urlTimeout);
+        write({
+          type: "done",
+          success: false,
+          error: err.message,
+          stderrTail: stderrTail.slice(-15).join("\n"),
+        });
         closed = true;
         try {
           controller.close();
@@ -139,6 +192,7 @@ export async function POST(request: Request) {
 
       // Abort if the client disconnects.
       request.signal.addEventListener("abort", () => {
+        clearTimeout(urlTimeout);
         if (!child.killed) child.kill();
       });
     },

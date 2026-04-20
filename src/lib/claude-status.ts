@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import { execSync } from "child_process";
 import { join, dirname } from "path";
 
@@ -38,21 +38,47 @@ export function detectClaude(): ClaudeInfo {
     // not installed system-wide
   }
 
-  // 2. Try bundled SDK cli.js
+  // 2. Try the bundled SDK. The SDK has changed layout across versions:
+  //    - v0.1.x shipped a sibling `cli.js` that could be invoked via `node cli.js --version`.
+  //    - v0.2.x ships `sdk.mjs` as its sole entry and manages the Claude binary internally.
+  //    If either file is present, the SDK is installed and chat will work.
   try {
     const sdkMain = require.resolve("@anthropic-ai/claude-agent-sdk");
-    const sdkCli = join(dirname(sdkMain), "cli.js");
+    const sdkDir = dirname(sdkMain);
+    const sdkCli = join(sdkDir, "cli.js");
     if (existsSync(sdkCli)) {
       const version = getVersion(sdkCli);
       if (version) {
         return { available: true, version, path: normalizePath(sdkCli) };
       }
     }
+    // Modern SDK (v0.2+) — no sibling cli.js; the .mjs entry is proof enough.
+    if (existsSync(sdkMain)) {
+      const sdkVersion = readSdkVersion(sdkDir);
+      return {
+        available: true,
+        version: sdkVersion ? `sdk ${sdkVersion}` : "sdk",
+        path: normalizePath(sdkMain),
+      };
+    }
   } catch {
     // SDK not installed
   }
 
   return { available: false, error: "Claude Code CLI is not installed" };
+}
+
+/** Read the SDK package.json version without invoking any binary. */
+function readSdkVersion(sdkDir: string): string | null {
+  try {
+    const pkgPath = join(sdkDir, "package.json");
+    if (!existsSync(pkgPath)) return null;
+    const raw = readFileSync(pkgPath, "utf-8");
+    const pkg = JSON.parse(raw) as { version?: string };
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /** Run the executable with --version and return the output. */

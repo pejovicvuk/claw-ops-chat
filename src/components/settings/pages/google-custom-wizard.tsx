@@ -14,6 +14,7 @@ import {
   FiTerminal,
 } from "react-icons/fi";
 import { authFetch } from "@/lib/auth";
+import { GoogleSetupTerminal } from "@/components/settings/google-setup-terminal";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -57,6 +58,14 @@ export function GoogleCustomWizard() {
   const [logs, setLogs] = useState<string[]>([]);
   const [authError, setAuthError] = useState<string | null>(null);
   const [urlCopied, setUrlCopied] = useState(false);
+
+  // Terminal-based setup state
+  const [setupTerminal, setSetupTerminal] = useState<{
+    command: string;
+    callbackUrl: string;
+  } | null>(null);
+  const [setupBooting, setSetupBooting] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -176,6 +185,38 @@ export function GoogleCustomWizard() {
       /* ignore */
     }
   }, [authUrl]);
+
+  // Interactive-terminal setup path. Unlike the SSE authorize flow (which
+  // hangs because workspace-mcp only emits the OAuth URL on the first MCP
+  // tool call), this path spawns workspace-mcp in a real PTY the user can
+  // see and interact with. The server writes a helper script with all the
+  // right env vars + the public redirect URI, and we run it here.
+  const openSetupTerminal = useCallback(async () => {
+    if (setupBooting) return;
+    setSetupBooting(true);
+    setSetupError(null);
+    try {
+      const res = await authFetch(`${BASE}/api/google-custom/setup-script`, { method: "POST" });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error || `Setup failed (${res.status})`);
+      }
+      const data = (await res.json()) as { scriptPath: string; callbackUrl: string };
+      setSetupTerminal({
+        command: `bash ${data.scriptPath}`,
+        callbackUrl: data.callbackUrl,
+      });
+    } catch (err) {
+      setSetupError(err instanceof Error ? err.message : "Failed to prepare setup");
+    } finally {
+      setSetupBooting(false);
+    }
+  }, [setupBooting]);
+
+  const closeSetupTerminal = useCallback(() => {
+    setSetupTerminal(null);
+    void refreshStatus();
+  }, [refreshStatus]);
 
   // ───────────── Rendering ─────────────
 
@@ -494,19 +535,50 @@ export function GoogleCustomWizard() {
           <span className="font-medium">Advanced → Go to …</span> to continue. It&apos;s safe since
           you own the OAuth app.
         </p>
-        <button
-          type="button"
-          onClick={startAuthorize}
-          disabled={!status.credentialsConfigured}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
-        >
-          <FiExternalLink size={12} />
-          Sign in with Google
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={openSetupTerminal}
+            disabled={!status.credentialsConfigured || setupBooting}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+          >
+            <FiTerminal size={12} />
+            {setupBooting ? "Preparing…" : "Run Setup in Terminal"}
+          </button>
+          <button
+            type="button"
+            onClick={startAuthorize}
+            disabled={!status.credentialsConfigured}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[12px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+            title="Legacy SSE flow — use the terminal path above if this hangs"
+          >
+            <FiExternalLink size={12} />
+            Classic sign-in
+          </button>
+        </div>
+        {setupError && (
+          <p className="mt-2 flex items-center gap-1 text-[11px] text-red-500">
+            <FiAlertTriangle size={10} />
+            {setupError}
+          </p>
+        )}
+        <p className="mt-2 text-[10px] text-canvas-muted">
+          The terminal path runs <code>uvx workspace-mcp</code> in a live PTY inside the container
+          and proxies Google&apos;s OAuth callback back through the chat&apos;s public URL — use it
+          when the classic sign-in hangs on a remote deployment.
+        </p>
       </div>
 
       {authorizedEmail && (
         <p className="text-[11px] text-green-500">Authorized as {authorizedEmail}</p>
+      )}
+
+      {setupTerminal && (
+        <GoogleSetupTerminal
+          initialCommand={setupTerminal.command}
+          callbackUrl={setupTerminal.callbackUrl}
+          onClose={closeSetupTerminal}
+        />
       )}
     </div>
   );

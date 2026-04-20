@@ -7,6 +7,7 @@ behind an Nginx reverse proxy with WebSocket support.
 
 ```
 prod-example/
+├── bootstrap.sh           # full-bootstrap entry point (deps + installer)
 ├── install.sh             # one-shot installer (idempotent)
 ├── docker-compose.yml     # reference compose (installer renders its own)
 ├── env.example            # reference env vars (installer writes .env for you)
@@ -21,49 +22,57 @@ prod-example/
 ### Option 1 — Automated via ClawOps
 
 In the ClawOps dashboard, open the server's panel and click **Install Chat
-App**. Enter the authorized email and confirm. The installer runs
-`install.sh` remotely, auto-detects SSL certs at
+App**. Enter the authorized email and confirm. The backend runs
+`bootstrap.sh` remotely, which installs every dependency (Docker, Node,
+Claude CLI), auto-detects SSL certs at
 `/etc/letsencrypt/live/<hostname>/`, and brings the stack up.
 
-### Option 2 — Manual
+### Option 2 — Manual one-liner
 
-1. Copy this folder to the server (e.g. `/opt/claw-chat-src`):
+One command on a fresh VPS, root shell:
 
-   ```sh
-   scp -r prod-example user@server:/tmp/claw-chat-src
-   ssh user@server
-   cd /tmp/claw-chat-src
-   ```
+```sh
+curl -fsSL https://raw.githubusercontent.com/pejovicvuk/claw-ops-chat/main/prod-example/bootstrap.sh \
+  | sudo -E HOSTNAME=chat.example.com \
+             ALLOWED_EMAIL=me@example.com \
+             INSTALLER_TAG=v0.4.0 \
+             INSTALLER_SHA256=<sha256-from-release> \
+             bash
+```
 
-2. Run the installer with required env vars:
+`INSTALLER_TAG=latest` + `INSTALLER_SHA256=skip` works on unpinned dev
+installs, but the SHA check should be used for anything you rely on.
 
-   ```sh
-   HOSTNAME=chat.example.com \
-   ALLOWED_EMAIL=me@example.com \
-   bash install.sh
-   ```
+Optional overrides (accepted by `install.sh`, pass them through to
+`bootstrap.sh` via the same `sudo -E` env):
 
-   Optional overrides:
+```sh
+NEXT_PUBLIC_API_ORIGIN=https://api.example.com  # default: https://$HOSTNAME
+SESSION_SECRET=$(openssl rand -hex 48)          # default: auto-generated
+ALLOWED_ORIGINS=https://chat.example.com        # default: https://$HOSTNAME
+APP_DIR=/opt/claw-chat                          # install location
+```
 
-   ```sh
-   NEXT_PUBLIC_API_ORIGIN=https://api.example.com  # default: https://$HOSTNAME
-   SESSION_SECRET=$(openssl rand -hex 48)          # default: auto-generated
-   ALLOWED_ORIGINS=https://chat.example.com        # default: https://$HOSTNAME
-   APP_DIR=/opt/claw-chat                          # install location
-   ```
+`bootstrap.sh` runs, in order:
 
-3. The installer will:
-   - Install Docker if missing.
-   - Stop any host `nginx` service (frees port 80/443 for the sidecar).
-   - Detect certs at `/etc/letsencrypt/live/$HOSTNAME/` and pick the right
-     nginx template (HTTP-only vs HTTPS).
-   - Render `/opt/claw-chat/.env`, `docker-compose.yml`, and
+1. `apt update && apt upgrade -y` (or `yum update -y` on RHEL-family).
+2. Installs curl, openssl, tar, sed, ca-certificates, gnupg, sudo.
+3. Installs Docker (via `get.docker.com`) + `docker-compose-plugin`;
+   enables the daemon on boot.
+4. Installs Node.js 20 + npm, then `@anthropic-ai/claude-code` globally.
+5. Removes any stale host-nginx `openclaw-managed` config for `$HOSTNAME`.
+6. Downloads + SHA256-verifies `installer.tar.gz` for the pinned tag.
+7. Extracts and `exec`s `install.sh`, which:
+   - Stops any host `nginx` service (frees port 80/443 for the sidecar).
+   - Detects certs at `/etc/letsencrypt/live/$HOSTNAME/` and picks the
+     right nginx template (HTTP-only vs HTTPS).
+   - Renders `/opt/claw-chat/.env`, `docker-compose.yml`, and
      `nginx/default.conf`.
-   - Run `docker compose pull` and `docker compose up -d`.
-   - Wait (up to ~60 s) for the `claw-chat` health check to pass.
+   - `docker compose pull && docker compose up -d`.
+   - Waits (up to ~60 s) for the `claw-chat` health check to pass.
 
-4. Open the app: `https://<HOSTNAME>/chat` (or `http://<HOSTNAME>/chat` if
-   certs were absent).
+Open the app at `https://<HOSTNAME>/chat` (or `http://<HOSTNAME>/chat` if
+certs were absent).
 
 Check logs with `sudo docker compose -f /opt/claw-chat/docker-compose.yml logs -f claw-chat`.
 

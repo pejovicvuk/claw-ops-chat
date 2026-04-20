@@ -30,12 +30,18 @@ echo "   App dir:  $APP_DIR"
 echo "   Email:    $ALLOWED_EMAIL"
 
 # ── 1. Docker ──────────────────────────────────────────────────────────
+# bootstrap.sh (the recommended entry point) guarantees docker + compose
+# plugin are present. When install.sh is run standalone from the manual
+# option in README.md, fall back to installing Docker ourselves; the
+# compose plugin must already be there or the install cannot proceed.
 if ! command -v docker >/dev/null 2>&1; then
   echo "-- Installing Docker..."
   curl -fsSL https://get.docker.com | sh
 fi
 if ! docker compose version >/dev/null 2>&1; then
-  echo "!! 'docker compose' plugin not available. Install docker-compose-plugin and re-run." >&2
+  echo "!! 'docker compose' plugin not available." >&2
+  echo "   Either run bootstrap.sh (which installs it), or install" >&2
+  echo "   'docker-compose-plugin' manually and re-run." >&2
   exit 1
 fi
 
@@ -125,7 +131,10 @@ else
 fi
 if [ ! -f "$SRC_CONF" ]; then
   echo "!! Template not found: $SRC_CONF" >&2
-  echo "   Did you run this script from the prod-example directory?" >&2
+  echo "   Expected nginx/http-only.conf and nginx/https.conf next to this script." >&2
+  echo "   If you invoked install.sh directly: run bootstrap.sh instead, or" >&2
+  echo "   download the full installer bundle (installer.tar.gz) from" >&2
+  echo "   https://github.com/pejovicvuk/claw-ops-chat/releases and extract it." >&2
   exit 1
 fi
 sudo sed "s|{{HOSTNAME}}|$HOSTNAME|g" "$SRC_CONF" \

@@ -34,6 +34,10 @@ step() { printf '\n== [%s] %s\n' "$(date +%H:%M:%S)" "$*"; }
 warn() { printf '!! %s\n' "$*" >&2; }
 die()  { printf '!! %s\n' "$*" >&2; exit 1; }
 
+# Announce whatever command fails under `set -e` so the log shows where we
+# died instead of just ending mid-stream.
+trap 'ec=$?; printf "\n!! bootstrap failed (exit=%s) near line %s: %s\n" "$ec" "${LINENO}" "${BASH_COMMAND}" >&2; exit $ec' ERR
+
 # ── Detect package manager ─────────────────────────────────────────────
 if [ -r /etc/os-release ]; then
   # shellcheck disable=SC1091
@@ -127,10 +131,14 @@ fi
 # Abort early if port 80 is held by a non-nginx, non-docker-proxy process —
 # that means something else (traefik, caddy, a bespoke daemon) owns ingress
 # and we would break it. docker-proxy is fine (that's us on re-runs).
+#
+# The `|| true` on the pipeline is LOAD-BEARING: when port 80 is free the
+# grep returns exit 1, and under `set -euo pipefail` the whole script
+# would die silently right here with no diagnostic.
 if command -v ss >/dev/null 2>&1; then
-  PORT80_HOLDER="$(ss -lntpH 'sport = :80' 2>/dev/null | awk '{print $NF}' | grep -oE 'users:\(\("[^"]+"' | head -n1 | sed 's/.*"\([^"]*\)".*/\1/')"
+  PORT80_HOLDER="$( (ss -lntpH 'sport = :80' 2>/dev/null | awk '{print $NF}' | grep -oE 'users:\(\("[^"]+"' | head -n1 | sed 's/.*"\([^"]*\)".*/\1/') || true )"
   case "${PORT80_HOLDER:-}" in
-    ''|nginx|docker-proxy|claw-nginx) ;;
+    ''|nginx|docker-proxy|claw-nginx) step "Port 80 holder: '${PORT80_HOLDER:-<none>}' — OK" ;;
     *) die "Port 80 is held by '$PORT80_HOLDER' — refusing to clobber it. Stop it first." ;;
   esac
 fi

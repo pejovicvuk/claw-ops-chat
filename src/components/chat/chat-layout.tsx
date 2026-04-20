@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  FiMessageCircle,
   FiX,
   FiFolder,
   FiCheck,
@@ -223,36 +222,18 @@ export function ChatLayout({
           style={{ zIndex: Z_INDEX.MODAL - 1, opacity: 0, transition: "opacity 100ms" }}
         />
 
-        {/* Mobile top toolbar — flows at the top of the flex column so
-            ChatView naturally sits below it (no fixed-position overlap
-            with content). Single left-aligned icon opens the sessions
-            drawer; looks like a real toolbar with border + subtle glass. */}
+        {/* Mobile only renders ChatView — it owns the single top toolbar
+            now (Mode/Effort pills + sessions button), so we don't stack
+            a second bar above it. Reserve safe-area-top for the notch. */}
         <div
-          className="shrink-0 border-b border-canvas-border bg-canvas-bg/95"
-          style={{
-            paddingTop: "max(env(safe-area-inset-top, 0px), 6px)",
-            backdropFilter: "blur(8px)",
-            WebkitBackdropFilter: "blur(8px)",
-          }}
+          className="flex min-h-0 flex-1 flex-col"
+          style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 0px)" }}
         >
-          <div className="flex items-center gap-2 px-2 py-1.5">
-            <button
-              type="button"
-              onClick={() => setSidebarOpen(true)}
-              aria-label="Open conversations"
-              className="flex h-9 w-9 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-95"
-            >
-              <FiMessageCircle size={18} />
-            </button>
-          </div>
-        </div>
-
-        <div className="flex min-h-0 flex-1 flex-col">
           <ChatView
-            key={sessionId}
             sessionId={sessionId}
             resumeSessionId={selectedSessionId}
             onSessionCreated={onSessionCreated}
+            onOpenSessions={() => setSidebarOpen(true)}
             headerless
             fileButton={
               <div className="flex items-center">

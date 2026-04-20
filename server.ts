@@ -337,6 +337,18 @@ class SessionManager {
         resolver(msg);
         session.pendingRequests.delete(id);
       }
+      // Purge the original prompt from eventHistory so a reconnecting
+      // client (or another tab) doesn't re-surface an already-answered
+      // modal. Without this, every route change / page reload showed
+      // the same Bash approval again.
+      session.eventHistory = session.eventHistory.filter((e) => {
+        const t = e.type;
+        if (t !== "permission_request" && t !== "ask_question") return true;
+        return e.id !== id;
+      });
+      // Broadcast a resolution marker so other open tabs watching the
+      // same session can also drop the prompt from their UI state.
+      this.broadcast(session, { type: "permission_resolved", id });
       session.accumulatedText = "";
       return;
     }

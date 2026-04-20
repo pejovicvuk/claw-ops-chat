@@ -2,8 +2,17 @@
 
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FiArrowLeft, FiShield, FiChevronDown, FiTerminal, FiFile, FiEdit } from "react-icons/fi";
+import {
+  FiArrowLeft,
+  FiShield,
+  FiChevronDown,
+  FiTerminal,
+  FiFile,
+  FiEdit,
+  FiMessageCircle,
+} from "react-icons/fi";
 import { useClaudeChat } from "@/lib/use-claude-chat";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
 import { fetchSessionMessages } from "@/lib/api";
 import { StatusIndicator } from "./status-indicator";
@@ -84,6 +93,10 @@ interface ChatViewProps {
   headerless?: boolean;
   fileButton?: ReactNode;
   onSessionCreated?: (claudeSessionId: string) => void;
+  /** Mobile-only: when provided, the Mode/Effort bar shows a chat-list
+      icon at the start that invokes this. Merges two stacked toolbars
+      into one on narrow viewports. */
+  onOpenSessions?: () => void;
 }
 
 export function ChatView({
@@ -93,7 +106,9 @@ export function ChatView({
   headerless,
   fileButton,
   onSessionCreated,
+  onOpenSessions,
 }: ChatViewProps) {
+  const isMobile = useIsMobile();
   const [sessionCwd, setSessionCwd] = useState<string | null>(null);
   const {
     messages,
@@ -301,22 +316,43 @@ export function ChatView({
         </div>
       )}
 
-      {/* Mode & Effort bar — compact single row */}
+      {/* Mode & Effort bar — compact single row. On mobile this IS the
+          top toolbar (headerless also true on mobile); on desktop it
+          sits below the main header. The sessions-list icon is
+          prepended only when onOpenSessions is provided (mobile path). */}
       <div
         className="relative flex shrink-0 items-center gap-2 px-3 pr-3 py-1.5"
         style={{
           borderBottom: "1px solid var(--canvas-border)",
-          paddingLeft: headerless ? "52px" : "12px",
+          // Desktop with full header keeps the original 12px left inset.
+          // Headerless desktop used to reserve 52px for the legacy top-left
+          // button that now lives in this bar — collapse to 12px instead.
+          paddingLeft: "12px",
         }}
       >
+        {isMobile && onOpenSessions && (
+          <button
+            type="button"
+            onClick={onOpenSessions}
+            aria-label="Open conversations"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-95"
+          >
+            <FiMessageCircle size={15} />
+          </button>
+        )}
         <button
           type="button"
           onClick={() => setShowModeMenu((v) => !v)}
-          className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
+          aria-label={`Permission mode: ${MODE_LABELS[permissionMode] ?? "Default"}`}
+          className={
+            isMobile
+              ? "flex h-7 w-7 items-center justify-center rounded-full text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
+              : "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
+          }
         >
-          <FiShield size={10} />
-          <span>{MODE_LABELS[permissionMode] ?? "Default"}</span>
-          <FiChevronDown size={8} />
+          <FiShield size={isMobile ? 13 : 10} />
+          {!isMobile && <span>{MODE_LABELS[permissionMode] ?? "Default"}</span>}
+          {!isMobile && <FiChevronDown size={8} />}
         </button>
 
         <div className="h-3 w-px bg-canvas-border" />
@@ -324,6 +360,11 @@ export function ChatView({
         <div className="flex items-center gap-0.5 rounded-full bg-canvas-surface-hover p-0.5">
           {EFFORT_OPTIONS.map((opt) => {
             const isActive = (opt.value === "" && !effortLevel) || opt.value === effortLevel;
+            // On mobile only show the active effort as a tight pill with
+            // the letter (A/L/M/H/X) — tapping the row still lets the user
+            // cycle through by clicking on different letters in the
+            // compressed strip. Keeps the full picker visible on desktop.
+            const mobileLabel = opt.value === "" ? "A" : opt.label.charAt(0);
             return (
               <button
                 key={opt.value}
@@ -333,13 +374,14 @@ export function ChatView({
                   setEffortLevel(val);
                   setEffort(val);
                 }}
-                className={`rounded-full px-2 py-0.5 text-[9px] font-medium transition-all duration-200 ${
+                aria-label={`Effort: ${opt.label}`}
+                className={`rounded-full ${isMobile ? "min-w-[18px] px-1 py-0.5 text-[10px]" : "px-2 py-0.5 text-[9px]"} font-medium transition-all duration-200 ${
                   isActive
                     ? "bg-canvas-bg text-canvas-fg shadow-sm"
                     : "text-canvas-muted hover:text-canvas-fg"
                 }`}
               >
-                {opt.label}
+                {isMobile ? mobileLabel : opt.label}
               </button>
             );
           })}

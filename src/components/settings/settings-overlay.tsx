@@ -11,6 +11,8 @@ import { SettingsConnectionsPage } from "./pages/settings-connections-page";
 import { SettingsClaudePage } from "./pages/settings-claude-page";
 import { SettingsGooglePage } from "./pages/settings-google-page";
 import { SettingsMicrosoftPage } from "./pages/settings-microsoft-page";
+import { SettingsGithubPage } from "./pages/settings-github-page";
+import { SettingsBitbucketPage } from "./pages/settings-bitbucket-page";
 import { SettingsTerminalPage } from "./pages/settings-terminal-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -21,6 +23,8 @@ type PageKey =
   | "connections/claude"
   | "connections/google"
   | "connections/microsoft"
+  | "connections/github"
+  | "connections/bitbucket"
   | "terminal";
 
 interface PageInfo {
@@ -38,6 +42,8 @@ const PAGES: Record<PageKey, PageInfo> = {
   "connections/claude": { title: "Claude Code", parent: "connections" },
   "connections/google": { title: "Google Workspace", parent: "connections" },
   "connections/microsoft": { title: "Microsoft 365", parent: "connections" },
+  "connections/github": { title: "GitHub", parent: "connections" },
+  "connections/bitbucket": { title: "Bitbucket", parent: "connections" },
   terminal: { title: "Terminal", parent: "main", wide: true },
 };
 
@@ -152,6 +158,8 @@ export function SettingsOverlay() {
           {page === "connections/claude" && <SettingsClaudePage />}
           {page === "connections/google" && <SettingsGooglePage />}
           {page === "connections/microsoft" && <SettingsMicrosoftPage />}
+          {page === "connections/github" && <SettingsGithubPage />}
+          {page === "connections/bitbucket" && <SettingsBitbucketPage />}
           {page === "terminal" && <SettingsTerminalPage />}
         </div>
 

@@ -15,6 +15,7 @@ const { query } = sdk as typeof import("@anthropic-ai/claude-agent-sdk");
 import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
+import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
 
 // node-pty has a native binding — require it lazily so the server can still
 // start if the binding is missing, and only blow up when the terminal is used.
@@ -419,6 +420,19 @@ class SessionManager {
       },
       ...(session.effort ? { effort: session.effort } : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      // If the user saved Bitbucket creds in Settings, inject the three env
+      // vars the read-only bitbucket skill at /opt/skills/bitbucket/ reads.
+      // Loaded fresh from disk per-query so rotated tokens take effect
+      // without restarting the container.
+      env: (() => {
+        const bb = loadBitbucketCredentials();
+        if (!bb) return undefined;
+        return {
+          ATLASSIAN_EMAIL: bb.email,
+          BITBUCKET_API_TOKEN: bb.apiToken,
+          BITBUCKET_WORKSPACE: bb.workspace,
+        };
+      })(),
       abortController,
       spawnClaudeCodeProcess: spawnClaude,
     };

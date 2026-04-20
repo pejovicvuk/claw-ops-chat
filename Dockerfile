@@ -34,6 +34,10 @@ RUN apk add --no-cache bash curl python3 git openssh-client \
 # all four must be present in the runner image.
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/.next ./.next
+# public/ holds manifest.json, favicons, PWA icons, and the push service
+# worker. Next.js standalone output does NOT copy this automatically; without
+# it every static-asset request (manifest, icons) 404s.
+COPY --from=builder /app/public ./public
 COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/sdk-loader.js ./sdk-loader.js
 COPY --from=builder /app/src/lib/auth-server.js ./src/lib/auth-server.js

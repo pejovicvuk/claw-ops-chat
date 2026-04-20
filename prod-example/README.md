@@ -7,29 +7,65 @@ behind an Nginx reverse proxy with WebSocket support.
 
 ```
 prod-example/
-├── docker-compose.yml     # claw-chat + nginx
-├── env.example            # rename to .env and fill in
+├── install.sh             # one-shot installer (idempotent)
+├── docker-compose.yml     # reference compose (installer renders its own)
+├── env.example            # reference env vars (installer writes .env for you)
 └── nginx/
-    └── default.conf       # proxy config (WS upgrade + optional HTTPS)
+    ├── default.conf       # legacy reference
+    ├── http-only.conf     # HTTP-only template (picked when no certs present)
+    └── https.conf         # HTTPS template (picked when /etc/letsencrypt/live/$HOSTNAME/ exists)
 ```
 
-## Quick start
+## Installation
 
-1. Copy this folder to the server (e.g. `/opt/claw-chat`) and `cd` into it.
-2. Create and edit the env file:
-   ```sh
-   mv env.example .env
-   nano .env        # fill in NEXT_PUBLIC_API_ORIGIN, ALLOWED_EMAIL, SESSION_SECRET, ALLOWED_ORIGINS
-   ```
-3. Pull the image and bring the stack up:
-   ```sh
-   docker compose pull
-   docker compose up -d
-   ```
-4. Point your domain's A record at the server. The app is served at
-   `http://<your-domain>/chat`.
+### Option 1 — Automated via ClawOps
 
-Check logs with `docker compose logs -f claw-chat`.
+In the ClawOps dashboard, open the server's panel and click **Install Chat
+App**. Enter the authorized email and confirm. The installer runs
+`install.sh` remotely, auto-detects SSL certs at
+`/etc/letsencrypt/live/<hostname>/`, and brings the stack up.
+
+### Option 2 — Manual
+
+1. Copy this folder to the server (e.g. `/opt/claw-chat-src`):
+
+   ```sh
+   scp -r prod-example user@server:/tmp/claw-chat-src
+   ssh user@server
+   cd /tmp/claw-chat-src
+   ```
+
+2. Run the installer with required env vars:
+
+   ```sh
+   HOSTNAME=chat.example.com \
+   ALLOWED_EMAIL=me@example.com \
+   bash install.sh
+   ```
+
+   Optional overrides:
+
+   ```sh
+   NEXT_PUBLIC_API_ORIGIN=https://api.example.com  # default: https://$HOSTNAME
+   SESSION_SECRET=$(openssl rand -hex 48)          # default: auto-generated
+   ALLOWED_ORIGINS=https://chat.example.com        # default: https://$HOSTNAME
+   APP_DIR=/opt/claw-chat                          # install location
+   ```
+
+3. The installer will:
+   - Install Docker if missing.
+   - Stop any host `nginx` service (frees port 80/443 for the sidecar).
+   - Detect certs at `/etc/letsencrypt/live/$HOSTNAME/` and pick the right
+     nginx template (HTTP-only vs HTTPS).
+   - Render `/opt/claw-chat/.env`, `docker-compose.yml`, and
+     `nginx/default.conf`.
+   - Run `docker compose pull` and `docker compose up -d`.
+   - Wait (up to ~60 s) for the `claw-chat` health check to pass.
+
+4. Open the app: `https://<HOSTNAME>/chat` (or `http://<HOSTNAME>/chat` if
+   certs were absent).
+
+Check logs with `sudo docker compose -f /opt/claw-chat/docker-compose.yml logs -f claw-chat`.
 
 ## Sign-in on first boot
 
@@ -38,47 +74,44 @@ CLI inside the container. Either:
 
 - **Settings → Terminal** in the UI (easiest) — run `claude auth login` from
   the in-browser terminal, or
-- `docker compose exec claw-chat claude auth login` from the server shell.
+- `sudo docker compose -f /opt/claw-chat/docker-compose.yml exec claw-chat claude auth login`
+  from the server shell.
 
 Credentials land in `/root/.claude/.credentials.json` on the host (the
 compose file mounts `/root:/root`), so they persist across container
 restarts.
 
-## Enabling HTTPS
+## Enabling HTTPS (post-install)
 
-The stack ships with HTTP only so it boots cleanly on first run. To add
-TLS:
+If you installed without certs and want to switch to HTTPS later:
 
-1. Get certs (Let's Encrypt via `certbot` on the host is the usual path):
+1. Issue a cert (the easiest route through ClawOps is to click **Provision
+   SSL** on the server's dashboard):
+
    ```sh
    sudo certbot certonly --standalone -d your.domain.tld
    ```
-2. Copy (or symlink) the cert files into `nginx/certs/`:
-   ```
-   nginx/certs/fullchain.pem
-   nginx/certs/privkey.pem
-   ```
-3. In [docker-compose.yml](docker-compose.yml):
-   - Uncomment `- "443:443"` under the nginx `ports:` block.
-   - Uncomment the `./nginx/certs:/etc/nginx/certs:ro` volume line.
-4. In [nginx/default.conf](nginx/default.conf):
-   - Uncomment the HTTPS `server { ... }` block and set `server_name` to
-     your domain.
-   - Change the HTTP block's `location /` to
-     `return 301 https://$host$request_uri;` to force redirects.
-5. `docker compose up -d` to apply.
-6. Also update `.env`:
-   `ALLOWED_ORIGINS=https://your.domain.tld`
-   (must match exactly — scheme + host, no trailing slash).
 
-Certbot renewals: run `docker compose exec nginx nginx -s reload` after
-each renewal to pick up the new cert.
+2. Re-run the installer from the same source folder:
+
+   ```sh
+   HOSTNAME=your.domain.tld ALLOWED_EMAIL=me@example.com bash install.sh
+   ```
+
+   It will detect the new certs, rewrite `docker-compose.yml` with the 443
+   port + cert mount, swap nginx to the HTTPS template, and `docker
+   compose up -d` to apply.
+
+Certbot renewals: run
+`sudo docker compose -f /opt/claw-chat/docker-compose.yml exec nginx nginx -s reload`
+after renewal to pick up the new cert, or re-run `install.sh`.
 
 ## Updating
 
 ```sh
-docker compose pull
-docker compose up -d
+cd /opt/claw-chat
+sudo docker compose pull
+sudo docker compose up -d
 ```
 
 Docker will recreate `claw-chat` with the new image; existing volumes and
@@ -92,6 +125,6 @@ cookies survive.
   working directories you actually need.
 - The container drops all Linux capabilities except `NET_BIND_SERVICE`
   and runs behind Nginx, so nothing in the container listens on a host
-  port directly — only Nginx does.
+  port directly — only the `claw-nginx` sidecar does.
 - The in-browser Terminal page gives anyone who can sign in a full shell
   inside the container. Set `DISABLE_TERMINAL=1` in `.env` to turn it off.

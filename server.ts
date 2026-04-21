@@ -16,6 +16,7 @@ import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
 import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
+import { existsSync, readdirSync, statSync } from "fs";
 import {
   setSessionStatus,
   clearSessionStatus,
@@ -174,6 +175,31 @@ interface ChatSession {
    * so the first client to reconnect sees a banner.
    */
   wasInterrupted: boolean;
+}
+
+/**
+ * Check whether Claude Code has a persisted JSONL file for the given
+ * session id. The SDK writes conversation history to
+ * ~/.claude/projects/<project-hash>/<session-id>.jsonl once a session
+ * has produced at least one assistant turn. Used to decide whether a
+ * UUID-shaped sessionId coming in over the WebSocket represents a real
+ * resumable conversation or a brand-new chat the client just invented.
+ */
+function claudeSessionFileExists(sessionId: string): boolean {
+  const projectsDir = join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return false;
+  const target = `${sessionId}.jsonl`;
+  try {
+    for (const proj of readdirSync(projectsDir)) {
+      const projPath = join(projectsDir, proj);
+      const s = statSync(projPath, { throwIfNoEntry: false });
+      if (!s || !s.isDirectory()) continue;
+      if (existsSync(join(projPath, target))) return true;
+    }
+  } catch {
+    /* ignore read errors */
+  }
+  return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -343,10 +369,21 @@ class SessionManager {
     const session = this.getOrCreateSession(sessionId);
     session.clients.add(ws);
 
-    // If sessionId looks like a UUID, set it as the claudeSessionId for resume
+    // Only treat a UUID-shaped sessionId as a resumable SDK session when
+    // Claude Code has actually written a JSONL file for it. Previously
+    // ANY UUID got auto-bound as claudeSessionId, so a fresh chat
+    // (handleNewChat generates a client-side UUID) would be passed into
+    // query({ resume: <fake-uuid> }) → SDK throws "No conversation found
+    // with session ID…" and the first message silently fails.
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!session.claudeSessionId && UUID_RE.test(sessionId)) {
-      session.claudeSessionId = sessionId;
+      try {
+        if (claudeSessionFileExists(sessionId)) {
+          session.claudeSessionId = sessionId;
+        }
+      } catch {
+        /* best-effort — no resume if we can't verify */
+      }
     }
 
     // Store the original cwd so SDK resume can find the session file.
@@ -915,8 +952,27 @@ class SessionManager {
         }
       }
     } catch (err) {
+      const rawMessage0 = err instanceof Error ? err.message : "Unknown error";
+      // Resume-not-found surfaces here when the SDK throws DURING the
+      // for-await loop (rather than yielding a result message with
+      // is_error=true). Recover by wiping claudeSessionId and rerunning
+      // handleUserMessage — the user sees one spinner cycle, not a
+      // cryptic "No conversation found" error bubble.
+      if (
+        rawMessage0.toLowerCase().includes("no conversation found") ||
+        /returned an error result/i.test(rawMessage0)
+      ) {
+        session.claudeSessionId = null;
+        delete (queryParams.options as Record<string, unknown>).resume;
+        session.isProcessing = false;
+        session.abortController = null;
+        this.setStatus(session, "idle");
+        this.handleUserMessage(session, text);
+        return;
+      }
+
       session.accumulatedText = "";
-      const rawMessage = err instanceof Error ? err.message : "Unknown error";
+      const rawMessage = rawMessage0;
       const errnoErr = err as NodeJS.ErrnoException;
       // Dump the full error to the container log so operators have
       // errno/code/syscall/path/stack. This app runs in a single-user

@@ -13,6 +13,9 @@ import { SettingsGooglePage } from "./pages/settings-google-page";
 import { SettingsMicrosoftPage } from "./pages/settings-microsoft-page";
 import { SettingsGithubPage } from "./pages/settings-github-page";
 import { SettingsBitbucketPage } from "./pages/settings-bitbucket-page";
+import { SettingsSlackPage } from "./pages/settings-slack-page";
+import { SettingsLinearPage } from "./pages/settings-linear-page";
+import { SettingsJiraPage } from "./pages/settings-jira-page";
 import { SettingsTerminalPage } from "./pages/settings-terminal-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -25,6 +28,9 @@ type PageKey =
   | "connections/microsoft"
   | "connections/github"
   | "connections/bitbucket"
+  | "connections/slack"
+  | "connections/linear"
+  | "connections/jira"
   | "terminal";
 
 interface PageInfo {
@@ -44,6 +50,9 @@ const PAGES: Record<PageKey, PageInfo> = {
   "connections/microsoft": { title: "Microsoft 365", parent: "connections" },
   "connections/github": { title: "GitHub", parent: "connections" },
   "connections/bitbucket": { title: "Bitbucket", parent: "connections" },
+  "connections/slack": { title: "Slack", parent: "connections" },
+  "connections/linear": { title: "Linear", parent: "connections" },
+  "connections/jira": { title: "Jira", parent: "connections" },
   terminal: { title: "Terminal", parent: "main", wide: true },
 };
 
@@ -160,6 +169,9 @@ export function SettingsOverlay() {
           {page === "connections/microsoft" && <SettingsMicrosoftPage />}
           {page === "connections/github" && <SettingsGithubPage />}
           {page === "connections/bitbucket" && <SettingsBitbucketPage />}
+          {page === "connections/slack" && <SettingsSlackPage />}
+          {page === "connections/linear" && <SettingsLinearPage />}
+          {page === "connections/jira" && <SettingsJiraPage />}
           {page === "terminal" && <SettingsTerminalPage />}
         </div>
 

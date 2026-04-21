@@ -270,6 +270,36 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         return;
       }
 
+      if (type === "interrupted") {
+        // Server was restarted while this session was mid-turn. Surface
+        // a one-shot system message so the user knows their last query
+        // was cut short. lastUserMessage may be empty for very fresh
+        // sessions where nothing was persisted yet.
+        const lastMsg = typeof evt.lastUserMessage === "string" ? evt.lastUserMessage : "";
+        setMessages((prev) => {
+          // Dedup — if the user already has an "interrupted" system
+          // message as the most recent entry, don't add another.
+          const last = prev[prev.length - 1];
+          if (last && last.type === "error" && last.content.startsWith("[interrupted]")) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "system" as const,
+              type: "error" as const,
+              content: lastMsg
+                ? `[interrupted] The server restarted mid-turn. Your last message was: "${lastMsg.slice(0, 140)}${lastMsg.length > 140 ? "…" : ""}". Click Send again to resume, or start a new one.`
+                : "[interrupted] The server restarted mid-turn — previous turn lost. Send your next message to continue.",
+              timestamp: Date.now(),
+            },
+          ];
+        });
+        setStatus("idle");
+        return;
+      }
+
       if (type === "plan_proposal") {
         const planId = evt.id as string;
         if (resolvedPermissionsRef.current.has(planId)) {

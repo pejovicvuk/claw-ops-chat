@@ -21,6 +21,12 @@ import {
   clearSessionStatus,
   type SessionStatus,
 } from "./src/lib/session-status-store";
+import {
+  deleteSessionFile,
+  loadAllSessions,
+  persistSession,
+  type PersistedSession,
+} from "./src/lib/session-persistence";
 
 // node-pty has a native binding — require it lazily so the server can still
 // start if the binding is missing, and only blow up when the terminal is used.
@@ -155,6 +161,19 @@ interface ChatSession {
    * surface it to the sidebar without going through a WebSocket.
    */
   status: SessionStatus;
+  /**
+   * Last user message sent into this session. Persisted to disk so a
+   * post-restart client can show "Resume last: <msg>" when the prior
+   * turn was killed mid-stream.
+   */
+  lastUserMessage: string;
+  /**
+   * True when this session was rehydrated from disk and was in an
+   * active state (thinking/tool_running/awaiting_*) when the server
+   * died. The reconnect handler broadcasts an `interrupted` event once
+   * so the first client to reconnect sees a banner.
+   */
+  wasInterrupted: boolean;
 }
 
 /* ------------------------------------------------------------------ */
@@ -206,11 +225,56 @@ class SessionManager {
         abortController: null,
         sessionCwd: null,
         status: "idle",
+        lastUserMessage: "",
+        wasInterrupted: false,
       };
       this.sessions.set(sessionId, session);
       setSessionStatus(sessionId, "idle");
     }
     return session;
+  }
+
+  /**
+   * Reconstruct a session from disk. Called once at boot for every
+   * persisted session file. Runtime-only fields (clients, pending
+   * requests, rate-limit timestamps, abort controller, message queue)
+   * reset to empty; replayable state (eventHistory, claudeSessionId,
+   * permissionMode, allowed-tools set) survives.
+   */
+  restoreFromDisk(persisted: PersistedSession): void {
+    const midTurnStatus: SessionStatus[] = [
+      "thinking",
+      "tool_running",
+      "awaiting_permission",
+      "awaiting_input",
+    ];
+    const wasMidTurn = midTurnStatus.includes(persisted.status as SessionStatus);
+    const session: ChatSession = {
+      id: persisted.id,
+      clients: new Set(),
+      claudeSessionId: persisted.claudeSessionId ?? null,
+      isProcessing: false,
+      messageQueue: [],
+      pendingRequests: new Map(),
+      sessionAllowedTools: new Set(persisted.sessionAllowedTools ?? []),
+      permissionMode: persisted.permissionMode || "default",
+      effort: persisted.effort ?? null,
+      requestCounter: 0,
+      accumulatedText: persisted.accumulatedText ?? "",
+      messageTimestamps: [],
+      eventHistory: Array.isArray(persisted.eventHistory) ? persisted.eventHistory : [],
+      lastActivity: persisted.lastActivity || Date.now(),
+      abortController: null,
+      sessionCwd: persisted.sessionCwd ?? null,
+      // Status is always reset to "idle" on boot — whatever was in
+      // flight is gone. The wasInterrupted flag is what tells the
+      // client something was cut short.
+      status: "idle",
+      lastUserMessage: persisted.lastUserMessage ?? "",
+      wasInterrupted: wasMidTurn,
+    };
+    this.sessions.set(session.id, session);
+    setSessionStatus(session.id, "idle");
   }
 
   /**
@@ -223,6 +287,45 @@ class SessionManager {
     session.status = status;
     setSessionStatus(session.id, status);
     this.broadcast(session, { type: "status", status });
+    // Fire-and-forget disk persist so a crash between now and the next
+    // setStatus call doesn't forget this transition. Errors are logged
+    // but never thrown — persistence is belt-and-suspenders, not a
+    // correctness primitive.
+    this.queuePersist(session);
+  }
+
+  /**
+   * Coalesced disk persist — each call schedules a write on a microtask
+   * so a flurry of broadcasts (e.g. streaming text tokens) produces one
+   * file write instead of hundreds. Safe to fire on every event.
+   */
+  private pendingPersists = new Set<string>();
+  private queuePersist(session: ChatSession) {
+    if (this.pendingPersists.has(session.id)) return;
+    this.pendingPersists.add(session.id);
+    queueMicrotask(() => {
+      this.pendingPersists.delete(session.id);
+      this.persistNow(session).catch((err) => {
+        console.warn(`[session=${session.id}] persist failed:`, (err as Error).message);
+      });
+    });
+  }
+
+  private async persistNow(session: ChatSession): Promise<void> {
+    await persistSession({
+      id: session.id,
+      status: session.status,
+      permissionMode: session.permissionMode,
+      effort: session.effort,
+      claudeSessionId: session.claudeSessionId,
+      sessionCwd: session.sessionCwd,
+      eventHistory: session.eventHistory,
+      sessionAllowedTools: Array.from(session.sessionAllowedTools),
+      accumulatedText: session.accumulatedText,
+      lastActivity: session.lastActivity,
+      lastUserMessage: session.lastUserMessage,
+      wasInterrupted: session.wasInterrupted,
+    });
   }
 
   connect(ws: WebSocket, sessionId: string, sessionCwd?: string) {
@@ -259,6 +362,19 @@ class SessionManager {
     // the disconnect — often showing "thinking…" forever, or worse,
     // silently missing the fact that a permission prompt is pending.
     this.send(ws, { type: "status", status: session.status });
+
+    // If the server was restarted while this session was mid-turn,
+    // surface a one-shot "interrupted" event so the UI can render a
+    // banner + Resume action. Fires only for the first client on the
+    // first reconnect — after that we clear the flag and persist.
+    if (session.wasInterrupted) {
+      this.send(ws, {
+        type: "interrupted",
+        lastUserMessage: session.lastUserMessage || "",
+      });
+      session.wasInterrupted = false;
+      this.queuePersist(session);
+    }
 
     // Heartbeat: detect dead connections
     let alive = true;
@@ -329,6 +445,9 @@ class SessionManager {
 
     if (type === "message") {
       const text = msg.text as string;
+      // Remember the last user-sent text for post-restart Resume UX.
+      session.lastUserMessage = text;
+      this.queuePersist(session);
       if (session.isProcessing) {
         session.messageQueue.push({ text });
       } else {
@@ -877,6 +996,11 @@ class SessionManager {
       if (session.eventHistory.length > 500) {
         session.eventHistory = session.eventHistory.slice(-500);
       }
+      // Persist only on meaningful mutations. status is already handled
+      // by setStatus(); every other event that mutates eventHistory
+      // ends up here. Coalesced via queuePersist so a burst of tokens
+      // writes once per microtask.
+      this.queuePersist(session);
     }
 
     const data = JSON.stringify(event);
@@ -1061,6 +1185,24 @@ function isOriginAllowed(origin: string | undefined): boolean {
 const app = next({ dev });
 const handle = app.getRequestHandler();
 const sessionManager = new SessionManager();
+
+// Rehydrate session state from disk so a container restart doesn't
+// wipe every in-flight conversation. Runs synchronously (well, fire
+// and log) before we start listening — if it fails we still come up,
+// just with an empty session set.
+(async () => {
+  try {
+    const persisted = await loadAllSessions();
+    for (const p of persisted) {
+      sessionManager.restoreFromDisk(p);
+    }
+    if (persisted.length > 0) {
+      console.log(`> Restored ${persisted.length} chat session(s) from disk`);
+    }
+  } catch (err) {
+    console.warn(`!! Could not rehydrate sessions: ${(err as Error).message}`);
+  }
+})();
 
 app.prepare().then(() => {
   const server = createServer((req, res) => {

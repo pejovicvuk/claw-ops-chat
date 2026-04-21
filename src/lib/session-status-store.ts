@@ -29,7 +29,22 @@ export interface SessionStatusEntry {
   lastActivityAt: number;
 }
 
-const store = new Map<string, SessionStatusEntry>();
+/**
+ * The custom Node server (server.ts, compiled by tsc) and the Next.js App
+ * Router route handlers (bundled by Next's webpack) run in the SAME
+ * process but resolve this file via two different paths, so Node's
+ * require cache gives each import its own module instance — and its own
+ * Map. Without the globalThis anchor, server.ts wrote statuses into Map
+ * A while /api/sessions/status read Map B, the sidebar always polled
+ * empty, and every status indicator stayed dark.
+ */
+declare global {
+  var __clawSessionStatusStore: Map<string, SessionStatusEntry> | undefined;
+}
+
+const store: Map<string, SessionStatusEntry> =
+  globalThis.__clawSessionStatusStore ??
+  (globalThis.__clawSessionStatusStore = new Map<string, SessionStatusEntry>());
 
 export function setSessionStatus(sessionId: string, status: SessionStatus): void {
   store.set(sessionId, { status, lastActivityAt: Date.now() });

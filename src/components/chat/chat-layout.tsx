@@ -36,7 +36,6 @@ interface ChatLayoutProps {
   onNewChat: () => void;
   onRefreshSessions: () => void;
   sessionsLoading: boolean;
-  runningSessionIds?: Set<string>;
   onSessionCreated?: (claudeSessionId: string) => void;
 }
 
@@ -47,7 +46,6 @@ export function ChatLayout({
   onNewChat,
   onRefreshSessions,
   sessionsLoading,
-  runningSessionIds,
   onSessionCreated,
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
@@ -305,7 +303,6 @@ export function ChatLayout({
                     setSidebarOpen(false);
                   }}
                   onRefresh={onRefreshSessions}
-                  runningSessionIds={runningSessionIds}
                 />
               </div>
             </div>

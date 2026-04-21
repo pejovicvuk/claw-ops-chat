@@ -261,6 +261,33 @@ class SessionManager {
   }
 
   /**
+   * Register an alias so a WebSocket that reconnects under
+   * claudeSessionId lands on the SAME ChatSession object. Without this,
+   * the client's "once the first reply arrives, URL → SDK session_id"
+   * flow reconnects onto a brand-new empty session, the in-flight
+   * query keeps streaming into the old (now client-less) one, and the
+   * user sees the turn mysteriously hang. Safe to call repeatedly;
+   * only writes if the target id isn't already mapped to this session.
+   */
+  aliasClaudeSessionId(session: ChatSession): void {
+    const sid = session.claudeSessionId;
+    if (!sid || sid === session.id) return;
+    const existing = this.sessions.get(sid);
+    if (existing === session) return;
+    if (existing && existing !== session) {
+      // Shouldn't happen in practice (server just created X in the SDK
+      // and it's unique per turn) — but if it does, prefer the new
+      // session and clean up the orphan so its clients reconnect onto
+      // the canonical one.
+      for (const client of existing.clients) {
+        session.clients.add(client);
+      }
+    }
+    this.sessions.set(sid, session);
+    setSessionStatus(sid, session.status);
+  }
+
+  /**
    * Reconstruct a session from disk. Called once at boot for every
    * persisted session file. Runtime-only fields (clients, pending
    * requests, rate-limit timestamps, abort controller, message queue)
@@ -301,6 +328,9 @@ class SessionManager {
     };
     this.sessions.set(session.id, session);
     setSessionStatus(session.id, "idle");
+    // Rehydrated session carries a claudeSessionId from disk — alias
+    // it immediately so a reconnect under that id finds this session.
+    this.aliasClaudeSessionId(session);
   }
 
   /**
@@ -467,6 +497,16 @@ class SessionManager {
               if (Date.now() - session.lastActivity > 30 * 60 * 1000) {
                 this.sessions.delete(session.id);
                 clearSessionStatus(session.id);
+                // Also drop any alias pointing at this session so the
+                // next WS under the SDK id creates a fresh empty one
+                // rather than resurrecting a partially-torn-down object.
+                if (session.claudeSessionId && session.claudeSessionId !== session.id) {
+                  const aliased = this.sessions.get(session.claudeSessionId);
+                  if (aliased === session) {
+                    this.sessions.delete(session.claudeSessionId);
+                    clearSessionStatus(session.claudeSessionId);
+                  }
+                }
               }
             }
           },
@@ -759,6 +799,14 @@ class SessionManager {
             if (session.claudeSessionId !== session.id) {
               setSessionStatus(session.claudeSessionId, session.status);
             }
+            // ALIAS: the client is about to receive session_init and
+            // will update its URL to the SDK id, which triggers a WS
+            // reconnect under the new id. Without this alias that
+            // reconnect lands on a brand-new empty session, the
+            // in-flight stream keeps going into the old one, and the
+            // user sees the turn hang. Aliasing ensures the new WS
+            // lands on THIS session.
+            this.aliasClaudeSessionId(session);
             this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
           }
         }
@@ -783,6 +831,8 @@ class SessionManager {
           if (session.claudeSessionId !== session.id) {
             setSessionStatus(session.claudeSessionId, session.status);
           }
+          // Same alias trick as the probe path — see comment above.
+          this.aliasClaudeSessionId(session);
           this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
           continue;
         }

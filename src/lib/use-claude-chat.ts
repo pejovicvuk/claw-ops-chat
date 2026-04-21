@@ -15,6 +15,9 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const [activeTool, setActiveTool] = useState<ActiveToolInfo | null>(null);
   const [claudeSessionId, setClaudeSessionId] = useState<string | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
+  const [authRequired, setAuthRequired] = useState<
+    { message: string; hint: string } | null
+  >(null);
   const [contextUsage, setContextUsage] = useState<{
     used: number;
     max: number;
@@ -392,6 +395,25 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         return;
       }
 
+      if (type === "auth_required") {
+        // Anthropic-side 401 — the SDK's OAuth token is stale. Surface
+        // a dedicated banner instead of dumping the raw error blob so
+        // the user knows to re-run `claude auth login` (or open the
+        // Claude Code overlay and auth from the sidebar) rather than
+        // chasing a non-existent bug.
+        currentAssistantRef.current = null;
+        currentThinkingRef.current = null;
+        setActiveTool(null);
+        setStatus("idle");
+        setAuthRequired({
+          message: (evt.message as string) || "Claude auth expired.",
+          hint:
+            (evt.hint as string) ||
+            "Run `claude auth login` in the settings terminal.",
+        });
+        return;
+      }
+
       if (type === "setup_required") {
         currentAssistantRef.current = null;
         currentThinkingRef.current = null;
@@ -726,12 +748,16 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     currentThinkingRef.current = null;
   }, [sendToServer]);
 
+  const clearAuthRequired = useCallback(() => setAuthRequired(null), []);
+
   return {
     messages,
     status,
     activeTool,
     claudeSessionId,
     setupRequired,
+    authRequired,
+    clearAuthRequired,
     contextUsage,
     sendMessage,
     stopGeneration,

@@ -1,14 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  FiX,
-  FiFolder,
-  FiCheck,
-  FiChevronsLeft,
-  FiMessageSquare,
-  FiUpload,
-} from "react-icons/fi";
+import { FiX, FiFolder, FiCheck, FiChevronsLeft, FiMessageSquare, FiUpload } from "react-icons/fi";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
 import { useUrlState } from "@/lib/use-url-state";
@@ -53,9 +46,13 @@ export function ChatLayout({
   // the back-arrow flow gets confusing.
   const settingsParam = params.get("settings");
   useEffect(() => {
-    if (isMobile && settingsParam) {
-      setSidebarOpen(false);
-    }
+    if (!isMobile || !settingsParam) return;
+    // Defer the state update so it doesn't synchronously cascade mid-
+    // render — the lint rule `react-hooks/immutability` flags synchronous
+    // setState inside an effect. A single microtask is imperceptible to
+    // the user but lets React finish the current commit first.
+    const t = setTimeout(() => setSidebarOpen(false), 0);
+    return () => clearTimeout(t);
   }, [isMobile, settingsParam]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // URL-driven: ?files=1 = open, absent/0 = closed

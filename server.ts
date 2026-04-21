@@ -659,6 +659,21 @@ class SessionManager {
       // which the UI renders as a collapsible Thinking block. Opt-out
       // with CLAUDE_THINKING=off if the extra tokens cost matter.
       ...(process.env.CLAUDE_THINKING !== "off" ? { thinking: { type: "adaptive" } } : {}),
+      // Pass the mode through to the SDK. Without this, the SDK never
+      // exposes the ExitPlanMode tool to Claude when the user chose
+      // plan mode — Claude couldn't call it even when asked, and just
+      // wrote a prose "plan" into the chat. Also enables SDK-level
+      // gating for acceptEdits / bypassPermissions.
+      ...(session.permissionMode === "plan"
+        ? { permissionMode: "plan" as const }
+        : session.permissionMode === "acceptEdits"
+          ? { permissionMode: "acceptEdits" as const }
+          : session.permissionMode === "bypassPermissions"
+            ? {
+                permissionMode: "bypassPermissions" as const,
+                allowDangerouslySkipPermissions: true,
+              }
+            : {}),
       canUseTool: async (toolName: string, input: Record<string, unknown>) => {
         // Handle AskUserQuestion
         if (toolName === "AskUserQuestion") {

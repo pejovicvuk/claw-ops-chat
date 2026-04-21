@@ -102,16 +102,39 @@ const ALLOWED_ORIGINS = new Set(
  */
 const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "86400000", 10);
 
-/* Load MCP servers from ~/.claude.json */
-let mcpServers: Record<string, unknown> | undefined;
+/**
+ * Re-read MCP servers from ~/.claude.json fresh on every turn. The file is
+ * mutated at runtime by the settings flows (Google, Bitbucket, Notion,
+ * Trello, etc. all call registerMcpServer / unregisterMcpServer), and if
+ * we cached the list at process startup any MCP registered after boot —
+ * the common case for a user wiring up their first Google connection —
+ * would stay invisible until the container restarted.
+ *
+ * Read is synchronous for simplicity; the file is tiny and lives on the
+ * container's local disk. handleUserMessage is already a long-running async
+ * function, one extra sync readFileSync per turn is noise.
+ */
+function loadMcpServers(): Record<string, unknown> | undefined {
+  try {
+    const claudeJson = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf-8"));
+    if (claudeJson.mcpServers && Object.keys(claudeJson.mcpServers).length > 0) {
+      return claudeJson.mcpServers;
+    }
+  } catch {
+    /* No ~/.claude.json or invalid — return undefined, SDK runs without MCP. */
+  }
+  return undefined;
+}
+
+/* One-shot log of whatever was registered when the server booted — purely
+   for operator visibility; the actual value used per-turn is re-read below. */
 try {
-  const claudeJson = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf-8"));
-  if (claudeJson.mcpServers && Object.keys(claudeJson.mcpServers).length > 0) {
-    mcpServers = claudeJson.mcpServers;
-    console.log(`> Loaded MCP servers: ${Object.keys(mcpServers!).join(", ")}`);
+  const initial = loadMcpServers();
+  if (initial) {
+    console.log(`> Loaded MCP servers: ${Object.keys(initial).join(", ")}`);
   }
 } catch {
-  // No ~/.claude.json or invalid — continue without MCP
+  /* ignore */
 }
 
 /** Heartbeat interval in ms (default: 30 seconds). */
@@ -800,7 +823,13 @@ class SessionManager {
         return { behavior: "deny", message: response.message || "User denied this action" };
       },
       ...(session.effort ? { effort: session.effort } : {}),
-      ...(mcpServers ? { mcpServers } : {}),
+      ...(() => {
+        // Fresh read per-turn so MCP servers the user just wired up in
+        // Settings (Google, Bitbucket, Notion, etc.) land on their very
+        // next message instead of after a container restart.
+        const current = loadMcpServers();
+        return current ? { mcpServers: current } : {};
+      })(),
       // Tell Claude which permission mode it's in via systemPrompt. Without
       // this, the server's canUseTool silently denies Bash/Edit in plan
       // mode but Claude doesn't *know* it's in plan mode, so it can go

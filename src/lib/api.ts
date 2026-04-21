@@ -54,6 +54,16 @@ export async function fetchSessionMessages(sessionId: string): Promise<SessionMe
   return data as SessionMessagesResponse;
 }
 
+export async function deleteSession(sessionId: string): Promise<void> {
+  const res = await authFetch(`${BASE}/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error || `Failed to delete session (HTTP ${res.status})`);
+  }
+}
+
 /* ── Files ── */
 
 export async function listFiles(path: string): Promise<FileEntry[]> {

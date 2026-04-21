@@ -30,6 +30,12 @@ interface ChatLayoutProps {
   onRefreshSessions: () => void;
   sessionsLoading: boolean;
   onSessionCreated?: (claudeSessionId: string) => void;
+  /**
+   * Delete a session end-to-end. Passed through to both SessionList
+   * instances (mobile drawer + desktop sidebar). Undefined → context
+   * menu hides the Delete item.
+   */
+  onDeleteSession?: (sessionId: string) => Promise<void>;
 }
 
 export function ChatLayout({
@@ -40,6 +46,7 @@ export function ChatLayout({
   onRefreshSessions,
   sessionsLoading,
   onSessionCreated,
+  onDeleteSession,
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
   useVisualViewport();
@@ -300,6 +307,7 @@ export function ChatLayout({
                     setSidebarOpen(false);
                   }}
                   onRefresh={onRefreshSessions}
+                  onDeleteSession={onDeleteSession}
                 />
               </div>
             </div>
@@ -373,6 +381,7 @@ export function ChatLayout({
                 onSelectSession={onSelectSession}
                 onNewChat={onNewChat}
                 onRefresh={onRefreshSessions}
+                onDeleteSession={onDeleteSession}
               />
             </div>
           )}

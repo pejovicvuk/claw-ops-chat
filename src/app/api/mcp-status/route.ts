@@ -31,6 +31,9 @@ export const KNOWN_SERVERS: Record<string, { id: string; cliName: string; url: s
     url: "https://calendar.mcp.claude.com/mcp",
   },
   "Microsoft 365": { id: "microsoft-365", cliName: "microsoft-365", url: null },
+  // Slack is added at Claude.ai like Microsoft 365 — url: null means "no
+  // in-app device-code flow, direct users to claude.ai/settings/connectors".
+  Slack: { id: "slack", cliName: "slack", url: null },
 };
 
 /** Look up a hosted connector entry by our short id. */

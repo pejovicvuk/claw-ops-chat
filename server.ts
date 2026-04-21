@@ -16,6 +16,7 @@ import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
 import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
+import { loadCredentialsSync as loadJiraCredentials } from "./src/lib/jira-custom-config";
 import { existsSync, readdirSync, statSync } from "fs";
 import {
   setSessionStatus,
@@ -794,18 +795,31 @@ class SessionManager {
               },
             }
           : {}),
-      // If the user saved Bitbucket creds in Settings, inject the three env
-      // vars the read-only bitbucket skill at /opt/skills/bitbucket/ reads.
-      // Loaded fresh from disk per-query so rotated tokens take effect
-      // without restarting the container.
+      // If the user saved Bitbucket / Jira creds in Settings, inject the
+      // matching env vars so any skill (e.g. /opt/skills/bitbucket/) or
+      // MCP server that expects them can pick them up. Loaded fresh from
+      // disk per-query so rotated tokens take effect without restarting
+      // the container. Returns undefined when nothing is configured so
+      // we don't pass an empty env object to the SDK.
       env: (() => {
         const bb = loadBitbucketCredentials();
-        if (!bb) return undefined;
-        return {
-          ATLASSIAN_EMAIL: bb.email,
-          BITBUCKET_API_TOKEN: bb.apiToken,
-          BITBUCKET_WORKSPACE: bb.workspace,
-        };
+        const jira = loadJiraCredentials();
+        if (!bb && !jira) return undefined;
+        const out: Record<string, string> = {};
+        if (bb) {
+          out.ATLASSIAN_EMAIL = bb.email;
+          out.BITBUCKET_API_TOKEN = bb.apiToken;
+          out.BITBUCKET_WORKSPACE = bb.workspace;
+        }
+        if (jira) {
+          out.JIRA_URL = `https://${jira.domain}`;
+          out.JIRA_EMAIL = jira.email;
+          out.JIRA_API_TOKEN = jira.apiToken;
+          // If Bitbucket wasn't set, still expose ATLASSIAN_EMAIL so
+          // skills that key off it (without caring which product) work.
+          if (!bb) out.ATLASSIAN_EMAIL = jira.email;
+        }
+        return out;
       })(),
       abortController,
       spawnClaudeCodeProcess: spawnClaude,

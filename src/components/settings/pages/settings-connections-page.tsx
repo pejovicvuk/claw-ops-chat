@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { FiTerminal, FiGithub, FiGitBranch, FiCloud, FiPackage } from "react-icons/fi";
+import { SiLinear, SiJira, SiSlack } from "react-icons/si";
 import { authFetch } from "@/lib/auth";
 import { useUrlState } from "@/lib/use-url-state";
 import { ConnectionRow, type ConnectionStatus } from "../connection-row";
@@ -49,6 +50,8 @@ export function SettingsConnectionsPage() {
   const [mcpServers, setMcpServers] = useState<McpServerInfo[] | null>(null);
   const [githubStatus, setGithubStatus] = useState<ConnectionStatus>("unknown");
   const [bitbucketStatus, setBitbucketStatus] = useState<ConnectionStatus>("unknown");
+  const [linearStatus, setLinearStatus] = useState<ConnectionStatus>("unknown");
+  const [jiraStatus, setJiraStatus] = useState<ConnectionStatus>("unknown");
   const { setParam } = useUrlState();
 
   // Claude Code auth status.
@@ -126,8 +129,37 @@ export function SettingsConnectionsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    authFetch(`${BASE}/api/linear-custom/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((data: { tokenSaved?: boolean; registered?: boolean } | null) => {
+        if (cancelled) return;
+        setLinearStatus(data?.tokenSaved && data?.registered ? "connected" : "disconnected");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    authFetch(`${BASE}/api/jira-custom/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((data: { saved?: boolean } | null) => {
+        if (cancelled) return;
+        setJiraStatus(data?.saved ? "connected" : "disconnected");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const googleStatus = aggregateStatus(mcpServers, GOOGLE_IDS);
   const microsoftStatus = singleStatus(mcpServers, "microsoft-365");
+  const slackStatus = singleStatus(mcpServers, "slack");
 
   return (
     <div className="space-y-2">
@@ -178,6 +210,30 @@ export function SettingsConnectionsPage() {
         description="Outlook, OneDrive, SharePoint, and Teams"
         status={microsoftStatus}
         onClick={() => setParam("settings", "connections/microsoft")}
+      />
+
+      <ConnectionRow
+        icon={<SiSlack size={16} className="text-purple-500" />}
+        name="Slack"
+        description="Channels, DMs, and mentions"
+        status={slackStatus}
+        onClick={() => setParam("settings", "connections/slack")}
+      />
+
+      <ConnectionRow
+        icon={<SiLinear size={16} />}
+        name="Linear"
+        description="Search, read, and create issues"
+        status={linearStatus}
+        onClick={() => setParam("settings", "connections/linear")}
+      />
+
+      <ConnectionRow
+        icon={<SiJira size={16} className="text-blue-500" />}
+        name="Jira"
+        description="Access issues, sprints, and boards"
+        status={jiraStatus}
+        onClick={() => setParam("settings", "connections/jira")}
       />
     </div>
   );

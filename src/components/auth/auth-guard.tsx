@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { isAuthenticated, getStoredAuth, clearAuth, updateStoredRefreshToken } from "@/lib/auth";
 import { getAccessToken, setAccessToken, clearAccessToken } from "@/lib/apiClient";
 import { refreshTokenApi } from "@/lib/api-backend";
+import { AppSkeleton } from "@/components/app-skeleton";
 
 const emptySubscribe = () => () => {};
 
@@ -84,7 +85,14 @@ export function AuthGuard({ children }: AuthGuardProps) {
     };
   }, [mounted, ready, router]);
 
-  if (!mounted || !ready) return null;
+  if (!mounted) return null;
+  // While the refresh round-trip is in flight, show a shimmer of the app shell
+  // instead of a blank screen. Users with stored auth see "app is loading"
+  // rather than nothing.
+  if (!ready) {
+    if (!isAuthenticated()) return null; // redirect queued by effect
+    return <AppSkeleton />;
+  }
 
   return <>{children}</>;
 }

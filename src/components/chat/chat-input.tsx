@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useCallback, useRef, useState } from "react";
 import { FiArrowUp, FiSquare } from "react-icons/fi";
 import type { ClaudeStatus } from "@/lib/types";
+import { preloadMarkdown } from "./message-bubble";
 
 interface ChatInputProps {
   status: ClaudeStatus;
@@ -29,6 +30,9 @@ export function ChatInput({ status, onSend, onStop, fileButton }: ChatInputProps
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
+    // Warm the markdown chunk in parallel with the WS round-trip so the first
+    // assistant token doesn't wait on a fresh fetch.
+    preloadMarkdown();
     onSend(text);
     setText("");
     if (textareaRef.current) {

@@ -21,6 +21,7 @@ import {
 import { List, type RowComponentProps } from "react-window";
 import { deleteFile, downloadFile, FileApiError, listFiles, uploadFile } from "@/lib/api";
 import { getCachedDir, invalidateDir, isCacheFresh, setCachedDir } from "@/lib/file-cache";
+import { useExitAnimation } from "@/lib/use-exit-animation";
 import type { FileEntry } from "@/lib/types";
 import { Breadcrumbs } from "./file-browser/breadcrumbs";
 import { DeleteConfirm } from "./file-browser/delete-confirm";
@@ -94,6 +95,19 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const listContainerRef = useRef<HTMLDivElement>(null);
+
+  // Retain last non-null popup payloads so exit animations can continue to
+  // render after the open state flips back to null.
+  const lastContextMenuRef = useRef(contextMenu);
+  if (contextMenu) lastContextMenuRef.current = contextMenu;
+  const lastConfirmRef = useRef(confirm);
+  if (confirm) lastConfirmRef.current = confirm;
+
+  const { mounted: contextMenuMounted, state: contextMenuAnim } = useExitAnimation(
+    contextMenu !== null,
+    140,
+  );
+  const { mounted: confirmMounted, state: confirmAnim } = useExitAnimation(confirm !== null, 200);
 
   const loadDir = useCallback(
     async (path: string, opts: { bypassCache?: boolean } = {}) => {
@@ -444,128 +458,139 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           )}
         </div>
 
-      {uploads.length > 0 && (
-        <div className="max-h-40 shrink-0 overflow-y-auto border-t border-canvas-border bg-canvas-surface/60 p-2">
-          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-canvas-muted">
-            Uploads ({uploads.length})
-          </p>
-          <ul className="space-y-1">
-            {uploads.map((task) => (
-              <li
-                key={task.id}
-                className="flex items-center gap-2 rounded-md bg-canvas-bg px-2 py-1 text-[11px]"
+        {uploads.length > 0 && (
+          <div className="max-h-40 shrink-0 overflow-y-auto border-t border-canvas-border bg-canvas-surface/60 p-2">
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-canvas-muted">
+              Uploads ({uploads.length})
+            </p>
+            <ul className="space-y-1">
+              {uploads.map((task) => (
+                <li
+                  key={task.id}
+                  className="flex items-center gap-2 rounded-md bg-canvas-bg px-2 py-1 text-[11px]"
+                >
+                  <span className="min-w-0 flex-1 truncate text-canvas-fg" title={task.name}>
+                    {task.name}
+                  </span>
+                  {task.error ? (
+                    <span className="shrink-0 text-red-400">{task.error}</span>
+                  ) : task.done ? (
+                    <span className="shrink-0 text-green-400">Done</span>
+                  ) : (
+                    <>
+                      <div className="h-1.5 w-16 overflow-hidden rounded-full bg-canvas-border">
+                        <div
+                          className="h-full bg-accent transition-[width]"
+                          style={{ width: `${Math.round(task.progress * 100)}%` }}
+                        />
+                      </div>
+                      <span className="shrink-0 tabular-nums text-canvas-muted">
+                        {Math.round(task.progress * 100)}%
+                      </span>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!task.done) task.controller.abort();
+                      setUploads((prev) => prev.filter((t) => t.id !== task.id));
+                    }}
+                    aria-label={task.done ? "Dismiss" : "Cancel upload"}
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                  >
+                    <FiX size={10} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {contextMenuMounted &&
+          lastContextMenuRef.current &&
+          (() => {
+            const menu = lastContextMenuRef.current;
+            const menuAnimClass =
+              contextMenuAnim === "exiting" ? "animate-menu-out" : "animate-menu-in";
+            return (
+              <div
+                className={`fixed rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg ${menuAnimClass}`}
+                style={{ left: menu.x, top: menu.y, zIndex: 9999 }}
+                role="menu"
+                onClick={(e) => e.stopPropagation()}
               >
-                <span className="min-w-0 flex-1 truncate text-canvas-fg" title={task.name}>
-                  {task.name}
-                </span>
-                {task.error ? (
-                  <span className="shrink-0 text-red-400">{task.error}</span>
-                ) : task.done ? (
-                  <span className="shrink-0 text-green-400">Done</span>
-                ) : (
-                  <>
-                    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-canvas-border">
-                      <div
-                        className="h-full bg-accent transition-[width]"
-                        style={{ width: `${Math.round(task.progress * 100)}%` }}
-                      />
-                    </div>
-                    <span className="shrink-0 tabular-nums text-canvas-muted">
-                      {Math.round(task.progress * 100)}%
-                    </span>
-                  </>
+                {!menu.entry.directory && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onFileOpen?.(menu.entry);
+                      closeMenu();
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-canvas-fg hover:bg-canvas-surface-hover"
+                    role="menuitem"
+                  >
+                    <FiFile size={12} />
+                    Open
+                  </button>
+                )}
+                {onCopyPath && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onCopyPath(menu.entry.path);
+                      closeMenu();
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-canvas-fg hover:bg-canvas-surface-hover"
+                    role="menuitem"
+                  >
+                    <FiCopy size={12} />
+                    Copy path
+                  </button>
+                )}
+                {!menu.entry.directory && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadFile(menu.entry.path).catch((err) => {
+                        setBanner(mapError(err));
+                      });
+                      closeMenu();
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-canvas-fg hover:bg-canvas-surface-hover"
+                    role="menuitem"
+                  >
+                    <FiDownload size={12} />
+                    Download
+                  </button>
                 )}
                 <button
                   type="button"
                   onClick={() => {
-                    if (!task.done) task.controller.abort();
-                    setUploads((prev) => prev.filter((t) => t.id !== task.id));
+                    setConfirm({ entry: menu.entry, error: null });
+                    closeMenu();
                   }}
-                  aria-label={task.done ? "Dismiss" : "Cancel upload"}
-                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-red-400 hover:bg-canvas-surface-hover"
+                  role="menuitem"
                 >
-                  <FiX size={10} />
+                  <FiTrash2 size={12} />
+                  Delete
                 </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+              </div>
+            );
+          })()}
 
-      {contextMenu && (
-        <div
-          className="fixed rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg"
-          style={{ left: contextMenu.x, top: contextMenu.y, zIndex: 9999 }}
-          role="menu"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {!contextMenu.entry.directory && (
-            <button
-              type="button"
-              onClick={() => {
-                onFileOpen?.(contextMenu.entry);
-                closeMenu();
-              }}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-canvas-fg hover:bg-canvas-surface-hover"
-              role="menuitem"
-            >
-              <FiFile size={12} />
-              Open
-            </button>
-          )}
-          {onCopyPath && (
-            <button
-              type="button"
-              onClick={() => {
-                onCopyPath(contextMenu.entry.path);
-                closeMenu();
-              }}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-canvas-fg hover:bg-canvas-surface-hover"
-              role="menuitem"
-            >
-              <FiCopy size={12} />
-              Copy path
-            </button>
-          )}
-          {!contextMenu.entry.directory && (
-            <button
-              type="button"
-              onClick={() => {
-                downloadFile(contextMenu.entry.path).catch((err) => {
-                  setBanner(mapError(err));
-                });
-                closeMenu();
-              }}
-              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-canvas-fg hover:bg-canvas-surface-hover"
-              role="menuitem"
-            >
-              <FiDownload size={12} />
-              Download
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => {
-              setConfirm({ entry: contextMenu.entry, error: null });
-              closeMenu();
+        {confirmMounted && lastConfirmRef.current && (
+          <DeleteConfirm
+            entry={lastConfirmRef.current.entry}
+            error={lastConfirmRef.current.error}
+            animationState={confirmAnim}
+            onConfirm={() => {
+              const c = lastConfirmRef.current;
+              if (c) void confirmDelete(c.entry);
             }}
-            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-red-400 hover:bg-canvas-surface-hover"
-            role="menuitem"
-          >
-            <FiTrash2 size={12} />
-            Delete
-          </button>
-        </div>
-      )}
-
-      {confirm && (
-        <DeleteConfirm
-          entry={confirm.entry}
-          error={confirm.error}
-          onConfirm={() => confirmDelete(confirm.entry)}
-          onCancel={() => setConfirm(null)}
-        />
-      )}
+            onCancel={() => setConfirm(null)}
+          />
+        )}
       </div>
     </FileDropzone>
   );

@@ -55,7 +55,7 @@ export const FileRow = forwardRef<HTMLButtonElement, FileRowProps>(function File
         }
       }}
       title={entry.path}
-      className="group flex w-full min-h-[36px] items-center gap-2 px-3 py-1.5 text-left hover:bg-canvas-surface-hover focus-visible:bg-canvas-surface-hover focus-visible:outline-none sm:min-h-0"
+      className="group row-hover flex w-full min-h-[36px] items-center gap-2 px-3 py-1.5 text-left hover:bg-canvas-surface-hover focus-visible:bg-canvas-surface-hover focus-visible:outline-none sm:min-h-0"
     >
       <FileIcon entry={entry} />
       <span className="min-w-0 flex-1 truncate text-[12px] text-canvas-fg">{entry.name}</span>

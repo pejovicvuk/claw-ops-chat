@@ -161,6 +161,14 @@ interface ChatSession {
    * to AbortController. Null when no turn is in flight.
    */
   currentQuery: { interrupt?: () => Promise<void> } | null;
+  /**
+   * Set to true when the `stop` client message aborts the current turn.
+   * The for-await loop's catch block checks this flag and skips the
+   * usual "error" broadcast — the user explicitly asked us to stop, so
+   * surfacing the resulting AbortError as a failure would be noise on
+   * top of the clean "Stopped by user" result we already sent.
+   */
+  userAborted: boolean;
   /** Original cwd for resume (the cwd where this session was first created). */
   sessionCwd: string | null;
   /**
@@ -257,6 +265,7 @@ class SessionManager {
         lastActivity: Date.now(),
         abortController: null,
         currentQuery: null,
+        userAborted: false,
         sessionCwd: null,
         status: "idle",
         lastUserMessage: "",
@@ -327,6 +336,7 @@ class SessionManager {
       lastActivity: persisted.lastActivity || Date.now(),
       abortController: null,
       currentQuery: null,
+      userAborted: false,
       sessionCwd: persisted.sessionCwd ?? null,
       // Status is always reset to "idle" on boot — whatever was in
       // flight is gone. The wasInterrupted flag is what tells the
@@ -579,10 +589,16 @@ class SessionManager {
 
     if (type === "stop") {
       if (session.isProcessing) {
-        // Drain any pending approval/question/plan requests first — without
-        // this, the SDK stays blocked inside canUseTool waiting for a
-        // response that will never come and .interrupt() can't take
-        // effect. Deny-resolve each one with an interrupt marker.
+        // Flag this as a user-initiated stop so the catch block in
+        // handleUserMessage doesn't surface the resulting AbortError as
+        // a red error bubble — we're already broadcasting a clean
+        // "Stopped by user" result below.
+        session.userAborted = true;
+
+        // Drain any pending approval/question/plan requests first — the
+        // SDK is blocked inside canUseTool waiting for a response that
+        // will never come, and the abort won't take effect until
+        // canUseTool resolves. Deny-resolve each with an interrupt marker.
         for (const [id, resolve] of session.pendingRequests) {
           resolve({
             allow: false,
@@ -594,17 +610,21 @@ class SessionManager {
         }
         session.pendingRequests.clear();
 
-        // Prefer the SDK's graceful interrupt — it emits a proper `result`
-        // message with an interrupt subtype so the for-await loop tears
-        // down cleanly. Fall back to AbortController for older SDK builds
-        // that don't expose .interrupt().
+        // AbortController is what actually kills the Claude CLI child
+        // process — we pass `signal: abortController.signal` into
+        // child_process.spawn in spawnClaude, and Node sends SIGTERM on
+        // abort. Always call this first, unconditionally.
+        session.abortController?.abort();
+
+        // Best-effort graceful SDK interrupt. Only has effect in
+        // streaming-input mode (we use single-message mode with `prompt:
+        // string`), where it's a no-op. Harmless either way; we already
+        // aborted.
         const q = session.currentQuery;
         if (q?.interrupt) {
           q.interrupt().catch(() => {
-            session.abortController?.abort();
+            /* ignore — the abort above is what matters */
           });
-        } else {
-          session.abortController?.abort();
         }
 
         this.broadcast(session, { type: "result", text: "Stopped by user", isError: false });
@@ -1071,108 +1091,120 @@ class SessionManager {
         }
       }
     } catch (err) {
-      const rawMessage0 = err instanceof Error ? err.message : "Unknown error";
-      // Resume-not-found surfaces here when the SDK throws DURING the
-      // for-await loop (rather than yielding a result message with
-      // is_error=true). Recover by wiping claudeSessionId and rerunning
-      // handleUserMessage — the user sees one spinner cycle, not a
-      // cryptic "No conversation found" error bubble.
-      if (
-        rawMessage0.toLowerCase().includes("no conversation found") ||
-        /returned an error result/i.test(rawMessage0)
-      ) {
-        session.claudeSessionId = null;
-        delete (queryParams.options as Record<string, unknown>).resume;
-        session.isProcessing = false;
-        session.abortController = null;
-        session.currentQuery = null;
-        this.setStatus(session, "idle");
-        this.handleUserMessage(session, text);
-        return;
-      }
-
-      session.accumulatedText = "";
-      const rawMessage = rawMessage0;
-      const errnoErr = err as NodeJS.ErrnoException;
-      // Dump the full error to the container log so operators have
-      // errno/code/syscall/path/stack. This app runs in a single-user
-      // trusted context — hiding paths behind 'Internal server error'
-      // bought us nothing except days of debugging last time.
-      console.error(`[session=${session.id}] Query error:`, {
-        message: rawMessage,
-        errno: errnoErr.errno,
-        code: errnoErr.code,
-        syscall: errnoErr.syscall,
-        path: errnoErr.path,
-        stack: errnoErr.stack,
-      });
-
-      // Treat ENOENT / EACCES / executable-not-found as "setup required"
-      // so the UI can nudge the user towards reinstalling instead of
-      // showing a generic error.
-      const lowered = rawMessage.toLowerCase();
-      const setupRequired =
-        errnoErr.code === "ENOENT" ||
-        errnoErr.code === "EACCES" ||
-        lowered.includes("executable not found") ||
-        lowered.includes("native binary not found") ||
-        lowered.includes("no such file");
-
-      // Detect Anthropic / Claude-Code auth failures specifically. The
-      // SDK surfaces these as a plain Error whose message contains the
-      // JSON body from api.anthropic.com — something like:
-      //   API Error: 401 {"type":"error","error":{
-      //       "type":"authentication_error",
-      //       "message":"Invalid authentication credentials"}}
-      // When we see that shape, emit a dedicated auth-required event so
-      // the UI can pop the "sign in to Claude" flow instead of showing
-      // the raw 401 blob as a generic error bubble.
-      const authError =
-        lowered.includes("authentication_error") ||
-        lowered.includes("invalid authentication credentials") ||
-        /\b401\b/.test(rawMessage) ||
-        lowered.includes("unauthorized");
-
-      const stderrTail =
-        typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
-          ? (errnoErr as unknown as { stderr: string }).stderr
-              .trim()
-              .split(/\r?\n/)
-              .slice(-10)
-              .join("\n")
-          : undefined;
-
-      if (authError) {
-        this.broadcast(session, {
-          type: "auth_required",
-          provider: "claude",
-          message:
-            "Claude rejected the stored credentials (HTTP 401). Your OAuth " +
-            "token has probably expired — sign in again to keep chatting.",
-          hint: "Run `claude auth login` in the container terminal, or click below.",
-        });
-      } else if (setupRequired) {
-        this.broadcast(session, {
-          type: "setup_required",
-          message:
-            "Claude SDK could not be started. The bundled sdk.mjs may be missing or unreachable. " +
-            `Raw error: ${rawMessage}` +
-            (errnoErr.path ? ` (path=${errnoErr.path})` : ""),
-          ...(stderrTail ? { stderrTail } : {}),
-        });
+      // User asked us to stop — the resulting AbortError / killed-child
+      // error is expected, not a failure. Swallow the whole error path;
+      // the stop handler already broadcast a clean "Stopped by user"
+      // result and flipped the session to idle.
+      if (session.userAborted) {
+        // Fall through to the post-catch cleanup at the bottom of this
+        // method, which resets isProcessing / abortController /
+        // currentQuery and processes the next queued message (if any).
       } else {
-        this.broadcast(session, {
-          type: "error",
+        const rawMessage0 = err instanceof Error ? err.message : "Unknown error";
+        // Resume-not-found surfaces here when the SDK throws DURING the
+        // for-await loop (rather than yielding a result message with
+        // is_error=true). Recover by wiping claudeSessionId and rerunning
+        // handleUserMessage — the user sees one spinner cycle, not a
+        // cryptic "No conversation found" error bubble.
+        if (
+          rawMessage0.toLowerCase().includes("no conversation found") ||
+          /returned an error result/i.test(rawMessage0)
+        ) {
+          session.claudeSessionId = null;
+          delete (queryParams.options as Record<string, unknown>).resume;
+          session.isProcessing = false;
+          session.abortController = null;
+          session.currentQuery = null;
+          this.setStatus(session, "idle");
+          this.handleUserMessage(session, text);
+          return;
+        }
+
+        session.accumulatedText = "";
+        const rawMessage = rawMessage0;
+        const errnoErr = err as NodeJS.ErrnoException;
+        // Dump the full error to the container log so operators have
+        // errno/code/syscall/path/stack. This app runs in a single-user
+        // trusted context — hiding paths behind 'Internal server error'
+        // bought us nothing except days of debugging last time.
+        console.error(`[session=${session.id}] Query error:`, {
           message: rawMessage,
-          ...(errnoErr.code ? { errorCode: errnoErr.code } : {}),
-          ...(stderrTail ? { stderrTail } : {}),
+          errno: errnoErr.errno,
+          code: errnoErr.code,
+          syscall: errnoErr.syscall,
+          path: errnoErr.path,
+          stack: errnoErr.stack,
         });
-      }
+
+        // Treat ENOENT / EACCES / executable-not-found as "setup required"
+        // so the UI can nudge the user towards reinstalling instead of
+        // showing a generic error.
+        const lowered = rawMessage.toLowerCase();
+        const setupRequired =
+          errnoErr.code === "ENOENT" ||
+          errnoErr.code === "EACCES" ||
+          lowered.includes("executable not found") ||
+          lowered.includes("native binary not found") ||
+          lowered.includes("no such file");
+
+        // Detect Anthropic / Claude-Code auth failures specifically. The
+        // SDK surfaces these as a plain Error whose message contains the
+        // JSON body from api.anthropic.com — something like:
+        //   API Error: 401 {"type":"error","error":{
+        //       "type":"authentication_error",
+        //       "message":"Invalid authentication credentials"}}
+        // When we see that shape, emit a dedicated auth-required event so
+        // the UI can pop the "sign in to Claude" flow instead of showing
+        // the raw 401 blob as a generic error bubble.
+        const authError =
+          lowered.includes("authentication_error") ||
+          lowered.includes("invalid authentication credentials") ||
+          /\b401\b/.test(rawMessage) ||
+          lowered.includes("unauthorized");
+
+        const stderrTail =
+          typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
+            ? (errnoErr as unknown as { stderr: string }).stderr
+                .trim()
+                .split(/\r?\n/)
+                .slice(-10)
+                .join("\n")
+            : undefined;
+
+        if (authError) {
+          this.broadcast(session, {
+            type: "auth_required",
+            provider: "claude",
+            message:
+              "Claude rejected the stored credentials (HTTP 401). Your OAuth " +
+              "token has probably expired — sign in again to keep chatting.",
+            hint: "Run `claude auth login` in the container terminal, or click below.",
+          });
+        } else if (setupRequired) {
+          this.broadcast(session, {
+            type: "setup_required",
+            message:
+              "Claude SDK could not be started. The bundled sdk.mjs may be missing or unreachable. " +
+              `Raw error: ${rawMessage}` +
+              (errnoErr.path ? ` (path=${errnoErr.path})` : ""),
+            ...(stderrTail ? { stderrTail } : {}),
+          });
+        } else {
+          this.broadcast(session, {
+            type: "error",
+            message: rawMessage,
+            ...(errnoErr.code ? { errorCode: errnoErr.code } : {}),
+            ...(stderrTail ? { stderrTail } : {}),
+          });
+        }
+      } // end `else` — non-userAborted error path
     }
 
     session.isProcessing = false;
     session.abortController = null;
     session.currentQuery = null;
+    // Reset the one-shot abort flag so the next turn starts fresh.
+    session.userAborted = false;
     // Turn is done — flip the dot off. If a queued message starts next,
     // handleUserMessage() will flip it straight back to "thinking".
     this.setStatus(session, "idle");

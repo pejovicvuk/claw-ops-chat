@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { FiX, FiFolder, FiCheck, FiChevronsLeft, FiMessageSquare, FiUpload } from "react-icons/fi";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
@@ -12,8 +13,14 @@ import { ChatView } from "./chat-view";
 import { SessionList } from "./session-list";
 import { MobileFileSheet } from "./mobile-file-sheet";
 import { FileBrowser, type FileBrowserHandle } from "./file-browser";
-import { FileEditorPanel } from "./file-editor-panel";
 import { ErrorBoundary } from "@/components/error-boundary";
+
+// Lazy: CodeMirror core (~180kb gz) is pulled into this chunk. Only loads
+// when the user opens a file. ssr:false because the editor is pointer-driven.
+const FileEditorPanel = dynamic(
+  () => import("./file-editor-panel").then((m) => ({ default: m.FileEditorPanel })),
+  { ssr: false, loading: () => null },
+);
 
 interface ChatLayoutProps {
   sessions: ChatSession[];
@@ -22,7 +29,6 @@ interface ChatLayoutProps {
   onNewChat: () => void;
   onRefreshSessions: () => void;
   sessionsLoading: boolean;
-  runningSessionIds?: Set<string>;
   onSessionCreated?: (claudeSessionId: string) => void;
 }
 
@@ -33,7 +39,6 @@ export function ChatLayout({
   onNewChat,
   onRefreshSessions,
   sessionsLoading,
-  runningSessionIds,
   onSessionCreated,
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
@@ -295,7 +300,6 @@ export function ChatLayout({
                     setSidebarOpen(false);
                   }}
                   onRefresh={onRefreshSessions}
-                  runningSessionIds={runningSessionIds}
                 />
               </div>
             </div>
@@ -328,32 +332,35 @@ export function ChatLayout({
 
   /* ── DESKTOP ── */
 
+  const desktopGridCols = `${sidebarCollapsed ? 40 : 260}px minmax(0,1fr) ${
+    filesPanelOpen ? 300 : 40
+  }px`;
+
   return (
     <>
-      <div className="flex h-full">
-        {/* Left sidebar */}
-        <aside
-          className={`flex shrink-0 flex-col border-r border-canvas-border bg-canvas-bg overflow-hidden transition-all duration-200 ${
-            sidebarCollapsed ? "w-10" : "w-[260px]"
-          }`}
-        >
+      <div
+        className="grid h-full transition-[grid-template-columns] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]"
+        style={{ gridTemplateColumns: desktopGridCols }}
+      >
+        {/* Left sidebar — grid owns the width tween; aside clips its fixed-width inner */}
+        <aside className="relative flex flex-col overflow-hidden border-r border-canvas-border bg-canvas-bg">
           {sidebarCollapsed ? (
             <button
               type="button"
               onClick={() => setSidebarCollapsed(false)}
-              className="flex h-full w-10 items-center justify-center text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+              className="btn-press flex h-full w-10 items-center justify-center text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
               title="Show chats"
             >
               <FiMessageSquare size={16} />
             </button>
           ) : (
-            <>
+            <div className="flex h-full w-[260px] flex-col">
               <div className="flex h-12 shrink-0 items-center justify-between border-b border-canvas-border px-3">
                 <span className="text-[13px] font-semibold text-canvas-fg">Claw Chat</span>
                 <button
                   type="button"
                   onClick={() => setSidebarCollapsed(true)}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                  className="btn-press flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
                   title="Collapse sidebar"
                 >
                   <FiChevronsLeft size={14} />
@@ -367,12 +374,12 @@ export function ChatLayout({
                 onNewChat={onNewChat}
                 onRefresh={onRefreshSessions}
               />
-            </>
+            </div>
           )}
         </aside>
 
         {/* Center: Chat */}
-        <main className="flex min-w-0 flex-1 flex-col">
+        <main className="flex min-w-0 flex-col">
           <ChatView
             key={sessionId}
             sessionId={sessionId}
@@ -382,14 +389,10 @@ export function ChatLayout({
           />
         </main>
 
-        {/* Right: File panel */}
-        <aside
-          className={`flex shrink-0 flex-col border-l border-canvas-border bg-canvas-bg overflow-hidden transition-all duration-200 ${
-            filesPanelOpen ? "w-[300px] h-full" : "w-10"
-          }`}
-        >
+        {/* Right: File panel — same pattern: grid drives width, aside clips fixed-width inner */}
+        <aside className="relative flex flex-col overflow-hidden border-l border-canvas-border bg-canvas-bg">
           {filesPanelOpen ? (
-            <>
+            <div className="flex h-full w-[300px] flex-col">
               <div className="flex h-12 shrink-0 items-center justify-between border-b border-canvas-border px-3">
                 <span className="text-[12px] font-medium text-canvas-muted">Files</span>
                 <div className="flex items-center gap-1">
@@ -403,7 +406,7 @@ export function ChatLayout({
                   <button
                     type="button"
                     onClick={() => fileInputRef.current?.click()}
-                    className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                    className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
                     title="Upload files"
                   >
                     <FiUpload size={12} />
@@ -411,7 +414,7 @@ export function ChatLayout({
                   <button
                     type="button"
                     onClick={() => setFilesPanelOpen(false)}
-                    className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                    className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
                   >
                     <FiX size={14} />
                   </button>
@@ -446,12 +449,12 @@ export function ChatLayout({
                   />
                 </ErrorBoundary>
               </div>
-            </>
+            </div>
           ) : (
             <button
               type="button"
               onClick={() => setFilesPanelOpen(true)}
-              className="flex h-full w-10 items-center justify-center text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+              className="btn-press flex h-full w-10 items-center justify-center text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
               title="Show files"
             >
               <FiFolder size={16} />

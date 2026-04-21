@@ -15,9 +15,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const [activeTool, setActiveTool] = useState<ActiveToolInfo | null>(null);
   const [claudeSessionId, setClaudeSessionId] = useState<string | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
-  const [authRequired, setAuthRequired] = useState<
-    { message: string; hint: string } | null
-  >(null);
+  const [authRequired, setAuthRequired] = useState<{ message: string; hint: string } | null>(null);
   const [contextUsage, setContextUsage] = useState<{
     used: number;
     max: number;
@@ -112,6 +110,39 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "session_init") {
         setClaudeSessionId(evt.sessionId as string);
+        return;
+      }
+
+      if (type === "turn_start") {
+        // Fresh turn — reset the streaming refs so the first text_delta /
+        // thinking_delta creates new messages instead of appending to the
+        // previous turn's tail.
+        currentAssistantRef.current = null;
+        currentThinkingRef.current = null;
+        setActiveTool(null);
+        return;
+      }
+
+      if (type === "turn_end") {
+        // The `result` handler already finalises status/refs. This event
+        // exists so the UI timeline can pin a closing marker; for the
+        // current flat-message renderer there's nothing to do.
+        return;
+      }
+
+      if (type === "compact_boundary") {
+        // SDK just compacted the context window. Surface a subtle system
+        // line so the user understands why the context counter jumped.
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "system" as const,
+            type: "error" as const,
+            content: "[context compacted]",
+            timestamp: Date.now(),
+          },
+        ]);
         return;
       }
 
@@ -407,9 +438,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         setStatus("idle");
         setAuthRequired({
           message: (evt.message as string) || "Claude auth expired.",
-          hint:
-            (evt.hint as string) ||
-            "Run `claude auth login` in the settings terminal.",
+          hint: (evt.hint as string) || "Run `claude auth login` in the settings terminal.",
         });
         return;
       }

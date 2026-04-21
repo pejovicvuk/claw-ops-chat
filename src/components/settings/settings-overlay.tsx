@@ -17,6 +17,7 @@ import { SettingsSlackPage } from "./pages/settings-slack-page";
 import { SettingsLinearPage } from "./pages/settings-linear-page";
 import { SettingsJiraPage } from "./pages/settings-jira-page";
 import { SettingsNotionPage } from "./pages/settings-notion-page";
+import { SettingsTrelloPage } from "./pages/settings-trello-page";
 import { SettingsTerminalPage } from "./pages/settings-terminal-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -33,6 +34,7 @@ type PageKey =
   | "connections/linear"
   | "connections/jira"
   | "connections/notion"
+  | "connections/trello"
   | "terminal";
 
 interface PageInfo {
@@ -56,6 +58,7 @@ const PAGES: Record<PageKey, PageInfo> = {
   "connections/linear": { title: "Linear", parent: "connections" },
   "connections/jira": { title: "Jira", parent: "connections" },
   "connections/notion": { title: "Notion", parent: "connections" },
+  "connections/trello": { title: "Trello", parent: "connections" },
   terminal: { title: "Terminal", parent: "main", wide: true },
 };
 
@@ -176,6 +179,7 @@ export function SettingsOverlay() {
           {page === "connections/linear" && <SettingsLinearPage />}
           {page === "connections/jira" && <SettingsJiraPage />}
           {page === "connections/notion" && <SettingsNotionPage />}
+          {page === "connections/trello" && <SettingsTrelloPage />}
           {page === "terminal" && <SettingsTerminalPage />}
         </div>
 

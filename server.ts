@@ -17,6 +17,7 @@ import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
 import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
 import { loadCredentialsSync as loadJiraCredentials } from "./src/lib/jira-custom-config";
+import { loadCredentialsSync as loadTrelloCredentials } from "./src/lib/trello-custom-config";
 import { existsSync, readdirSync, statSync } from "fs";
 import {
   setSessionStatus,
@@ -839,7 +840,8 @@ class SessionManager {
       env: (() => {
         const bb = loadBitbucketCredentials();
         const jira = loadJiraCredentials();
-        if (!bb && !jira) return undefined;
+        const trello = loadTrelloCredentials();
+        if (!bb && !jira && !trello) return undefined;
         const out: Record<string, string> = {};
         if (bb) {
           out.ATLASSIAN_EMAIL = bb.email;
@@ -853,6 +855,10 @@ class SessionManager {
           // If Bitbucket wasn't set, still expose ATLASSIAN_EMAIL so
           // skills that key off it (without caring which product) work.
           if (!bb) out.ATLASSIAN_EMAIL = jira.email;
+        }
+        if (trello) {
+          out.TRELLO_API_KEY = trello.apiKey;
+          out.TRELLO_TOKEN = trello.apiToken;
         }
         return out;
       })(),

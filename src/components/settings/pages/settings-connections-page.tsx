@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { FiTerminal, FiGithub, FiGitBranch, FiCloud, FiPackage } from "react-icons/fi";
-import { SiLinear, SiJira, SiSlack, SiNotion } from "react-icons/si";
+import { SiLinear, SiJira, SiSlack, SiNotion, SiTrello } from "react-icons/si";
 import { authFetch } from "@/lib/auth";
 import { useUrlState } from "@/lib/use-url-state";
 import { ConnectionRow, type ConnectionStatus } from "../connection-row";
@@ -53,6 +53,7 @@ export function SettingsConnectionsPage() {
   const [linearStatus, setLinearStatus] = useState<ConnectionStatus>("unknown");
   const [jiraStatus, setJiraStatus] = useState<ConnectionStatus>("unknown");
   const [notionStatus, setNotionStatus] = useState<ConnectionStatus>("unknown");
+  const [trelloStatus, setTrelloStatus] = useState<ConnectionStatus>("unknown");
   const { setParam } = useUrlState();
 
   // Claude Code auth status.
@@ -172,6 +173,20 @@ export function SettingsConnectionsPage() {
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    authFetch(`${BASE}/api/trello-custom/status`)
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null)
+      .then((data: { saved?: boolean } | null) => {
+        if (cancelled) return;
+        setTrelloStatus(data?.saved ? "connected" : "disconnected");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const googleStatus = aggregateStatus(mcpServers, GOOGLE_IDS);
   const microsoftStatus = singleStatus(mcpServers, "microsoft-365");
   const slackStatus = singleStatus(mcpServers, "slack");
@@ -257,6 +272,14 @@ export function SettingsConnectionsPage() {
         description="Search and update pages and databases"
         status={notionStatus}
         onClick={() => setParam("settings", "connections/notion")}
+      />
+
+      <ConnectionRow
+        icon={<SiTrello size={16} className="text-blue-500" />}
+        name="Trello"
+        description="Boards, lists, and cards"
+        status={trelloStatus}
+        onClick={() => setParam("settings", "connections/trello")}
       />
     </div>
   );

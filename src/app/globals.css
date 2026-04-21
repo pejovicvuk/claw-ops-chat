@@ -322,6 +322,18 @@ html:not(.dark) {
   animation: messageFadeIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
+/* ── Session-row active border glow ──
+ * Gentle opacity pulse on the full row so an actively-working session
+ * reads as "alive" from the corner of your eye, without the loud
+ * animate-pulse that makes the text hard to read. */
+@keyframes sessionRowGlow {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.7; }
+}
+.animate-session-active {
+  animation: sessionRowGlow 2.4s ease-in-out infinite;
+}
+
 /* ── Sidebar/panel smooth transitions ── */
 
 .transition-sidebar {

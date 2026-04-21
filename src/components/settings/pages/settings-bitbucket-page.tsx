@@ -117,9 +117,8 @@ export function SettingsBitbucketPage() {
           </div>
           <p className="text-[12px] text-canvas-muted">
             {status.displayName ? `Signed in as ${status.displayName}.` : "Token validated."}{" "}
-            Workspace:{" "}
-            <code className="rounded bg-canvas-bg px-1 py-0.5">{status.workspace}</code>. Claude can
-            now read repos, branches, and PRs via the{" "}
+            Workspace: <code className="rounded bg-canvas-bg px-1 py-0.5">{status.workspace}</code>.
+            Claude can now read repos, branches, and PRs via the{" "}
             <code className="rounded bg-canvas-bg px-1 py-0.5">bitbucket</code> skill.
           </p>
         </div>
@@ -151,7 +150,9 @@ export function SettingsBitbucketPage() {
       <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
         <div className="mb-2 flex items-center gap-2">
           <FiGitBranch size={14} className="text-canvas-fg" />
-          <span className="text-[13px] font-medium text-canvas-fg">Connect a Bitbucket Cloud account</span>
+          <span className="text-[13px] font-medium text-canvas-fg">
+            Connect a Bitbucket Cloud account
+          </span>
         </div>
         <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
           Create an API token at{" "}
@@ -226,7 +227,10 @@ export function SettingsBitbucketPage() {
             />
             <p className="mt-1 text-[10px] text-canvas-muted">
               The last segment of your Bitbucket URL:{" "}
-              <code className="rounded bg-canvas-bg px-1 py-0.5">bitbucket.org/&lt;workspace&gt;</code>.
+              <code className="rounded bg-canvas-bg px-1 py-0.5">
+                bitbucket.org/&lt;workspace&gt;
+              </code>
+              .
             </p>
           </div>
 
@@ -262,8 +266,8 @@ export function SettingsBitbucketPage() {
         Credentials are stored locally in the container at{" "}
         <code>~/.claude/custom-bitbucket/credentials.json</code> (mode 0600) and injected as
         <code> ATLASSIAN_EMAIL</code>, <code>BITBUCKET_API_TOKEN</code>, and
-        <code> BITBUCKET_WORKSPACE</code> into the Claude Agent SDK subprocess on every query
-        — that's how the skill under <code>/opt/skills/bitbucket/</code> sees them.
+        <code> BITBUCKET_WORKSPACE</code> into the Claude Agent SDK subprocess on every query —
+        that&apos;s how the skill under <code>/opt/skills/bitbucket/</code> sees them.
       </p>
     </div>
   );

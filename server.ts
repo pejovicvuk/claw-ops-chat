@@ -18,6 +18,7 @@ import { resolveShell } from "./src/lib/terminal-shell";
 import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
 import { loadCredentialsSync as loadJiraCredentials } from "./src/lib/jira-custom-config";
 import { loadCredentialsSync as loadTrelloCredentials } from "./src/lib/trello-custom-config";
+import { augmentPathWithLocalBin } from "./src/lib/platform-detect";
 import { existsSync, readdirSync, statSync } from "fs";
 import {
   setSessionStatus,
@@ -860,18 +861,24 @@ class SessionManager {
               },
             }
           : {}),
-      // If the user saved Bitbucket / Jira creds in Settings, inject the
-      // matching env vars so any skill (e.g. /opt/skills/bitbucket/) or
-      // MCP server that expects them can pick them up. Loaded fresh from
-      // disk per-query so rotated tokens take effect without restarting
-      // the container. Returns undefined when nothing is configured so
-      // we don't pass an empty env object to the SDK.
+      // Always seed the SDK's env with the parent process's full env
+      // (so PATH / HOME / locale / NODE_OPTIONS / all the usual chain
+      // reach through to the Claude CLI subprocess and the MCP servers
+      // it spawns), plus ~/.local/bin prepended to PATH so uvx is
+      // findable even when it was installed *after* the chat server
+      // started. Previously this block returned `undefined` (or an
+      // object with only Atlassian/Trello creds and no PATH) — when
+      // that was forwarded to the SDK, the spawned Claude CLI inherited
+      // either the parent's env or the bare creds object; if the latter,
+      // it lost PATH and `uvx workspace-mcp` failed silently, which is
+      // exactly why Gmail tools never appeared after signing in to
+      // Google via our custom flow.
       env: (() => {
+        const base = augmentPathWithLocalBin();
+        const out: NodeJS.ProcessEnv = { ...base };
         const bb = loadBitbucketCredentials();
         const jira = loadJiraCredentials();
         const trello = loadTrelloCredentials();
-        if (!bb && !jira && !trello) return undefined;
-        const out: Record<string, string> = {};
         if (bb) {
           out.ATLASSIAN_EMAIL = bb.email;
           out.BITBUCKET_API_TOKEN = bb.apiToken;
@@ -881,8 +888,6 @@ class SessionManager {
           out.JIRA_URL = `https://${jira.domain}`;
           out.JIRA_EMAIL = jira.email;
           out.JIRA_API_TOKEN = jira.apiToken;
-          // If Bitbucket wasn't set, still expose ATLASSIAN_EMAIL so
-          // skills that key off it (without caring which product) work.
           if (!bb) out.ATLASSIAN_EMAIL = jira.email;
         }
         if (trello) {

@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { loadCredentials, isMcpServerRegistered } from "@/lib/google-custom-config";
+import { hasWorkspaceMcpCredentials } from "@/lib/google-workspace-mcp-tokens";
 import {
   augmentPathWithLocalBin,
   detectPlatform,
@@ -34,7 +35,7 @@ function checkUvx(): Promise<boolean> {
 export async function GET(request: Request) {
   if (!extractSession(request)) return unauthorized();
 
-  const [uvxInstalled, uvBinaryFound, creds, registered, powershell, downloader] =
+  const [uvxInstalled, uvBinaryFound, creds, registered, powershell, downloader, hasTokens] =
     await Promise.all([
       checkUvx(),
       uvBinaryExists(),
@@ -42,15 +43,28 @@ export async function GET(request: Request) {
       isMcpServerRegistered(),
       resolvePowerShell(),
       resolveDownloader(),
+      hasWorkspaceMcpCredentials(),
     ]);
 
   return Response.json({
     uvxInstalled,
     uvBinaryFound,
     credentialsConfigured: !!creds,
-    // "connected" means both credentials are saved AND the MCP server is registered
-    // (meaning authorize has been run at least once).
-    connected: !!creds && registered,
+    /**
+     * `connected` here means: creds saved + MCP registered + a workspace-mcp
+     * credential file exists on disk. The old check was just creds+registered,
+     * but with the device-flow path a successful sign-in also writes the
+     * credential file — surfacing its presence lets the UI distinguish
+     * "credentials saved but never signed in" from "fully connected".
+     */
+    connected: !!creds && registered && hasTokens,
+    /**
+     * "installed" (Desktop) → device flow; "web" → redirect flow. The UI
+     * picks which path to render based on this.
+     */
+    clientType: creds?.clientType ?? null,
+    /** Email of the Google account currently signed in (null if none yet). */
+    accountEmail: creds?.accountEmail ?? null,
     platform: detectPlatform(),
     powershell,
     downloader,

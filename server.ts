@@ -83,8 +83,15 @@ const ALLOWED_ORIGINS = new Set(
     .filter(Boolean),
 );
 
-/** Permission/question response timeout in ms (default: 5 minutes). */
-const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "300000", 10);
+/**
+ * Permission / question / plan response timeout in ms.
+ * Default bumped from 5 minutes → 24 hours so users who step away from
+ * the tab don't come back to silently auto-denied approvals (which
+ * previously manifested as "Claude stops for no reason" — it received
+ * a "Response timed out" denial and then hallucinated a workaround).
+ * Set to 0 (or any non-positive value) to disable the timeout entirely.
+ */
+const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "86400000", 10);
 
 /* Load MCP servers from ~/.claude.json */
 let mcpServers: Record<string, unknown> | undefined;
@@ -838,15 +845,23 @@ class SessionManager {
    */
   private waitForResponse(session: ChatSession, id: string): Promise<Record<string, unknown>> {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        session.pendingRequests.delete(id);
-        console.warn(`[session=${session.id}] Response timeout for request ${id}`);
-        this.setStatus(session, "thinking");
-        resolve({ allow: false, message: "Response timed out", answers: {} });
-      }, RESPONSE_TIMEOUT_MS);
+      // RESPONSE_TIMEOUT_MS <= 0 disables the safety timer completely —
+      // the promise only resolves when a real permission_response /
+      // ask_response / plan_response arrives. Useful for fully
+      // background workflows where the user may not check back for
+      // hours (or days) and we never want to auto-deny silently.
+      const timer =
+        RESPONSE_TIMEOUT_MS > 0
+          ? setTimeout(() => {
+              session.pendingRequests.delete(id);
+              console.warn(`[session=${session.id}] Response timeout for request ${id}`);
+              this.setStatus(session, "thinking");
+              resolve({ allow: false, message: "Response timed out", answers: {} });
+            }, RESPONSE_TIMEOUT_MS)
+          : null;
 
       session.pendingRequests.set(id, (response) => {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         resolve(response);
       });
     });

@@ -330,7 +330,11 @@ class SessionManager {
       return;
     }
 
-    if (type === "permission_response" || type === "ask_response") {
+    if (
+      type === "permission_response" ||
+      type === "ask_response" ||
+      type === "plan_response"
+    ) {
       const id = msg.id as string;
       const resolver = session.pendingRequests.get(id);
       if (resolver) {
@@ -343,7 +347,12 @@ class SessionManager {
       // the same Bash approval again.
       session.eventHistory = session.eventHistory.filter((e) => {
         const t = e.type;
-        if (t !== "permission_request" && t !== "ask_question") return true;
+        if (
+          t !== "permission_request" &&
+          t !== "ask_question" &&
+          t !== "plan_proposal"
+        )
+          return true;
         return e.id !== id;
       });
       // Broadcast a resolution marker so other open tabs watching the
@@ -410,6 +419,46 @@ class SessionManager {
           return {
             behavior: "allow",
             updatedInput: { questions: input.questions || [], answers: response.answers || {} },
+          };
+        }
+
+        // Handle ExitPlanMode — Claude calls this at the end of plan mode to
+        // propose its plan. Without a dedicated branch, it falls through to
+        // the generic permission modal with the plan stuffed into input JSON,
+        // the user can't read it, and even an "Allow" click doesn't switch
+        // the session out of plan mode → every subsequent Bash/Edit gets
+        // auto-denied → Claude loops until it times out ("fails without
+        // reason" in user bug reports). This branch renders a proper plan
+        // card on the client and applies the user's chosen mode switch.
+        if (toolName === "ExitPlanMode") {
+          const id = `req-${++session.requestCounter}`;
+          const planText =
+            typeof input.plan === "string" ? input.plan : JSON.stringify(input);
+          this.broadcast(session, { type: "plan_proposal", id, plan: planText });
+          this.setStatus(session, "awaiting_permission");
+          const response = await this.waitForResponse(session, id);
+          this.setStatus(session, "thinking");
+
+          const approve = response.approve === true;
+          const newMode = typeof response.newMode === "string" ? response.newMode : null;
+          if (approve) {
+            // Default behaviour after plan approval is to flip into
+            // acceptEdits so Claude can actually execute the plan it
+            // just proposed; the client can override by sending
+            // newMode: "default" if the user wants to keep confirming.
+            if (newMode === "default" || newMode === "plan" || newMode === "acceptEdits") {
+              session.permissionMode = newMode;
+            } else {
+              session.permissionMode = "acceptEdits";
+            }
+            return { behavior: "allow", updatedInput: input };
+          }
+          return {
+            behavior: "deny",
+            message:
+              typeof response.message === "string" && response.message.trim()
+                ? response.message
+                : "Plan not approved — adjust and try again.",
           };
         }
 

@@ -251,21 +251,49 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       }
 
       if (type === "permission_resolved") {
-        // Server-side purge signal — a permission was answered in
-        // another tab. Mark it resolved locally so we don't surface a
-        // modal that no longer makes sense, and add to the local set.
+        // Server-side purge signal — a permission / ask / plan prompt was
+        // answered in another tab. Mark it resolved locally so we don't
+        // surface a modal that no longer makes sense.
         const resolvedId = evt.id as string;
         if (resolvedId) {
           resolvedPermissionsRef.current.add(resolvedId);
           persistResolved();
           setMessages((prev) =>
-            prev.map((m) =>
-              m.permissionId === resolvedId
-                ? { ...m, permissionResolved: true }
-                : m,
-            ),
+            prev.map((m) => {
+              if (m.permissionId === resolvedId) return { ...m, permissionResolved: true };
+              if (m.askId === resolvedId) return { ...m, askResolved: true };
+              if (m.planId === resolvedId) return { ...m, planResolved: true };
+              return m;
+            }),
           );
         }
+        return;
+      }
+
+      if (type === "plan_proposal") {
+        const planId = evt.id as string;
+        if (resolvedPermissionsRef.current.has(planId)) {
+          // Already resolved in a previous tab / page load — skip replay.
+          return;
+        }
+        currentAssistantRef.current = null;
+        setStatus("awaiting_permission");
+        setMessages((prev) => {
+          if (prev.some((m) => m.planId === planId)) return prev;
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "system" as const,
+              type: "plan_proposal" as const,
+              content: "",
+              planId,
+              planContent: (evt.plan as string) || "",
+              planResolved: false,
+              timestamp: Date.now(),
+            },
+          ];
+        });
         return;
       }
 
@@ -527,6 +555,45 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     [status, sendToServer],
   );
 
+  /* ── Plan-proposal response ── */
+  const respondPlan = useCallback(
+    (
+      planId: string,
+      approve: boolean,
+      opts?: { newMode?: "default" | "acceptEdits"; message?: string },
+    ) => {
+      sendToServer({
+        type: "plan_response",
+        id: planId,
+        approve,
+        newMode: opts?.newMode,
+        message: opts?.message,
+      });
+      resolvedPermissionsRef.current.add(planId);
+      persistResolved();
+
+      const outcome: NonNullable<ChatMessage["planOutcome"]> = approve
+        ? opts?.newMode === "default"
+          ? "approved_default"
+          : "approved_accept_edits"
+        : "rejected";
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.planId === planId
+            ? {
+                ...m,
+                planResolved: true,
+                planOutcome: outcome,
+                planMessage: opts?.message,
+              }
+            : m,
+        ),
+      );
+    },
+    [sendToServer, persistResolved],
+  );
+
   /* ── Permission response ── */
   const respondPermission = useCallback(
     (permissionId: string, allow: boolean, allowSession?: boolean, message?: string) => {
@@ -560,8 +627,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
   /* ── Question response ── */
   const respondQuestion = useCallback(
-    (askId: string, answers: Record<string, string>) => {
+    (askId: string, answers: Record<string, string | string[]>) => {
       sendToServer({ type: "ask_response", id: askId, answers });
+      resolvedPermissionsRef.current.add(askId);
+      persistResolved();
       setMessages((prev) => prev.map((m) => (m.askId === askId ? { ...m, askResolved: true } : m)));
       setStatus("thinking");
     },
@@ -638,6 +707,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     stopGeneration,
     respondPermission,
     respondQuestion,
+    respondPlan,
     setPermissionMode,
     setEffort,
     reconnect,

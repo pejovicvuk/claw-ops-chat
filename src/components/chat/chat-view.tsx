@@ -117,6 +117,10 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
+  // Stagger first-load history messages only; new streaming messages animate
+  // without delay. Set captured once when loadingHistory flips false.
+  const historyIdsRef = useRef<string[]>([]);
+  const capturedHistoryRef = useRef(false);
   const [loadingHistory, setLoadingHistory] = useState(!!resumeSessionId);
   const [permissionMode, setMode] = useState<string>(() => {
     if (typeof window === "undefined") return "default";
@@ -218,6 +222,15 @@ export function ChatView({
     }
     return null;
   }, [messages]);
+
+  // Capture the first-load snapshot once — these IDs get staggered animation
+  // delays on mount. Post-capture arrivals (streaming) animate without delay.
+  useEffect(() => {
+    if (!loadingHistory && !capturedHistoryRef.current && sortedMessages.length) {
+      historyIdsRef.current = sortedMessages.map((m) => m.id);
+      capturedHistoryRef.current = true;
+    }
+  }, [loadingHistory, sortedMessages]);
 
   return (
     <div
@@ -462,15 +475,23 @@ export function ChatView({
               </p>
             </div>
           )}
-          {sortedMessages.map((msg) =>
-            msg._isInfo ? (
-              <div key={msg.id} className="animate-msg-in flex justify-center px-4 py-1.5">
+          {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
+          {sortedMessages.map((msg) => {
+            const histIdx = historyIdsRef.current.indexOf(msg.id);
+            const staggerStyle =
+              histIdx >= 0 ? { animationDelay: `${Math.min(histIdx, 12) * 25}ms` } : undefined;
+            return msg._isInfo ? (
+              <div
+                key={msg.id}
+                className="animate-msg-in flex justify-center px-4 py-1.5"
+                style={staggerStyle}
+              >
                 <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
                   {msg.content}
                 </span>
               </div>
             ) : (
-              <div key={msg.id} className="animate-msg-in">
+              <div key={msg.id} className="animate-msg-in" style={staggerStyle}>
                 <MessageBubble
                   message={msg}
                   isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
@@ -478,8 +499,8 @@ export function ChatView({
                   onQuestionRespond={respondQuestion}
                 />
               </div>
-            ),
-          )}
+            );
+          })}
           {(status === "thinking" || status === "tool_running") && (
             <div className="animate-msg-in flex items-center gap-2.5 px-5 py-2">
               <span className="thinking-dots flex items-center gap-1">

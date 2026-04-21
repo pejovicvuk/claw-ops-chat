@@ -46,14 +46,14 @@ export function SessionList({
           <button
             type="button"
             onClick={onRefresh}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+            className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
           >
             <FiRefreshCw size={13} />
           </button>
           <button
             type="button"
             onClick={onNewChat}
-            className="flex h-7 w-7 items-center justify-center rounded-md text-accent hover:bg-canvas-surface-hover"
+            className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-accent hover:bg-canvas-surface-hover"
           >
             <FiPlus size={15} />
           </button>
@@ -62,8 +62,14 @@ export function SessionList({
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
         {loading && (
-          <div className="flex items-center justify-center py-8">
-            <div className="h-4 w-4 animate-spin rounded-full border-2 border-canvas-border border-t-canvas-muted" />
+          <div className="space-y-1.5 px-1">
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-12 rounded-lg bg-canvas-surface-hover/50 animate-pulse"
+                style={{ animationDelay: `${i * 80}ms` }}
+              />
+            ))}
           </div>
         )}
 
@@ -90,7 +96,7 @@ export function SessionList({
                   key={session.sessionId}
                   type="button"
                   onClick={() => onSelectSession(session.sessionId)}
-                  className={`flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors ${
+                  className={`row-hover focus-ring flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors ${
                     isActive
                       ? "bg-canvas-surface-hover text-canvas-fg"
                       : "text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
@@ -119,7 +125,7 @@ export function SessionList({
         <button
           type="button"
           onClick={openSettings}
-          className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+          className="row-hover focus-ring flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
         >
           <FiSettings size={14} />
           Settings

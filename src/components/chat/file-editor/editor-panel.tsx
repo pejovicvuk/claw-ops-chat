@@ -51,6 +51,12 @@ export function FileEditorPanel({
   onRevealInBrowser,
 }: FileEditorPanelProps) {
   const isMobile = useIsMobile();
+  const [closing, setClosing] = useState(false);
+  const requestClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(onClose, 160);
+  }, [closing, onClose]);
 
   // Load persisted layout once on mount; fall back to cascading default.
   const [rect, setRect] = useState(() => {
@@ -320,7 +326,7 @@ export function FileEditorPanel({
       }
       className={`flex flex-col border border-canvas-border bg-canvas-bg shadow-xl ${
         isMobile ? "" : "rounded-lg"
-      }`}
+      } ${closing ? "animate-panel-out" : "animate-panel-in"}`}
     >
       <EditorHeader
         path={file.path}
@@ -330,7 +336,7 @@ export function FileEditorPanel({
         hideWindowControls={isMobile}
         onSegmentClick={handleSegmentClick}
         onSave={handleSave}
-        onClose={onClose}
+        onClose={requestClose}
         onMinimize={isMobile ? undefined : () => setMinimized(true)}
         onToggleMaximize={isMobile ? undefined : onToggleMaximize}
         onReveal={
@@ -387,7 +393,7 @@ export function FileEditorPanel({
       {isMobile && (
         <button
           type="button"
-          onClick={onClose}
+          onClick={requestClose}
           aria-label="Close editor"
           className="absolute right-2 top-[calc(env(safe-area-inset-top,0)+6px)] z-10 flex h-7 w-7 items-center justify-center rounded-full bg-canvas-bg/80 text-canvas-muted shadow hover:text-canvas-fg"
         >

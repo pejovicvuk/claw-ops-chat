@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import bundleAnalyzer from "@next/bundle-analyzer";
 
 const apiOrigin = (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080").replace(
   /\/+$/,
@@ -13,6 +14,17 @@ const nextConfig: NextConfig = {
   // Disable the client-side router cache so refreshes always show the latest code.
   experimental: {
     staleTimes: { dynamic: 0, static: 30 },
+    optimizePackageImports: [
+      "react-icons",
+      "react-icons/fi",
+      "react-markdown",
+      "@codemirror/view",
+      "@codemirror/state",
+      "@codemirror/language",
+      "@codemirror/commands",
+      "@codemirror/search",
+      "@codemirror/autocomplete",
+    ],
   },
   headers: async () => [
     {
@@ -57,4 +69,6 @@ const nextConfig: NextConfig = {
   ],
 };
 
-export default nextConfig;
+const withBundleAnalyzer = bundleAnalyzer({ enabled: process.env.ANALYZE === "true" });
+
+export default withBundleAnalyzer(nextConfig);

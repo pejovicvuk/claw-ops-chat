@@ -13,6 +13,8 @@ interface DeleteConfirmProps {
   entryCount?: number | null;
   /** Optional: blocking error text shown inline. */
   error?: string | null;
+  /** Drives enter/exit animation classes — supplied by a parent useExitAnimation. */
+  animationState?: "entering" | "open" | "exiting";
 }
 
 export function DeleteConfirm({
@@ -21,7 +23,11 @@ export function DeleteConfirm({
   onCancel,
   entryCount,
   error,
+  animationState = "open",
 }: DeleteConfirmProps) {
+  const exiting = animationState === "exiting";
+  const backdropClass = exiting ? "animate-backdrop-out" : "animate-backdrop-in";
+  const dialogClass = exiting ? "animate-modal-out" : "animate-modal-in";
   const [submitting, setSubmitting] = useState(false);
   const deleteRef = useRef<HTMLButtonElement>(null);
 
@@ -52,7 +58,7 @@ export function DeleteConfirm({
   return (
     <>
       <div
-        className="fixed inset-0 bg-black/40 backdrop-blur-[2px]"
+        className={`fixed inset-0 bg-black/40 backdrop-blur-[2px] ${backdropClass}`}
         style={{ zIndex: Z_INDEX.MODAL }}
         onClick={onCancel}
         aria-hidden
@@ -61,7 +67,7 @@ export function DeleteConfirm({
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-title"
-        className="fixed left-1/2 top-1/2 w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-canvas-border bg-canvas-bg p-5 shadow-2xl"
+        className={`fixed left-1/2 top-1/2 w-[min(420px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-canvas-border bg-canvas-bg p-5 shadow-2xl ${dialogClass}`}
         style={{ zIndex: Z_INDEX.MODAL + 1 }}
       >
         <div className="mb-3 flex items-center justify-between">
@@ -117,7 +123,7 @@ export function DeleteConfirm({
             type="button"
             onClick={onCancel}
             disabled={submitting}
-            className="rounded-lg border border-canvas-border px-3 py-1.5 text-[12px] font-medium text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-50"
+            className="btn-press focus-ring rounded-lg border border-canvas-border px-3 py-1.5 text-[12px] font-medium text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-50"
           >
             Cancel
           </button>
@@ -129,7 +135,7 @@ export function DeleteConfirm({
               if (e.key === "Enter") void handleConfirm();
             }}
             disabled={submitting}
-            className="flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-red-600 disabled:opacity-50"
+            className="btn-press focus-ring flex items-center gap-1.5 rounded-lg bg-red-500 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-red-600 disabled:opacity-50"
           >
             {submitting ? <FiLoader size={11} className="animate-spin" /> : <FiTrash2 size={11} />}
             {submitting ? "Deleting..." : "Delete"}

@@ -1,8 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Markdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { lazy, memo, Suspense, useMemo, useState } from "react";
 import {
   FiTerminal,
   FiFile,
@@ -13,6 +11,19 @@ import {
   FiX,
 } from "react-icons/fi";
 import type { ChatMessage } from "@/lib/types";
+
+// Lazy: react-markdown + remark-gfm (~33kb gz) are deferred out of the main
+// chunk. `preloadMarkdown` warms the chunk as soon as the user submits.
+const MarkdownRenderer = lazy(() => import("./markdown-renderer"));
+export function preloadMarkdown() {
+  void import("./markdown-renderer");
+}
+
+function MarkdownFallback({ text }: { text: string }) {
+  return (
+    <pre className="whitespace-pre-wrap text-[14px] leading-relaxed text-canvas-fg">{text}</pre>
+  );
+}
 
 /* ── Tool display mapping ── */
 
@@ -54,62 +65,6 @@ function hasBoxDrawing(text: string): boolean {
   return BOX_CHARS.test(text);
 }
 
-/* ── Markdown components ── */
-const markdownComponents = {
-  p: ({ children }: { children?: React.ReactNode }) => (
-    <p className="my-1 text-[14px] leading-relaxed text-canvas-fg">{children}</p>
-  ),
-  code: ({ className, children }: { className?: string; children?: React.ReactNode }) => {
-    const isBlock = className?.includes("language-");
-    if (isBlock) {
-      return (
-        <code className="block overflow-x-auto rounded bg-canvas-bg p-3 font-mono text-[12px] leading-relaxed text-canvas-fg">
-          {children}
-        </code>
-      );
-    }
-    return (
-      <code className="rounded bg-canvas-surface-hover px-1.5 py-0.5 font-mono text-[12px] text-canvas-fg">
-        {children}
-      </code>
-    );
-  },
-  pre: ({ children }: { children?: React.ReactNode }) => (
-    <pre className="my-2 overflow-x-auto rounded-md bg-canvas-bg border border-canvas-border">
-      {children}
-    </pre>
-  ),
-  strong: ({ children }: { children?: React.ReactNode }) => (
-    <strong className="font-bold text-canvas-fg">{children}</strong>
-  ),
-  ul: ({ children }: { children?: React.ReactNode }) => (
-    <ul className="my-1.5 ml-4 list-disc text-[14px] text-canvas-fg">{children}</ul>
-  ),
-  ol: ({ children }: { children?: React.ReactNode }) => (
-    <ol className="my-1.5 ml-4 list-decimal text-[14px] text-canvas-fg">{children}</ol>
-  ),
-  li: ({ children }: { children?: React.ReactNode }) => <li className="my-0.5">{children}</li>,
-  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
-    <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
-  table: ({ children }: { children?: React.ReactNode }) => (
-    <div className="my-2 overflow-x-auto rounded-md border border-canvas-border">
-      <table className="w-full text-[12px] text-canvas-fg">{children}</table>
-    </div>
-  ),
-  thead: ({ children }: { children?: React.ReactNode }) => (
-    <thead className="border-b border-canvas-border bg-canvas-surface-hover">{children}</thead>
-  ),
-  th: ({ children }: { children?: React.ReactNode }) => (
-    <th className="px-3 py-2 text-left text-[11px] font-semibold text-gray-400">{children}</th>
-  ),
-  td: ({ children }: { children?: React.ReactNode }) => (
-    <td className="border-t border-canvas-border px-3 py-1.5">{children}</td>
-  ),
-};
-
 /* ── Component ── */
 
 interface MessageBubbleProps {
@@ -129,7 +84,7 @@ interface MessageBubbleProps {
   ) => void;
 }
 
-export function MessageBubble({
+export const MessageBubble = memo(function MessageBubble({
   message,
   isLatestToolUse,
   onPermissionRespond,
@@ -195,15 +150,15 @@ export function MessageBubble({
       </div>
     </div>
   );
-}
+});
 
 function AssistantTextContent({ content }: { content: string }) {
   const text = typeof content === "string" ? content : String(content ?? "");
   if (!hasBoxDrawing(text)) {
     return (
-      <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-        {text}
-      </Markdown>
+      <Suspense fallback={<MarkdownFallback text={text} />}>
+        <MarkdownRenderer text={text} />
+      </Suspense>
     );
   }
 
@@ -236,9 +191,9 @@ function AssistantTextContent({ content }: { content: string }) {
             </pre>
           </div>
         ) : (
-          <Markdown key={i} remarkPlugins={[remarkGfm]} components={markdownComponents}>
-            {seg.content}
-          </Markdown>
+          <Suspense key={i} fallback={<MarkdownFallback text={seg.content} />}>
+            <MarkdownRenderer text={seg.content} />
+          </Suspense>
         ),
       )}
     </>
@@ -571,9 +526,9 @@ function PlanProposalBlock({
         </div>
 
         <div className="rounded-md border border-canvas-border bg-canvas-bg px-3 py-2">
-          <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
-            {message.planContent || "*(empty plan)*"}
-          </Markdown>
+          <Suspense fallback={<MarkdownFallback text={message.planContent || "*(empty plan)*"} />}>
+            <MarkdownRenderer text={message.planContent || "*(empty plan)*"} />
+          </Suspense>
         </div>
 
         <PlanFilesPreview plan={message.planContent || ""} />

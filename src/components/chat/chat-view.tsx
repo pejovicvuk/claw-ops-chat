@@ -106,6 +106,10 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
+  // Stagger first-load history messages only; new streaming messages animate
+  // without delay. Set captured once when loadingHistory flips false.
+  const historyIdsRef = useRef<string[]>([]);
+  const capturedHistoryRef = useRef(false);
   const [loadingHistory, setLoadingHistory] = useState(!!resumeSessionId);
   const [permissionMode, setMode] = useState<string>(() => {
     if (typeof window === "undefined") return "default";
@@ -248,6 +252,15 @@ export function ChatView({
     }
     return null;
   }, [messages]);
+
+  // Capture the first-load snapshot once — these IDs get staggered animation
+  // delays on mount. Post-capture arrivals (streaming) animate without delay.
+  useEffect(() => {
+    if (!loadingHistory && !capturedHistoryRef.current && sortedMessages.length) {
+      historyIdsRef.current = sortedMessages.map((m) => m.id);
+      capturedHistoryRef.current = true;
+    }
+  }, [loadingHistory, sortedMessages]);
 
   return (
     <div
@@ -545,10 +558,23 @@ export function ChatView({
               </p>
             </div>
           )}
+          {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
           {sortedMessages.map((msg, idx) => {
+            // Staggered enter animation for first-load history only —
+            // streaming messages (idx not in historyIdsRef) animate
+            // instantly. Capped at 12 * 25ms so a huge backlog doesn't
+            // visibly cascade for half a second.
+            const histIdx = historyIdsRef.current.indexOf(msg.id);
+            const staggerStyle =
+              histIdx >= 0 ? { animationDelay: `${Math.min(histIdx, 12) * 25}ms` } : undefined;
+
             if (msg._isInfo) {
               return (
-                <div key={msg.id} className="animate-msg-in flex justify-center px-4 py-1.5">
+                <div
+                  key={msg.id}
+                  className="animate-msg-in flex justify-center px-4 py-1.5"
+                  style={staggerStyle}
+                >
                   <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
                     {msg.content}
                   </span>
@@ -580,6 +606,7 @@ export function ChatView({
                 } ${isTimelineNode && !prevIsTimeline ? "mt-2 pt-1" : ""} ${
                   isTimelineNode && !nextIsTimeline ? "mb-2 pb-1" : ""
                 }`}
+                style={staggerStyle}
               >
                 <MessageBubble
                   message={msg}

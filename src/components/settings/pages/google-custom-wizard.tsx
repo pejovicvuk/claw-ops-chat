@@ -137,6 +137,13 @@ export function GoogleCustomWizard() {
   const [setupBooting, setSetupBooting] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
 
+  // Server-side web-redirect flow state.
+  const [webFlowPending, setWebFlowPending] = useState(false);
+  const [webFlowError, setWebFlowError] = useState<string | null>(null);
+  const [showLegacyWebOptions, setShowLegacyWebOptions] = useState(false);
+  const webFlowPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webFlowExpiryRef = useRef<number>(0);
+
   const refreshStatus = useCallback(async () => {
     try {
       const res = await authFetch(`${BASE}/api/google-custom/status`);
@@ -424,6 +431,15 @@ export function GoogleCustomWizard() {
       /* best-effort */
     }
     stopPolling();
+    // stopWebFlowPolling is declared below via useCallback; it's safe to
+    // call here because disconnect itself only fires from user clicks long
+    // after the component body ran.
+    if (webFlowPollTimerRef.current) {
+      clearTimeout(webFlowPollTimerRef.current);
+      webFlowPollTimerRef.current = null;
+    }
+    setWebFlowPending(false);
+    setWebFlowError(null);
     setClientId("");
     setClientSecret("");
     setJsonPaste("");
@@ -477,6 +493,68 @@ export function GoogleCustomWizard() {
     setSetupTerminal(null);
     void refreshStatus();
   }, [refreshStatus]);
+
+  // ─────────── Server-side Web-redirect flow (preferred for Web clients) ───────────
+  // No terminal, no workspace-mcp OAuth proxy, no nginx trick. We build the
+  // Google auth URL, open it in a new tab, and poll /status to notice when
+  // the callback finishes on the server side.
+
+  const stopWebFlowPolling = useCallback(() => {
+    if (webFlowPollTimerRef.current) {
+      clearTimeout(webFlowPollTimerRef.current);
+      webFlowPollTimerRef.current = null;
+    }
+    setWebFlowPending(false);
+  }, []);
+
+  const pollWebFlow = useCallback(async () => {
+    if (Date.now() > webFlowExpiryRef.current) {
+      setWebFlowError("Sign-in timed out. Click Sign in with Google again to retry.");
+      stopWebFlowPolling();
+      return;
+    }
+    try {
+      const res = await authFetch(`${BASE}/api/google-custom/status`);
+      const data = (await res.json().catch(() => ({}))) as Status;
+      if (data.connected && data.accountEmail) {
+        setSignedInEmail(data.accountEmail);
+        setStatus(data);
+        setMode("connected");
+        stopWebFlowPolling();
+        return;
+      }
+      webFlowPollTimerRef.current = setTimeout(() => void pollWebFlow(), 2000);
+    } catch {
+      webFlowPollTimerRef.current = setTimeout(() => void pollWebFlow(), 3000);
+    }
+  }, [stopWebFlowPolling]);
+
+  const startWebRedirectFlow = useCallback(async () => {
+    setWebFlowError(null);
+    try {
+      const res = await authFetch(`${BASE}/api/google-custom/web-authorize-start`, {
+        method: "POST",
+      });
+      const data = (await res.json().catch(() => ({}))) as { authUrl?: string; error?: string };
+      if (!res.ok || !data.authUrl) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      // Browsers sometimes block window.open calls not tied to a click; this
+      // handler is synchronous inside the button onClick, so this is fine.
+      window.open(data.authUrl, "_blank", "noopener,noreferrer");
+      setWebFlowPending(true);
+      webFlowExpiryRef.current = Date.now() + 10 * 60 * 1000;
+      webFlowPollTimerRef.current = setTimeout(() => void pollWebFlow(), 2000);
+    } catch (err) {
+      setWebFlowError(err instanceof Error ? err.message : "Failed to start sign-in");
+    }
+  }, [pollWebFlow]);
+
+  useEffect(() => {
+    return () => {
+      if (webFlowPollTimerRef.current) clearTimeout(webFlowPollTimerRef.current);
+    };
+  }, []);
 
   // ───────────────────── Rendering ─────────────────────
 
@@ -1038,37 +1116,71 @@ export function GoogleCustomWizard() {
         ) : (
           <>
             <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
-              Pick the Google account you want to use in the account picker. You&apos;ll see an
-              &quot;unverified app&quot; warning — click{" "}
-              <span className="font-medium">Advanced → Go to …</span> to continue. It&apos;s safe
-              since you own the OAuth app.
+              We&apos;ll open Google&apos;s sign-in page in a new tab. Pick the account, approve the
+              scopes, and you&apos;ll see a confirmation page you can close. This panel will
+              auto-update.
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={openSetupTerminal}
-                disabled={!canSignIn || setupBooting}
+                onClick={startWebRedirectFlow}
+                disabled={!canSignIn || webFlowPending}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
               >
-                <FiTerminal size={12} />
-                {setupBooting ? "Preparing…" : "Run Setup in Terminal"}
-              </button>
-              <button
-                type="button"
-                onClick={startAuthorize}
-                disabled={!canSignIn}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[12px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
-                title="Legacy SSE flow — use the terminal path above if this hangs"
-              >
                 <FiExternalLink size={12} />
-                Classic sign-in
+                {webFlowPending ? "Waiting for Google…" : "Sign in with Google"}
               </button>
+              {webFlowPending && (
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-canvas-muted">
+                  <FiLoader size={11} className="animate-spin" />
+                  Open the new tab, sign in, then come back here.
+                </span>
+              )}
             </div>
-            <p className="mt-2 text-[10px] text-canvas-muted">
-              The terminal path runs <code>uvx workspace-mcp</code> in a live PTY inside the
-              container and proxies Google&apos;s OAuth callback back through the chat&apos;s public
-              URL — use it when the classic sign-in hangs on a remote deployment.
-            </p>
+            {webFlowError && (
+              <p className="mt-2 flex items-start gap-1 text-[11px] text-red-500">
+                <FiAlertTriangle size={10} className="mt-[2px] shrink-0" />
+                {webFlowError}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowLegacyWebOptions((v) => !v)}
+              className="mt-3 text-[11px] text-canvas-muted hover:text-canvas-fg"
+            >
+              {showLegacyWebOptions ? "Hide" : "Show"} legacy sign-in paths
+            </button>
+            {showLegacyWebOptions && (
+              <div className="mt-2 space-y-2 rounded-lg border border-canvas-border bg-canvas-bg/40 p-3">
+                <p className="text-[10px] leading-relaxed text-canvas-muted">
+                  The new <span className="font-medium">Sign in with Google</span> button above
+                  handles the full OAuth handshake on the server — no terminal, no nginx tricks.
+                  These fallbacks exist only for legacy deployments that haven&apos;t picked up the
+                  latest server build.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={openSetupTerminal}
+                    disabled={!canSignIn || setupBooting}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+                  >
+                    <FiTerminal size={11} />
+                    {setupBooting ? "Preparing…" : "Run Setup in Terminal"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startAuthorize}
+                    disabled={!canSignIn}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+                    title="Legacy SSE flow"
+                  >
+                    <FiExternalLink size={11} />
+                    Classic sign-in
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
 

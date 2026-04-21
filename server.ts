@@ -282,10 +282,21 @@ class SessionManager {
    * REST sidebar endpoint), and broadcast to any connected clients.
    * All other `broadcast({ type: "status", ... })` call sites are now
    * replaced with this helper so the two sources of truth can't drift.
+   *
+   * We deliberately write the store under BOTH the WebSocket session id
+   * AND the SDK's claudeSessionId once it's known. `/api/sessions` keys
+   * by the SDK session_id (JSONL filename), while our session map is
+   * keyed by whatever the client passed in `?session=…`. For a new chat
+   * those two ids are different — the sidebar was looking up status
+   * under the wrong key and always seeing nothing, so users reported
+   * "I don't see any indicators".
    */
   private setStatus(session: ChatSession, status: SessionStatus) {
     session.status = status;
     setSessionStatus(session.id, status);
+    if (session.claudeSessionId && session.claudeSessionId !== session.id) {
+      setSessionStatus(session.claudeSessionId, status);
+    }
     this.broadcast(session, { type: "status", status });
     // Fire-and-forget disk persist so a crash between now and the next
     // setStatus call doesn't forget this transition. Errors are logged
@@ -704,6 +715,13 @@ class SessionManager {
           const msg = first.value as Record<string, unknown>;
           if (msg.type === "system" && msg.subtype === "init") {
             session.claudeSessionId = msg.session_id as string;
+            // Mirror the current status into the newly-known SDK session
+            // id so the sidebar — which keys off the SDK id from
+            // /api/sessions — picks up the dot immediately instead of
+            // waiting for the next setStatus.
+            if (session.claudeSessionId !== session.id) {
+              setSessionStatus(session.claudeSessionId, session.status);
+            }
             this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
           }
         }
@@ -725,6 +743,9 @@ class SessionManager {
         // Session init
         if (msg.type === "system" && msg.subtype === "init") {
           session.claudeSessionId = msg.session_id as string;
+          if (session.claudeSessionId !== session.id) {
+            setSessionStatus(session.claudeSessionId, session.status);
+          }
           this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
           continue;
         }

@@ -9,19 +9,35 @@ import { useDesktopNotifications } from "@/lib/use-desktop-notifications";
 import type { SessionStatus } from "@/lib/session-status-store";
 
 /**
- * Colour + label for the dot shown next to each session in the sidebar.
+ * Left-border colour + label shown on each active session row.
  * Orange is deliberately the only non-pulsing colour — a session that
  * needs permission should stand out even if the user's glance misses
- * the animation.
+ * the animation. Idle sessions get no border and no status line.
  */
 const STATUS_UI: Record<
   Exclude<SessionStatus, "idle">,
-  { dotClass: string; label: string }
+  { borderClass: string; label: string; textClass: string }
 > = {
-  thinking: { dotClass: "bg-blue-400 animate-pulse", label: "Thinking" },
-  tool_running: { dotClass: "bg-purple-400 animate-pulse", label: "Running tool" },
-  awaiting_permission: { dotClass: "bg-orange-400", label: "Needs permission" },
-  awaiting_input: { dotClass: "bg-amber-400 animate-pulse", label: "Needs input" },
+  thinking: {
+    borderClass: "border-blue-400",
+    textClass: "text-blue-400",
+    label: "Thinking",
+  },
+  tool_running: {
+    borderClass: "border-purple-400",
+    textClass: "text-purple-400",
+    label: "Running tool",
+  },
+  awaiting_permission: {
+    borderClass: "border-orange-400",
+    textClass: "text-orange-400",
+    label: "Needs permission",
+  },
+  awaiting_input: {
+    borderClass: "border-amber-400",
+    textClass: "text-amber-400",
+    label: "Needs input",
+  },
 };
 
 function formatRelativeTime(ts: number): string {
@@ -160,30 +176,39 @@ export function SessionList({
                     ? "thinking"
                     : null;
               const ui = derivedStatus ? STATUS_UI[derivedStatus] : null;
+              // Colored 3px left border when active, transparent otherwise
+              // so rows stay aligned horizontally regardless of state.
+              // thinking / tool_running gently opacity-pulse to signal
+              // ongoing work; awaiting_* stay solid so they read as
+              // "blocked on you" at first glance.
+              const shouldPulse =
+                derivedStatus === "thinking" || derivedStatus === "tool_running";
+              const borderClass = ui
+                ? `border-l-[3px] ${ui.borderClass}${
+                    shouldPulse ? " animate-session-active" : ""
+                  }`
+                : "border-l-[3px] border-transparent";
               return (
                 <button
                   key={session.sessionId}
                   type="button"
                   onClick={() => onSelectSession(session.sessionId)}
-                  className={`flex w-full items-start gap-2 rounded-lg px-3 py-2 text-left transition-colors ${
+                  className={`flex w-full items-start gap-2 rounded-lg ${borderClass} pl-2.5 pr-3 py-2 text-left transition-colors ${
                     isActive
                       ? "bg-canvas-surface-hover text-canvas-fg"
                       : "text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
                   }`}
                   title={ui?.label}
                 >
-                  {ui ? (
-                    <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${ui.dotClass}`} />
-                  ) : (
-                    // Reserve the same width so titles stay aligned when a
-                    // session flips idle → running → idle.
-                    <span className="mt-1.5 h-2 w-2 shrink-0" aria-hidden />
-                  )}
                   <div className="min-w-0 flex-1">
                     <p className={`line-clamp-1 text-[13px] ${isActive ? "font-medium" : ""}`}>
                       {session.display}
                     </p>
-                    <p className="mt-0.5 text-[10px] text-canvas-muted">
+                    <p
+                      className={`mt-0.5 text-[10px] ${
+                        ui ? ui.textClass : "text-canvas-muted"
+                      }`}
+                    >
                       {ui?.label ?? formatRelativeTime(session.timestamp)}
                     </p>
                   </div>

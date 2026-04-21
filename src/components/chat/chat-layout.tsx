@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import {
-  FiMessageCircle,
   FiX,
   FiFolder,
   FiCheck,
@@ -55,6 +54,16 @@ export function ChatLayout({
   useVisualViewport();
   const { params, setParam } = useUrlState();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+
+  // On mobile, opening Settings (?settings=…) should auto-close the
+  // sessions drawer — otherwise the two full-screen overlays stack and
+  // the back-arrow flow gets confusing.
+  const settingsParam = params.get("settings");
+  useEffect(() => {
+    if (isMobile && settingsParam) {
+      setSidebarOpen(false);
+    }
+  }, [isMobile, settingsParam]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // URL-driven: ?files=1 = open, absent/0 = closed
   const filesPanelOpen = params.get("files") === "1";
@@ -220,26 +229,18 @@ export function ChatLayout({
           style={{ zIndex: Z_INDEX.MODAL - 1, opacity: 0, transition: "opacity 100ms" }}
         />
 
-        {/* Floating chat button — sits beside mode bar */}
+        {/* Mobile only renders ChatView — it owns the single top toolbar
+            now (Mode/Effort pills + sessions button), so we don't stack
+            a second bar above it. Reserve safe-area-top for the notch. */}
         <div
-          className="fixed left-3 z-30 flex items-center"
-          style={{ top: "max(env(safe-area-inset-top, 0px), 6px)" }}
+          className="flex min-h-0 flex-1 flex-col"
+          style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 0px)" }}
         >
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(true)}
-            className="glass flex h-9 w-9 items-center justify-center rounded-full shadow-md transition-transform duration-200 active:scale-90"
-          >
-            <FiMessageCircle size={16} className="text-canvas-fg" />
-          </button>
-        </div>
-
-        <div className="flex min-h-0 flex-1 flex-col">
           <ChatView
-            key={sessionId}
             sessionId={sessionId}
             resumeSessionId={selectedSessionId}
             onSessionCreated={onSessionCreated}
+            onOpenSessions={() => setSidebarOpen(true)}
             headerless
             fileButton={
               <div className="flex items-center">
@@ -283,23 +284,14 @@ export function ChatLayout({
                 borderRight: "1px solid var(--canvas-border)",
               }}
             >
-              <div className="flex h-full flex-col">
-                <div
-                  className="flex items-center justify-between px-4 py-3"
-                  style={{
-                    paddingTop: "max(env(safe-area-inset-top, 0px), 16px)",
-                    borderBottom: "1px solid var(--canvas-border)",
-                  }}
-                >
-                  <span className="text-[15px] font-semibold text-canvas-fg">Conversations</span>
-                  <button
-                    type="button"
-                    onClick={() => setSidebarOpen(false)}
-                    className="flex h-8 w-8 items-center justify-center rounded-full text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
-                  >
-                    <FiX size={16} />
-                  </button>
-                </div>
+              <div
+                className="flex h-full flex-col"
+                style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 8px)" }}
+              >
+                {/* Header intentionally removed on mobile — the drawer
+                    closes by tapping the backdrop, swiping left, or
+                    selecting a session. An inline X wastes vertical
+                    space that's better spent on the session list. */}
                 <SessionList
                   selectedSessionId={selectedSessionId}
                   sessions={sessions}

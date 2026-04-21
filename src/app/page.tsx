@@ -87,7 +87,13 @@ export default function ChatPage() {
   }, [loadSessions]);
 
   const handleNewChat = useCallback(() => {
-    setParam("chat", null);
+    // Generate a UUID up front so the new session's ID matches the
+    // server's UUID_RE (server.ts:226-229). Previously we set null,
+    // which made ChatLayout fall back to `"new-" + Date.now()` — an
+    // ID the server couldn't recognise as resumable and that triggered
+    // a WS reconnect on the first "real" response, making the first
+    // message feel like it was dropped.
+    setParam("chat", crypto.randomUUID());
   }, [setParam]);
 
   const handleSelectSession = useCallback(

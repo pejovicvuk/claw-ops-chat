@@ -16,6 +16,18 @@ import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
 import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
+import { existsSync, readdirSync, statSync } from "fs";
+import {
+  setSessionStatus,
+  clearSessionStatus,
+  type SessionStatus,
+} from "./src/lib/session-status-store";
+import {
+  deleteSessionFile,
+  loadAllSessions,
+  persistSession,
+  type PersistedSession,
+} from "./src/lib/session-persistence";
 
 // node-pty has a native binding — require it lazily so the server can still
 // start if the binding is missing, and only blow up when the terminal is used.
@@ -78,8 +90,15 @@ const ALLOWED_ORIGINS = new Set(
     .filter(Boolean),
 );
 
-/** Permission/question response timeout in ms (default: 5 minutes). */
-const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "300000", 10);
+/**
+ * Permission / question / plan response timeout in ms.
+ * Default bumped from 5 minutes → 24 hours so users who step away from
+ * the tab don't come back to silently auto-denied approvals (which
+ * previously manifested as "Claude stops for no reason" — it received
+ * a "Response timed out" denial and then hallucinated a workaround).
+ * Set to 0 (or any non-positive value) to disable the timeout entirely.
+ */
+const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "86400000", 10);
 
 /* Load MCP servers from ~/.claude.json */
 let mcpServers: Record<string, unknown> | undefined;
@@ -137,6 +156,50 @@ interface ChatSession {
   abortController: AbortController | null;
   /** Original cwd for resume (the cwd where this session was first created). */
   sessionCwd: string | null;
+  /**
+   * Current high-level status of this session. Mirrored into the shared
+   * session-status-store so the REST /api/sessions/status endpoint can
+   * surface it to the sidebar without going through a WebSocket.
+   */
+  status: SessionStatus;
+  /**
+   * Last user message sent into this session. Persisted to disk so a
+   * post-restart client can show "Resume last: <msg>" when the prior
+   * turn was killed mid-stream.
+   */
+  lastUserMessage: string;
+  /**
+   * True when this session was rehydrated from disk and was in an
+   * active state (thinking/tool_running/awaiting_*) when the server
+   * died. The reconnect handler broadcasts an `interrupted` event once
+   * so the first client to reconnect sees a banner.
+   */
+  wasInterrupted: boolean;
+}
+
+/**
+ * Check whether Claude Code has a persisted JSONL file for the given
+ * session id. The SDK writes conversation history to
+ * ~/.claude/projects/<project-hash>/<session-id>.jsonl once a session
+ * has produced at least one assistant turn. Used to decide whether a
+ * UUID-shaped sessionId coming in over the WebSocket represents a real
+ * resumable conversation or a brand-new chat the client just invented.
+ */
+function claudeSessionFileExists(sessionId: string): boolean {
+  const projectsDir = join(homedir(), ".claude", "projects");
+  if (!existsSync(projectsDir)) return false;
+  const target = `${sessionId}.jsonl`;
+  try {
+    for (const proj of readdirSync(projectsDir)) {
+      const projPath = join(projectsDir, proj);
+      const s = statSync(projPath, { throwIfNoEntry: false });
+      if (!s || !s.isDirectory()) continue;
+      if (existsSync(join(projPath, target))) return true;
+    }
+  } catch {
+    /* ignore read errors */
+  }
+  return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -187,20 +250,170 @@ class SessionManager {
         lastActivity: Date.now(),
         abortController: null,
         sessionCwd: null,
+        status: "idle",
+        lastUserMessage: "",
+        wasInterrupted: false,
       };
       this.sessions.set(sessionId, session);
+      setSessionStatus(sessionId, "idle");
     }
     return session;
+  }
+
+  /**
+   * Register an alias so a WebSocket that reconnects under
+   * claudeSessionId lands on the SAME ChatSession object. Without this,
+   * the client's "once the first reply arrives, URL → SDK session_id"
+   * flow reconnects onto a brand-new empty session, the in-flight
+   * query keeps streaming into the old (now client-less) one, and the
+   * user sees the turn mysteriously hang. Safe to call repeatedly;
+   * only writes if the target id isn't already mapped to this session.
+   */
+  aliasClaudeSessionId(session: ChatSession): void {
+    const sid = session.claudeSessionId;
+    if (!sid || sid === session.id) return;
+    const existing = this.sessions.get(sid);
+    if (existing === session) return;
+    if (existing && existing !== session) {
+      // Shouldn't happen in practice (server just created X in the SDK
+      // and it's unique per turn) — but if it does, prefer the new
+      // session and clean up the orphan so its clients reconnect onto
+      // the canonical one.
+      for (const client of existing.clients) {
+        session.clients.add(client);
+      }
+    }
+    this.sessions.set(sid, session);
+    setSessionStatus(sid, session.status);
+  }
+
+  /**
+   * Reconstruct a session from disk. Called once at boot for every
+   * persisted session file. Runtime-only fields (clients, pending
+   * requests, rate-limit timestamps, abort controller, message queue)
+   * reset to empty; replayable state (eventHistory, claudeSessionId,
+   * permissionMode, allowed-tools set) survives.
+   */
+  restoreFromDisk(persisted: PersistedSession): void {
+    const midTurnStatus: SessionStatus[] = [
+      "thinking",
+      "tool_running",
+      "awaiting_permission",
+      "awaiting_input",
+    ];
+    const wasMidTurn = midTurnStatus.includes(persisted.status as SessionStatus);
+    const session: ChatSession = {
+      id: persisted.id,
+      clients: new Set(),
+      claudeSessionId: persisted.claudeSessionId ?? null,
+      isProcessing: false,
+      messageQueue: [],
+      pendingRequests: new Map(),
+      sessionAllowedTools: new Set(persisted.sessionAllowedTools ?? []),
+      permissionMode: persisted.permissionMode || "default",
+      effort: persisted.effort ?? null,
+      requestCounter: 0,
+      accumulatedText: persisted.accumulatedText ?? "",
+      messageTimestamps: [],
+      eventHistory: Array.isArray(persisted.eventHistory) ? persisted.eventHistory : [],
+      lastActivity: persisted.lastActivity || Date.now(),
+      abortController: null,
+      sessionCwd: persisted.sessionCwd ?? null,
+      // Status is always reset to "idle" on boot — whatever was in
+      // flight is gone. The wasInterrupted flag is what tells the
+      // client something was cut short.
+      status: "idle",
+      lastUserMessage: persisted.lastUserMessage ?? "",
+      wasInterrupted: wasMidTurn,
+    };
+    this.sessions.set(session.id, session);
+    setSessionStatus(session.id, "idle");
+    // Rehydrated session carries a claudeSessionId from disk — alias
+    // it immediately so a reconnect under that id finds this session.
+    this.aliasClaudeSessionId(session);
+  }
+
+  /**
+   * Update session.status, mirror into the shared status store (for the
+   * REST sidebar endpoint), and broadcast to any connected clients.
+   * All other `broadcast({ type: "status", ... })` call sites are now
+   * replaced with this helper so the two sources of truth can't drift.
+   *
+   * We deliberately write the store under BOTH the WebSocket session id
+   * AND the SDK's claudeSessionId once it's known. `/api/sessions` keys
+   * by the SDK session_id (JSONL filename), while our session map is
+   * keyed by whatever the client passed in `?session=…`. For a new chat
+   * those two ids are different — the sidebar was looking up status
+   * under the wrong key and always seeing nothing, so users reported
+   * "I don't see any indicators".
+   */
+  private setStatus(session: ChatSession, status: SessionStatus) {
+    session.status = status;
+    setSessionStatus(session.id, status);
+    if (session.claudeSessionId && session.claudeSessionId !== session.id) {
+      setSessionStatus(session.claudeSessionId, status);
+    }
+    this.broadcast(session, { type: "status", status });
+    // Fire-and-forget disk persist so a crash between now and the next
+    // setStatus call doesn't forget this transition. Errors are logged
+    // but never thrown — persistence is belt-and-suspenders, not a
+    // correctness primitive.
+    this.queuePersist(session);
+  }
+
+  /**
+   * Coalesced disk persist — each call schedules a write on a microtask
+   * so a flurry of broadcasts (e.g. streaming text tokens) produces one
+   * file write instead of hundreds. Safe to fire on every event.
+   */
+  private pendingPersists = new Set<string>();
+  private queuePersist(session: ChatSession) {
+    if (this.pendingPersists.has(session.id)) return;
+    this.pendingPersists.add(session.id);
+    queueMicrotask(() => {
+      this.pendingPersists.delete(session.id);
+      this.persistNow(session).catch((err) => {
+        console.warn(`[session=${session.id}] persist failed:`, (err as Error).message);
+      });
+    });
+  }
+
+  private async persistNow(session: ChatSession): Promise<void> {
+    await persistSession({
+      id: session.id,
+      status: session.status,
+      permissionMode: session.permissionMode,
+      effort: session.effort,
+      claudeSessionId: session.claudeSessionId,
+      sessionCwd: session.sessionCwd,
+      eventHistory: session.eventHistory,
+      sessionAllowedTools: Array.from(session.sessionAllowedTools),
+      accumulatedText: session.accumulatedText,
+      lastActivity: session.lastActivity,
+      lastUserMessage: session.lastUserMessage,
+      wasInterrupted: session.wasInterrupted,
+    });
   }
 
   connect(ws: WebSocket, sessionId: string, sessionCwd?: string) {
     const session = this.getOrCreateSession(sessionId);
     session.clients.add(ws);
 
-    // If sessionId looks like a UUID, set it as the claudeSessionId for resume
+    // Only treat a UUID-shaped sessionId as a resumable SDK session when
+    // Claude Code has actually written a JSONL file for it. Previously
+    // ANY UUID got auto-bound as claudeSessionId, so a fresh chat
+    // (handleNewChat generates a client-side UUID) would be passed into
+    // query({ resume: <fake-uuid> }) → SDK throws "No conversation found
+    // with session ID…" and the first message silently fails.
     const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!session.claudeSessionId && UUID_RE.test(sessionId)) {
-      session.claudeSessionId = sessionId;
+      try {
+        if (claudeSessionFileExists(sessionId)) {
+          session.claudeSessionId = sessionId;
+        }
+      } catch {
+        /* best-effort — no resume if we can't verify */
+      }
     }
 
     // Store the original cwd so SDK resume can find the session file.
@@ -221,8 +434,24 @@ class SessionManager {
       }
     }
 
-    if (session.isProcessing) {
-      this.send(ws, { type: "status", status: "thinking" });
+    // Always send the current status snapshot on reconnect. Without this,
+    // a browser that reconnected after a status change (e.g. after a
+    // tool finished running) would sit on whatever state it had before
+    // the disconnect — often showing "thinking…" forever, or worse,
+    // silently missing the fact that a permission prompt is pending.
+    this.send(ws, { type: "status", status: session.status });
+
+    // If the server was restarted while this session was mid-turn,
+    // surface a one-shot "interrupted" event so the UI can render a
+    // banner + Resume action. Fires only for the first client on the
+    // first reconnect — after that we clear the flag and persist.
+    if (session.wasInterrupted) {
+      this.send(ws, {
+        type: "interrupted",
+        lastUserMessage: session.lastUserMessage || "",
+      });
+      session.wasInterrupted = false;
+      this.queuePersist(session);
     }
 
     // Heartbeat: detect dead connections
@@ -267,6 +496,17 @@ class SessionManager {
               // Check if truly idle for a while
               if (Date.now() - session.lastActivity > 30 * 60 * 1000) {
                 this.sessions.delete(session.id);
+                clearSessionStatus(session.id);
+                // Also drop any alias pointing at this session so the
+                // next WS under the SDK id creates a fresh empty one
+                // rather than resurrecting a partially-torn-down object.
+                if (session.claudeSessionId && session.claudeSessionId !== session.id) {
+                  const aliased = this.sessions.get(session.claudeSessionId);
+                  if (aliased === session) {
+                    this.sessions.delete(session.claudeSessionId);
+                    clearSessionStatus(session.claudeSessionId);
+                  }
+                }
               }
             }
           },
@@ -293,6 +533,9 @@ class SessionManager {
 
     if (type === "message") {
       const text = msg.text as string;
+      // Remember the last user-sent text for post-restart Resume UX.
+      session.lastUserMessage = text;
+      this.queuePersist(session);
       if (session.isProcessing) {
         session.messageQueue.push({ text });
       } else {
@@ -301,13 +544,34 @@ class SessionManager {
       return;
     }
 
-    if (type === "permission_response" || type === "ask_response") {
+    if (
+      type === "permission_response" ||
+      type === "ask_response" ||
+      type === "plan_response"
+    ) {
       const id = msg.id as string;
       const resolver = session.pendingRequests.get(id);
       if (resolver) {
         resolver(msg);
         session.pendingRequests.delete(id);
       }
+      // Purge the original prompt from eventHistory so a reconnecting
+      // client (or another tab) doesn't re-surface an already-answered
+      // modal. Without this, every route change / page reload showed
+      // the same Bash approval again.
+      session.eventHistory = session.eventHistory.filter((e) => {
+        const t = e.type;
+        if (
+          t !== "permission_request" &&
+          t !== "ask_question" &&
+          t !== "plan_proposal"
+        )
+          return true;
+        return e.id !== id;
+      });
+      // Broadcast a resolution marker so other open tabs watching the
+      // same session can also drop the prompt from their UI state.
+      this.broadcast(session, { type: "permission_resolved", id });
       session.accumulatedText = "";
       return;
     }
@@ -316,6 +580,7 @@ class SessionManager {
       if (session.abortController && session.isProcessing) {
         session.abortController.abort();
         this.broadcast(session, { type: "result", text: "Stopped by user", isError: false });
+        this.setStatus(session, "idle");
       }
       return;
     }
@@ -336,6 +601,9 @@ class SessionManager {
     session.accumulatedText = "";
     const abortController = new AbortController();
     session.abortController = abortController;
+    // Kick off the status machine for this turn — sidebar dot flips blue
+    // the moment the query starts, not only once the first token streams.
+    this.setStatus(session, "thinking");
     let toolInputAccum = "";
     let pendingToolUse: { id: string; name: string } | null = null;
 
@@ -359,12 +627,52 @@ class SessionManager {
         if (toolName === "AskUserQuestion") {
           const id = `req-${++session.requestCounter}`;
           this.broadcast(session, { type: "ask_question", id, questions: input.questions || [] });
-          this.broadcast(session, { type: "status", status: "awaiting_input" });
+          this.setStatus(session, "awaiting_input");
           const response = await this.waitForResponse(session, id);
-          this.broadcast(session, { type: "status", status: "thinking" });
+          this.setStatus(session, "thinking");
           return {
             behavior: "allow",
             updatedInput: { questions: input.questions || [], answers: response.answers || {} },
+          };
+        }
+
+        // Handle ExitPlanMode — Claude calls this at the end of plan mode to
+        // propose its plan. Without a dedicated branch, it falls through to
+        // the generic permission modal with the plan stuffed into input JSON,
+        // the user can't read it, and even an "Allow" click doesn't switch
+        // the session out of plan mode → every subsequent Bash/Edit gets
+        // auto-denied → Claude loops until it times out ("fails without
+        // reason" in user bug reports). This branch renders a proper plan
+        // card on the client and applies the user's chosen mode switch.
+        if (toolName === "ExitPlanMode") {
+          const id = `req-${++session.requestCounter}`;
+          const planText =
+            typeof input.plan === "string" ? input.plan : JSON.stringify(input);
+          this.broadcast(session, { type: "plan_proposal", id, plan: planText });
+          this.setStatus(session, "awaiting_permission");
+          const response = await this.waitForResponse(session, id);
+          this.setStatus(session, "thinking");
+
+          const approve = response.approve === true;
+          const newMode = typeof response.newMode === "string" ? response.newMode : null;
+          if (approve) {
+            // Default behaviour after plan approval is to flip into
+            // acceptEdits so Claude can actually execute the plan it
+            // just proposed; the client can override by sending
+            // newMode: "default" if the user wants to keep confirming.
+            if (newMode === "default" || newMode === "plan" || newMode === "acceptEdits") {
+              session.permissionMode = newMode;
+            } else {
+              session.permissionMode = "acceptEdits";
+            }
+            return { behavior: "allow", updatedInput: input };
+          }
+          return {
+            behavior: "deny",
+            message:
+              typeof response.message === "string" && response.message.trim()
+                ? response.message
+                : "Plan not approved — adjust and try again.",
           };
         }
 
@@ -406,9 +714,9 @@ class SessionManager {
         const id = `req-${++session.requestCounter}`;
         const description = getToolDescription(toolName, input);
         this.broadcast(session, { type: "permission_request", id, toolName, input, description });
-        this.broadcast(session, { type: "status", status: "awaiting_permission" });
+        this.setStatus(session, "awaiting_permission");
         const response = await this.waitForResponse(session, id);
-        this.broadcast(session, { type: "status", status: "tool_running" });
+        this.setStatus(session, "tool_running");
 
         if (response.allow) {
           if (response.allowSession) {
@@ -420,6 +728,36 @@ class SessionManager {
       },
       ...(session.effort ? { effort: session.effort } : {}),
       ...(mcpServers ? { mcpServers } : {}),
+      // Tell Claude which permission mode it's in via systemPrompt. Without
+      // this, the server's canUseTool silently denies Bash/Edit in plan
+      // mode but Claude doesn't *know* it's in plan mode, so it can go
+      // "I'll run this command…" → denial → retry → loop. Giving it an
+      // explicit instruction avoids the loop and nudges it toward
+      // ExitPlanMode when it's ready.
+      ...(session.permissionMode === "plan"
+        ? {
+            systemPrompt: {
+              type: "preset",
+              preset: "claude_code",
+              append:
+                "\n\nYou are currently in PLAN MODE. Do not run shell commands, " +
+                "edit files, or write new files in this turn — the host will " +
+                "deny those tool calls. Instead, propose a plan and call " +
+                "ExitPlanMode when you are ready for the user to review it.",
+            },
+          }
+        : session.permissionMode === "acceptEdits"
+          ? {
+              systemPrompt: {
+                type: "preset",
+                preset: "claude_code",
+                append:
+                  "\n\nYou are in ACCEPT-EDITS MODE. File edits and writes are " +
+                  "pre-approved; proceed without asking for permission for those " +
+                  "tools. Shell commands still require explicit approval.",
+              },
+            }
+          : {}),
       // If the user saved Bitbucket creds in Settings, inject the three env
       // vars the read-only bitbucket skill at /opt/skills/bitbucket/ reads.
       // Loaded fresh from disk per-query so rotated tokens take effect
@@ -454,6 +792,21 @@ class SessionManager {
           const msg = first.value as Record<string, unknown>;
           if (msg.type === "system" && msg.subtype === "init") {
             session.claudeSessionId = msg.session_id as string;
+            // Mirror the current status into the newly-known SDK session
+            // id so the sidebar — which keys off the SDK id from
+            // /api/sessions — picks up the dot immediately instead of
+            // waiting for the next setStatus.
+            if (session.claudeSessionId !== session.id) {
+              setSessionStatus(session.claudeSessionId, session.status);
+            }
+            // ALIAS: the client is about to receive session_init and
+            // will update its URL to the SDK id, which triggers a WS
+            // reconnect under the new id. Without this alias that
+            // reconnect lands on a brand-new empty session, the
+            // in-flight stream keeps going into the old one, and the
+            // user sees the turn hang. Aliasing ensures the new WS
+            // lands on THIS session.
+            this.aliasClaudeSessionId(session);
             this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
           }
         }
@@ -475,6 +828,11 @@ class SessionManager {
         // Session init
         if (msg.type === "system" && msg.subtype === "init") {
           session.claudeSessionId = msg.session_id as string;
+          if (session.claudeSessionId !== session.id) {
+            setSessionStatus(session.claudeSessionId, session.status);
+          }
+          // Same alias trick as the probe path — see comment above.
+          this.aliasClaudeSessionId(session);
           this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
           continue;
         }
@@ -644,8 +1002,27 @@ class SessionManager {
         }
       }
     } catch (err) {
+      const rawMessage0 = err instanceof Error ? err.message : "Unknown error";
+      // Resume-not-found surfaces here when the SDK throws DURING the
+      // for-await loop (rather than yielding a result message with
+      // is_error=true). Recover by wiping claudeSessionId and rerunning
+      // handleUserMessage — the user sees one spinner cycle, not a
+      // cryptic "No conversation found" error bubble.
+      if (
+        rawMessage0.toLowerCase().includes("no conversation found") ||
+        /returned an error result/i.test(rawMessage0)
+      ) {
+        session.claudeSessionId = null;
+        delete (queryParams.options as Record<string, unknown>).resume;
+        session.isProcessing = false;
+        session.abortController = null;
+        this.setStatus(session, "idle");
+        this.handleUserMessage(session, text);
+        return;
+      }
+
       session.accumulatedText = "";
-      const rawMessage = err instanceof Error ? err.message : "Unknown error";
+      const rawMessage = rawMessage0;
       const errnoErr = err as NodeJS.ErrnoException;
       // Dump the full error to the container log so operators have
       // errno/code/syscall/path/stack. This app runs in a single-user
@@ -671,12 +1048,36 @@ class SessionManager {
         lowered.includes("native binary not found") ||
         lowered.includes("no such file");
 
+      // Detect Anthropic / Claude-Code auth failures specifically. The
+      // SDK surfaces these as a plain Error whose message contains the
+      // JSON body from api.anthropic.com — something like:
+      //   API Error: 401 {"type":"error","error":{
+      //       "type":"authentication_error",
+      //       "message":"Invalid authentication credentials"}}
+      // When we see that shape, emit a dedicated auth-required event so
+      // the UI can pop the "sign in to Claude" flow instead of showing
+      // the raw 401 blob as a generic error bubble.
+      const authError =
+        lowered.includes("authentication_error") ||
+        lowered.includes("invalid authentication credentials") ||
+        /\b401\b/.test(rawMessage) ||
+        lowered.includes("unauthorized");
+
       const stderrTail =
         typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
           ? (errnoErr as unknown as { stderr: string }).stderr.trim().split(/\r?\n/).slice(-10).join("\n")
           : undefined;
 
-      if (setupRequired) {
+      if (authError) {
+        this.broadcast(session, {
+          type: "auth_required",
+          provider: "claude",
+          message:
+            "Claude rejected the stored credentials (HTTP 401). Your OAuth " +
+            "token has probably expired — sign in again to keep chatting.",
+          hint: "Run `claude auth login` in the container terminal, or click below.",
+        });
+      } else if (setupRequired) {
         this.broadcast(session, {
           type: "setup_required",
           message:
@@ -697,6 +1098,9 @@ class SessionManager {
 
     session.isProcessing = false;
     session.abortController = null;
+    // Turn is done — flip the dot off. If a queued message starts next,
+    // handleUserMessage() will flip it straight back to "thinking".
+    this.setStatus(session, "idle");
 
     // Process queued messages
     if (session.messageQueue.length > 0) {
@@ -711,15 +1115,23 @@ class SessionManager {
    */
   private waitForResponse(session: ChatSession, id: string): Promise<Record<string, unknown>> {
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        session.pendingRequests.delete(id);
-        console.warn(`[session=${session.id}] Response timeout for request ${id}`);
-        this.broadcast(session, { type: "status", status: "thinking" });
-        resolve({ allow: false, message: "Response timed out", answers: {} });
-      }, RESPONSE_TIMEOUT_MS);
+      // RESPONSE_TIMEOUT_MS <= 0 disables the safety timer completely —
+      // the promise only resolves when a real permission_response /
+      // ask_response / plan_response arrives. Useful for fully
+      // background workflows where the user may not check back for
+      // hours (or days) and we never want to auto-deny silently.
+      const timer =
+        RESPONSE_TIMEOUT_MS > 0
+          ? setTimeout(() => {
+              session.pendingRequests.delete(id);
+              console.warn(`[session=${session.id}] Response timeout for request ${id}`);
+              this.setStatus(session, "thinking");
+              resolve({ allow: false, message: "Response timed out", answers: {} });
+            }, RESPONSE_TIMEOUT_MS)
+          : null;
 
       session.pendingRequests.set(id, (response) => {
-        clearTimeout(timer);
+        if (timer) clearTimeout(timer);
         resolve(response);
       });
     });
@@ -735,6 +1147,11 @@ class SessionManager {
       if (session.eventHistory.length > 500) {
         session.eventHistory = session.eventHistory.slice(-500);
       }
+      // Persist only on meaningful mutations. status is already handled
+      // by setStatus(); every other event that mutates eventHistory
+      // ends up here. Coalesced via queuePersist so a burst of tokens
+      // writes once per microtask.
+      this.queuePersist(session);
     }
 
     const data = JSON.stringify(event);
@@ -919,6 +1336,24 @@ function isOriginAllowed(origin: string | undefined): boolean {
 const app = next({ dev });
 const handle = app.getRequestHandler();
 const sessionManager = new SessionManager();
+
+// Rehydrate session state from disk so a container restart doesn't
+// wipe every in-flight conversation. Runs synchronously (well, fire
+// and log) before we start listening — if it fails we still come up,
+// just with an empty session set.
+(async () => {
+  try {
+    const persisted = await loadAllSessions();
+    for (const p of persisted) {
+      sessionManager.restoreFromDisk(p);
+    }
+    if (persisted.length > 0) {
+      console.log(`> Restored ${persisted.length} chat session(s) from disk`);
+    }
+  } catch (err) {
+    console.warn(`!! Could not rehydrate sessions: ${(err as Error).message}`);
+  }
+})();
 
 app.prepare().then(() => {
   const server = createServer((req, res) => {

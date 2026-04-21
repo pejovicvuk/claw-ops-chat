@@ -15,6 +15,9 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const [activeTool, setActiveTool] = useState<ActiveToolInfo | null>(null);
   const [claudeSessionId, setClaudeSessionId] = useState<string | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
+  const [authRequired, setAuthRequired] = useState<
+    { message: string; hint: string } | null
+  >(null);
   const [contextUsage, setContextUsage] = useState<{
     used: number;
     max: number;
@@ -30,6 +33,20 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const intentionalCloseRef = useRef(false);
   /** Ref to break circular dependency between connect ↔ scheduleReconnect. */
   const scheduleReconnectRef = useRef<() => void>(() => {});
+  /**
+   * Messages typed by the user before the WebSocket was open. Flushed
+   * when the server's "ready" event arrives. Fixes the "first message
+   * on a new chat disappears" bug — previously sendMessage returned
+   * silently if ws.readyState wasn't OPEN.
+   */
+  const pendingSendsRef = useRef<string[]>([]);
+  /**
+   * Permission IDs the user has already approved/denied in this tab.
+   * Survives refreshes via sessionStorage keyed by sessionId. Belt-and-
+   * suspenders against stale permission_request replay when the server
+   * has lost its history (e.g. container restarted).
+   */
+  const resolvedPermissionsRef = useRef<Set<string>>(new Set());
 
   /* ── Pre-populate messages (for loading history) ── */
   const setInitialMessages = useCallback((msgs: ChatMessage[]) => {
@@ -75,6 +92,21 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "ready") {
         setStatus("idle");
+        // Flush any messages the user typed before the WS finished
+        // connecting. Fire-and-forget — the server queues them on its
+        // side too if this session was already processing a turn.
+        const queued = pendingSendsRef.current;
+        if (queued.length > 0) {
+          pendingSendsRef.current = [];
+          for (const text of queued) {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: "message", text }));
+              // Only the first message kicks us into "thinking"; the
+              // server will serialise the rest via its messageQueue.
+              setStatus("thinking");
+            }
+          }
+        }
         return;
       }
 
@@ -191,10 +223,18 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       }
 
       if (type === "permission_request") {
+        const reqId = evt.id as string;
+        // If the user already answered this prompt in a previous tab /
+        // page-load, the server's filter (piece 4 in plan) should have
+        // stripped it from eventHistory — but cover the container-
+        // restart edge case with a local set too.
+        if (resolvedPermissionsRef.current.has(reqId)) {
+          return;
+        }
         currentAssistantRef.current = null;
         setStatus("awaiting_permission");
         setMessages((prev) => {
-          if (prev.some((m) => m.permissionId === (evt.id as string))) return prev;
+          if (prev.some((m) => m.permissionId === reqId)) return prev;
           return [
             ...prev,
             {
@@ -203,9 +243,86 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
               type: "permission_request" as const,
               content: (evt.description as string) || "",
               toolName: evt.toolName as string,
-              permissionId: evt.id as string,
+              permissionId: reqId,
               permissionInput: evt.input as Record<string, unknown>,
               permissionResolved: false,
+              timestamp: Date.now(),
+            },
+          ];
+        });
+        return;
+      }
+
+      if (type === "permission_resolved") {
+        // Server-side purge signal — a permission / ask / plan prompt was
+        // answered in another tab. Mark it resolved locally so we don't
+        // surface a modal that no longer makes sense.
+        const resolvedId = evt.id as string;
+        if (resolvedId) {
+          resolvedPermissionsRef.current.add(resolvedId);
+          persistResolved();
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.permissionId === resolvedId) return { ...m, permissionResolved: true };
+              if (m.askId === resolvedId) return { ...m, askResolved: true };
+              if (m.planId === resolvedId) return { ...m, planResolved: true };
+              return m;
+            }),
+          );
+        }
+        return;
+      }
+
+      if (type === "interrupted") {
+        // Server was restarted while this session was mid-turn. Surface
+        // a one-shot system message so the user knows their last query
+        // was cut short. lastUserMessage may be empty for very fresh
+        // sessions where nothing was persisted yet.
+        const lastMsg = typeof evt.lastUserMessage === "string" ? evt.lastUserMessage : "";
+        setMessages((prev) => {
+          // Dedup — if the user already has an "interrupted" system
+          // message as the most recent entry, don't add another.
+          const last = prev[prev.length - 1];
+          if (last && last.type === "error" && last.content.startsWith("[interrupted]")) {
+            return prev;
+          }
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "system" as const,
+              type: "error" as const,
+              content: lastMsg
+                ? `[interrupted] The server restarted mid-turn. Your last message was: "${lastMsg.slice(0, 140)}${lastMsg.length > 140 ? "…" : ""}". Click Send again to resume, or start a new one.`
+                : "[interrupted] The server restarted mid-turn — previous turn lost. Send your next message to continue.",
+              timestamp: Date.now(),
+            },
+          ];
+        });
+        setStatus("idle");
+        return;
+      }
+
+      if (type === "plan_proposal") {
+        const planId = evt.id as string;
+        if (resolvedPermissionsRef.current.has(planId)) {
+          // Already resolved in a previous tab / page load — skip replay.
+          return;
+        }
+        currentAssistantRef.current = null;
+        setStatus("awaiting_permission");
+        setMessages((prev) => {
+          if (prev.some((m) => m.planId === planId)) return prev;
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "system" as const,
+              type: "plan_proposal" as const,
+              content: "",
+              planId,
+              planContent: (evt.plan as string) || "",
+              planResolved: false,
               timestamp: Date.now(),
             },
           ];
@@ -278,6 +395,25 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         return;
       }
 
+      if (type === "auth_required") {
+        // Anthropic-side 401 — the SDK's OAuth token is stale. Surface
+        // a dedicated banner instead of dumping the raw error blob so
+        // the user knows to re-run `claude auth login` (or open the
+        // Claude Code overlay and auth from the sidebar) rather than
+        // chasing a non-existent bug.
+        currentAssistantRef.current = null;
+        currentThinkingRef.current = null;
+        setActiveTool(null);
+        setStatus("idle");
+        setAuthRequired({
+          message: (evt.message as string) || "Claude auth expired.",
+          hint:
+            (evt.hint as string) ||
+            "Run `claude auth login` in the settings terminal.",
+        });
+        return;
+      }
+
       if (type === "setup_required") {
         currentAssistantRef.current = null;
         currentThinkingRef.current = null;
@@ -314,6 +450,40 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       wsRef.current.send(JSON.stringify(obj));
     }
   }, []);
+
+  /* ── Load/persist resolved-permission IDs per session ── */
+  const resolvedStorageKey = sessionId ? `claw-chat-resolved:v1:${sessionId}` : null;
+
+  const persistResolved = useCallback(() => {
+    if (!resolvedStorageKey) return;
+    try {
+      sessionStorage.setItem(
+        resolvedStorageKey,
+        JSON.stringify(Array.from(resolvedPermissionsRef.current)),
+      );
+    } catch {
+      /* storage full / private mode — degrade gracefully */
+    }
+  }, [resolvedStorageKey]);
+
+  // Hydrate resolved set when sessionId changes (new chat / load chat).
+  useEffect(() => {
+    if (!resolvedStorageKey) {
+      resolvedPermissionsRef.current = new Set();
+      return;
+    }
+    try {
+      const raw = sessionStorage.getItem(resolvedStorageKey);
+      if (raw) {
+        const arr = JSON.parse(raw) as string[];
+        resolvedPermissionsRef.current = new Set(Array.isArray(arr) ? arr : []);
+      } else {
+        resolvedPermissionsRef.current = new Set();
+      }
+    } catch {
+      resolvedPermissionsRef.current = new Set();
+    }
+  }, [resolvedStorageKey]);
 
   /* ── Connect WebSocket ── */
   const connect = useCallback(() => {
@@ -395,9 +565,21 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const sendMessage = useCallback(
     (text: string) => {
       const trimmed = text.trim();
-      if (!trimmed || status !== "idle") return;
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      if (!trimmed) return;
+      // Allow send while "connecting" — the most common case where
+      // a user hits send on a brand-new chat before the WS has finished
+      // its handshake. The "ready" handler flushes pendingSendsRef.
+      // Disallow only when a turn is already streaming / a tool is
+      // running / waiting for input.
+      const blocking =
+        status === "thinking" ||
+        status === "tool_running" ||
+        status === "awaiting_permission" ||
+        status === "awaiting_input";
+      if (blocking) return;
 
+      // Optimistic UI — user sees their message immediately whether or
+      // not the socket is up.
       setMessages((prev) => [
         ...prev,
         {
@@ -412,11 +594,56 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       currentAssistantRef.current = null;
       currentThinkingRef.current = null;
       setActiveTool(null);
-      setStatus("thinking");
 
-      sendToServer({ type: "message", text: trimmed });
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        setStatus("thinking");
+        sendToServer({ type: "message", text: trimmed });
+      } else {
+        // Buffer — the "ready" handler will drain this once the server
+        // says hello.
+        pendingSendsRef.current.push(trimmed);
+      }
     },
     [status, sendToServer],
+  );
+
+  /* ── Plan-proposal response ── */
+  const respondPlan = useCallback(
+    (
+      planId: string,
+      approve: boolean,
+      opts?: { newMode?: "default" | "acceptEdits"; message?: string },
+    ) => {
+      sendToServer({
+        type: "plan_response",
+        id: planId,
+        approve,
+        newMode: opts?.newMode,
+        message: opts?.message,
+      });
+      resolvedPermissionsRef.current.add(planId);
+      persistResolved();
+
+      const outcome: NonNullable<ChatMessage["planOutcome"]> = approve
+        ? opts?.newMode === "default"
+          ? "approved_default"
+          : "approved_accept_edits"
+        : "rejected";
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.planId === planId
+            ? {
+                ...m,
+                planResolved: true,
+                planOutcome: outcome,
+                planMessage: opts?.message,
+              }
+            : m,
+        ),
+      );
+    },
+    [sendToServer, persistResolved],
   );
 
   /* ── Permission response ── */
@@ -429,6 +656,13 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         allowSession: allowSession || false,
         message: message || undefined,
       });
+
+      // Remember locally so a subsequent refresh doesn't re-show this
+      // prompt if the server's eventHistory replay still contains it
+      // (e.g. during a server restart that wiped pendingRequests but
+      // the client caught the request in-flight).
+      resolvedPermissionsRef.current.add(permissionId);
+      persistResolved();
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -445,8 +679,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
   /* ── Question response ── */
   const respondQuestion = useCallback(
-    (askId: string, answers: Record<string, string>) => {
+    (askId: string, answers: Record<string, string | string[]>) => {
       sendToServer({ type: "ask_response", id: askId, answers });
+      resolvedPermissionsRef.current.add(askId);
+      persistResolved();
       setMessages((prev) => prev.map((m) => (m.askId === askId ? { ...m, askResolved: true } : m)));
       setStatus("thinking");
     },
@@ -512,17 +748,22 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     currentThinkingRef.current = null;
   }, [sendToServer]);
 
+  const clearAuthRequired = useCallback(() => setAuthRequired(null), []);
+
   return {
     messages,
     status,
     activeTool,
     claudeSessionId,
     setupRequired,
+    authRequired,
+    clearAuthRequired,
     contextUsage,
     sendMessage,
     stopGeneration,
     respondPermission,
     respondQuestion,
+    respondPlan,
     setPermissionMode,
     setEffort,
     reconnect,

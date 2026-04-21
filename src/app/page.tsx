@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { fetchSessions } from "@/lib/api";
+import { deleteSession, fetchSessions } from "@/lib/api";
 import {
   getCachedSessions,
   isSessionCacheFresh,
@@ -115,6 +115,30 @@ export default function ChatPage() {
     [loadSessions, setParam],
   );
 
+  const handleDeleteSession = useCallback(
+    async (sessionId: string) => {
+      await deleteSession(sessionId);
+      // Optimistic UI: drop the row immediately so the sidebar feels
+      // responsive. The background poll will reconcile against the
+      // server state on the next tick either way.
+      setSessions((prev) => prev.filter((s) => s.sessionId !== sessionId));
+      invalidateSessions();
+      // If the deleted chat was the currently selected one, bounce to
+      // a fresh chat so the user isn't staring at a view pointing at a
+      // now-dead session id. Same pattern as handleNewChat.
+      if (selectedSessionId === sessionId) {
+        try {
+          localStorage.removeItem(STORAGE_KEY);
+        } catch {}
+        setParam("chat", crypto.randomUUID());
+      }
+      // Full refresh after the local mutation so timestamps / counts
+      // from other sessions stay accurate.
+      void loadSessions();
+    },
+    [loadSessions, selectedSessionId, setParam],
+  );
+
   return (
     <AuthGuard>
       <div className="flex h-dvh flex-col overflow-hidden bg-canvas-bg text-canvas-fg">
@@ -126,6 +150,7 @@ export default function ChatPage() {
           onRefreshSessions={loadSessions}
           sessionsLoading={sessionsLoading}
           onSessionCreated={handleSessionCreated}
+          onDeleteSession={handleDeleteSession}
         />
         <SettingsOverlay />
       </div>

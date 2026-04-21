@@ -46,7 +46,6 @@ interface SessionListProps {
   sessions: ChatSession[];
   loading: boolean;
   onRefresh: () => void;
-  runningSessionIds?: Set<string>;
 }
 
 export function SessionList({
@@ -56,7 +55,6 @@ export function SessionList({
   sessions,
   loading,
   onRefresh,
-  runningSessionIds,
 }: SessionListProps) {
   const { setParam } = useUrlState();
   const openSettings = () => setParam("settings", "main");
@@ -167,17 +165,9 @@ export function SessionList({
           <div className="space-y-0.5">
             {sessions.map((session) => {
               const isActive = session.sessionId === selectedSessionId;
-              // Prefer the live status from the polling hook; fall back to
-              // the legacy runningSessionIds boolean so any caller that
-              // still populates it (or the replayed WS status from a fresh
-              // reconnect) isn't ignored.
               const liveStatus = statuses[session.sessionId]?.status;
               const derivedStatus: SessionStatus | null =
-                liveStatus && liveStatus !== "idle"
-                  ? liveStatus
-                  : runningSessionIds?.has(session.sessionId)
-                    ? "thinking"
-                    : null;
+                liveStatus && liveStatus !== "idle" ? liveStatus : null;
               const ui = derivedStatus ? STATUS_UI[derivedStatus] : null;
               // Inline-style border so Tailwind can't purge it. 4px solid
               // on the left when active, transparent otherwise (so rows

@@ -805,9 +805,28 @@ export function GoogleCustomWizard() {
               >
                 Credentials
               </a>{" "}
-              → Create Credentials → OAuth client ID →{" "}
-              <span className="font-medium text-canvas-fg">Desktop app</span> (recommended) or{" "}
-              <span className="font-medium text-canvas-fg">Web application</span>.
+              → Create Credentials → OAuth client ID → pick a type:
+              <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                <li>
+                  <span className="font-medium text-canvas-fg">TVs and Limited Input devices</span>{" "}
+                  — recommended. Enables the device-flow sign-in below; works on any remote server,
+                  no redirect URL needed.
+                </li>
+                <li>
+                  <span className="font-medium text-canvas-fg">Web application</span> — only if you
+                  can register{" "}
+                  <code className="text-[10px]">
+                    https://&lt;your-host&gt;/chat/api/google-custom/oauth-callback
+                  </code>{" "}
+                  as an authorized redirect URI.
+                </li>
+                <li>
+                  <span className="font-medium text-canvas-fg">Desktop app</span> — does{" "}
+                  <span className="font-medium text-red-500">not</span> work with device flow.
+                  Google rejects it with &quot;Invalid client type&quot;. Pick TVs &amp; Limited
+                  Input instead.
+                </li>
+              </ul>
             </li>
             <li>
               Click <span className="font-medium text-canvas-fg">Download JSON</span> on the client
@@ -928,9 +947,13 @@ export function GoogleCustomWizard() {
         {effectiveType === "installed" ? (
           <>
             <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
-              Your OAuth client is a <span className="font-medium text-canvas-fg">Desktop app</span>
-              , so we&apos;ll use Google&apos;s device flow — no redirect URL needed. You&apos;ll
-              get a code to enter on any device.
+              We&apos;ll use Google&apos;s device flow — no redirect URL needed. You&apos;ll get a
+              code to enter on any device.{" "}
+              <span className="font-medium text-canvas-fg">
+                Your OAuth client must be registered as &quot;TVs and Limited Input devices&quot;
+              </span>{" "}
+              — Google rejects Desktop-app clients here with &quot;Invalid client type&quot;. Both
+              types produce identical JSON, so paste-time detection can&apos;t tell them apart.
             </p>
             <button
               type="button"

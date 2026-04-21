@@ -9,35 +9,22 @@ import { useDesktopNotifications } from "@/lib/use-desktop-notifications";
 import type { SessionStatus } from "@/lib/session-status-store";
 
 /**
- * Left-border colour + label shown on each active session row.
- * Orange is deliberately the only non-pulsing colour — a session that
- * needs permission should stand out even if the user's glance misses
- * the animation. Idle sessions get no border and no status line.
+ * Per-status visuals. Colours are applied via inline style (not Tailwind
+ * arbitrary classes) so the Tailwind JIT can't silently miss them —
+ * earlier attempts with `border-blue-400` + `border-l-[3px]` were either
+ * purged in production builds or rendered invisible against the dark
+ * background. A 4px solid left border + matching text colour is hard to
+ * miss. `awaiting_*` stay static so blocked sessions demand attention;
+ * `thinking` / `tool_running` pulse gently via CSS keyframe.
  */
 const STATUS_UI: Record<
   Exclude<SessionStatus, "idle">,
-  { borderClass: string; label: string; textClass: string }
+  { color: string; label: string; pulse: boolean }
 > = {
-  thinking: {
-    borderClass: "border-blue-400",
-    textClass: "text-blue-400",
-    label: "Thinking",
-  },
-  tool_running: {
-    borderClass: "border-purple-400",
-    textClass: "text-purple-400",
-    label: "Running tool",
-  },
-  awaiting_permission: {
-    borderClass: "border-orange-400",
-    textClass: "text-orange-400",
-    label: "Needs permission",
-  },
-  awaiting_input: {
-    borderClass: "border-amber-400",
-    textClass: "text-amber-400",
-    label: "Needs input",
-  },
+  thinking: { color: "#60a5fa", label: "Thinking", pulse: true }, // blue-400
+  tool_running: { color: "#c084fc", label: "Running tool", pulse: true }, // purple-400
+  awaiting_permission: { color: "#fb923c", label: "Needs permission", pulse: false }, // orange-400
+  awaiting_input: { color: "#fbbf24", label: "Needs input", pulse: false }, // amber-400
 };
 
 function formatRelativeTime(ts: number): string {
@@ -118,10 +105,28 @@ export function SessionList({
     }
   }, [statuses, sessions, notify, setParam]);
 
+  // Small live-activity badge so we can tell "polling isn't returning
+  // anything" from "renderer is eating the class". Counts sessions in
+  // an active state this tick.
+  const activeCount = Object.values(statuses).filter(
+    (s) => s.status !== "idle",
+  ).length;
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-3 py-2.5">
-        <span className="text-[13px] font-semibold text-canvas-fg">Chats</span>
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-semibold text-canvas-fg">Chats</span>
+          {activeCount > 0 && (
+            <span
+              className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+              style={{ backgroundColor: "#3b82f633", color: "#60a5fa" }}
+              title={`${activeCount} session(s) currently doing something`}
+            >
+              {activeCount} active
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -176,28 +181,31 @@ export function SessionList({
                     ? "thinking"
                     : null;
               const ui = derivedStatus ? STATUS_UI[derivedStatus] : null;
-              // Colored 3px left border when active, transparent otherwise
-              // so rows stay aligned horizontally regardless of state.
-              // thinking / tool_running gently opacity-pulse to signal
-              // ongoing work; awaiting_* stay solid so they read as
-              // "blocked on you" at first glance.
-              const shouldPulse =
-                derivedStatus === "thinking" || derivedStatus === "tool_running";
-              const borderClass = ui
-                ? `border-l-[3px] ${ui.borderClass}${
-                    shouldPulse ? " animate-session-active" : ""
-                  }`
-                : "border-l-[3px] border-transparent";
+              // Inline-style border so Tailwind can't purge it. 4px solid
+              // on the left when active, transparent otherwise (so rows
+              // stay horizontally aligned regardless of state).
+              const rowStyle: React.CSSProperties = ui
+                ? {
+                    borderLeftWidth: 4,
+                    borderLeftStyle: "solid",
+                    borderLeftColor: ui.color,
+                  }
+                : {
+                    borderLeftWidth: 4,
+                    borderLeftStyle: "solid",
+                    borderLeftColor: "transparent",
+                  };
               return (
                 <button
                   key={session.sessionId}
                   type="button"
                   onClick={() => onSelectSession(session.sessionId)}
-                  className={`flex w-full items-start gap-2 rounded-lg ${borderClass} pl-2.5 pr-3 py-2 text-left transition-colors ${
+                  className={`flex w-full items-start gap-2 rounded-lg pl-2.5 pr-3 py-2 text-left transition-colors ${
                     isActive
                       ? "bg-canvas-surface-hover text-canvas-fg"
                       : "text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-                  }`}
+                  } ${ui?.pulse ? "animate-session-active" : ""}`}
+                  style={rowStyle}
                   title={ui?.label}
                 >
                   <div className="min-w-0 flex-1">
@@ -205,9 +213,8 @@ export function SessionList({
                       {session.display}
                     </p>
                     <p
-                      className={`mt-0.5 text-[10px] ${
-                        ui ? ui.textClass : "text-canvas-muted"
-                      }`}
+                      className="mt-0.5 text-[10px]"
+                      style={ui ? { color: ui.color } : undefined}
                     >
                       {ui?.label ?? formatRelativeTime(session.timestamp)}
                     </p>

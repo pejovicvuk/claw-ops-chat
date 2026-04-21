@@ -154,6 +154,13 @@ interface ChatSession {
   lastActivity: number;
   /** Abort controller for the current query — allows stopping mid-stream. */
   abortController: AbortController | null;
+  /**
+   * Active SDK Query handle for the current turn. Held here so the `stop`
+   * client message can call `.interrupt()` for a graceful SDK-level stop
+   * (emits a proper `result` with interrupt subtype) before falling back
+   * to AbortController. Null when no turn is in flight.
+   */
+  currentQuery: { interrupt?: () => Promise<void> } | null;
   /** Original cwd for resume (the cwd where this session was first created). */
   sessionCwd: string | null;
   /**
@@ -249,6 +256,7 @@ class SessionManager {
         eventHistory: [],
         lastActivity: Date.now(),
         abortController: null,
+        currentQuery: null,
         sessionCwd: null,
         status: "idle",
         lastUserMessage: "",
@@ -318,6 +326,7 @@ class SessionManager {
       eventHistory: Array.isArray(persisted.eventHistory) ? persisted.eventHistory : [],
       lastActivity: persisted.lastActivity || Date.now(),
       abortController: null,
+      currentQuery: null,
       sessionCwd: persisted.sessionCwd ?? null,
       // Status is always reset to "idle" on boot — whatever was in
       // flight is gone. The wasInterrupted flag is what tells the
@@ -544,11 +553,7 @@ class SessionManager {
       return;
     }
 
-    if (
-      type === "permission_response" ||
-      type === "ask_response" ||
-      type === "plan_response"
-    ) {
+    if (type === "permission_response" || type === "ask_response" || type === "plan_response") {
       const id = msg.id as string;
       const resolver = session.pendingRequests.get(id);
       if (resolver) {
@@ -561,11 +566,7 @@ class SessionManager {
       // the same Bash approval again.
       session.eventHistory = session.eventHistory.filter((e) => {
         const t = e.type;
-        if (
-          t !== "permission_request" &&
-          t !== "ask_question" &&
-          t !== "plan_proposal"
-        )
+        if (t !== "permission_request" && t !== "ask_question" && t !== "plan_proposal")
           return true;
         return e.id !== id;
       });
@@ -577,8 +578,35 @@ class SessionManager {
     }
 
     if (type === "stop") {
-      if (session.abortController && session.isProcessing) {
-        session.abortController.abort();
+      if (session.isProcessing) {
+        // Drain any pending approval/question/plan requests first — without
+        // this, the SDK stays blocked inside canUseTool waiting for a
+        // response that will never come and .interrupt() can't take
+        // effect. Deny-resolve each one with an interrupt marker.
+        for (const [id, resolve] of session.pendingRequests) {
+          resolve({
+            allow: false,
+            approve: false,
+            answers: {},
+            message: "Interrupted by user",
+          });
+          this.broadcast(session, { type: "permission_resolved", id });
+        }
+        session.pendingRequests.clear();
+
+        // Prefer the SDK's graceful interrupt — it emits a proper `result`
+        // message with an interrupt subtype so the for-await loop tears
+        // down cleanly. Fall back to AbortController for older SDK builds
+        // that don't expose .interrupt().
+        const q = session.currentQuery;
+        if (q?.interrupt) {
+          q.interrupt().catch(() => {
+            session.abortController?.abort();
+          });
+        } else {
+          session.abortController?.abort();
+        }
+
         this.broadcast(session, { type: "result", text: "Stopped by user", isError: false });
         this.setStatus(session, "idle");
       }
@@ -604,6 +632,10 @@ class SessionManager {
     // Kick off the status machine for this turn — sidebar dot flips blue
     // the moment the query starts, not only once the first token streams.
     this.setStatus(session, "thinking");
+    // Lifecycle anchor for the UI timeline — the client uses this to open
+    // a new assistant-turn container before any stream_event arrives.
+    const turnId = `turn-${Date.now()}-${++session.requestCounter}`;
+    this.broadcast(session, { type: "turn_start", turnId });
     let toolInputAccum = "";
     let pendingToolUse: { id: string; name: string } | null = null;
 
@@ -622,6 +654,11 @@ class SessionManager {
       // `/root` (Docker default) doesn't exist on Windows/Mac and causes spawn ENOENT.
       cwd: session.sessionCwd || process.env.CLAUDE_CWD || homedir(),
       includePartialMessages: true,
+      // Adaptive thinking lets Claude allocate reasoning tokens when the
+      // problem warrants it. Delivered as thinking_delta stream events,
+      // which the UI renders as a collapsible Thinking block. Opt-out
+      // with CLAUDE_THINKING=off if the extra tokens cost matter.
+      ...(process.env.CLAUDE_THINKING !== "off" ? { thinking: { type: "adaptive" } } : {}),
       canUseTool: async (toolName: string, input: Record<string, unknown>) => {
         // Handle AskUserQuestion
         if (toolName === "AskUserQuestion") {
@@ -646,8 +683,7 @@ class SessionManager {
         // card on the client and applies the user's chosen mode switch.
         if (toolName === "ExitPlanMode") {
           const id = `req-${++session.requestCounter}`;
-          const planText =
-            typeof input.plan === "string" ? input.plan : JSON.stringify(input);
+          const planText = typeof input.plan === "string" ? input.plan : JSON.stringify(input);
           this.broadcast(session, { type: "plan_proposal", id, plan: planText });
           this.setStatus(session, "awaiting_permission");
           const response = await this.waitForResponse(session, id);
@@ -785,6 +821,11 @@ class SessionManager {
       let messageStream;
       try {
         messageStream = query(queryParams as Parameters<typeof query>[0]);
+        // Stash the Query handle so the `stop` client message can call
+        // .interrupt() on it for a graceful SDK-level stop.
+        session.currentQuery = messageStream as unknown as {
+          interrupt?: () => Promise<void>;
+        };
         // Try to get the first message to detect resume failures early
         const first = await (messageStream as AsyncIterableIterator<unknown>).next();
         if (!first.done) {
@@ -817,6 +858,9 @@ class SessionManager {
           delete (queryParams.options as Record<string, unknown>).resume;
           session.claudeSessionId = null;
           messageStream = query(queryParams as Parameters<typeof query>[0]);
+          session.currentQuery = messageStream as unknown as {
+            interrupt?: () => Promise<void>;
+          };
         } else {
           throw resumeErr;
         }
@@ -834,6 +878,18 @@ class SessionManager {
           // Same alias trick as the probe path — see comment above.
           this.aliasClaudeSessionId(session);
           this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
+          continue;
+        }
+
+        // Compact boundary — SDK compacted the context window. Surface it
+        // so the UI can render a divider and refresh context usage; without
+        // this, the message falls through silently and the token counter
+        // drifts until the next result.
+        if (msg.type === "system" && msg.subtype === "compact_boundary") {
+          this.broadcast(session, {
+            type: "compact_boundary",
+            trigger: (msg as Record<string, unknown>).compact_metadata,
+          });
           continue;
         }
 
@@ -918,7 +974,6 @@ class SessionManager {
           continue;
         }
 
-        // Assistant messages with completed tool uses or final text response
         if (msg.type === "assistant") {
           const assistantMsg = msg.message as Record<string, unknown>;
           // Broadcast live context usage from assistant usage field.
@@ -928,13 +983,17 @@ class SessionManager {
             this.broadcastAssistantUsage(session, usage);
           }
           const content = assistantMsg?.content;
-          let hasToolUse = false;
-          let textContent = "";
 
+          // Broadcast tool_use_complete for any tool calls in this message.
+          // Do NOT short-circuit the stream when the message is pure text:
+          // the SDK always emits a `result` message for turn completion, and
+          // treating narrative messages as "end of turn" broke plan mode —
+          // Claude's post-ExitPlanMode follow-up (and any interstitial "Let
+          // me think about this") was interpreted as turn-end, killing the
+          // stream before the real work could run.
           if (Array.isArray(content)) {
             for (const block of content) {
               if (block.type === "tool_use") {
-                hasToolUse = true;
                 this.broadcast(session, {
                   type: "tool_use_complete",
                   id: block.id,
@@ -942,31 +1001,7 @@ class SessionManager {
                   input: block.input,
                 });
               }
-              if (block.type === "text" && block.text) {
-                textContent += block.text;
-              }
             }
-          }
-
-          // If the assistant message has text but no tool_use, it's the final response.
-          // The SDK may not send a separate "result" event — treat this as completion.
-          if (!hasToolUse && textContent) {
-            session.claudeSessionId = (msg.session_id as string) || session.claudeSessionId;
-            session.accumulatedText = "";
-            this.broadcast(session, {
-              type: "result",
-              text: textContent,
-              sessionId: session.claudeSessionId,
-              isError: false,
-            });
-            session.eventHistory = [];
-            // Close the stream — the SDK won't send a "result" event
-            try {
-              (messageStream as { close?: () => void }).close?.();
-            } catch {
-              /* already closed */
-            }
-            break;
           }
           continue;
         }
@@ -983,6 +1018,7 @@ class SessionManager {
             // Retry the query without resume
             delete (queryParams.options as Record<string, unknown>).resume;
             session.isProcessing = false;
+            session.currentQuery = null;
             this.handleUserMessage(session, text);
             return;
           }
@@ -993,12 +1029,30 @@ class SessionManager {
             text: msg.result || "",
             sessionId: msg.session_id,
             isError: msg.is_error || false,
+            subtype: msg.subtype,
             permissionDenials: msg.permission_denials || [],
+          });
+          this.broadcast(session, {
+            type: "turn_end",
+            turnId,
+            isError: msg.is_error || false,
+            subtype: msg.subtype,
           });
           this.broadcastContextUsage(session, msg.modelUsage);
           // Clear event history after turn completes — JSONL has the persisted record
           session.eventHistory = [];
           continue;
+        }
+
+        // Unknown message type — log and continue. Without this fallthrough
+        // a new SDK message kind would silently disappear. Exhaustive
+        // handling keeps the stream loop debuggable as the SDK evolves.
+        if (process.env.DEBUG_SDK_STREAM) {
+          console.log(
+            `[session=${session.id}] Unhandled SDK message:`,
+            msg.type,
+            (msg as Record<string, unknown>).subtype,
+          );
         }
       }
     } catch (err) {
@@ -1016,6 +1070,7 @@ class SessionManager {
         delete (queryParams.options as Record<string, unknown>).resume;
         session.isProcessing = false;
         session.abortController = null;
+        session.currentQuery = null;
         this.setStatus(session, "idle");
         this.handleUserMessage(session, text);
         return;
@@ -1065,7 +1120,11 @@ class SessionManager {
 
       const stderrTail =
         typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
-          ? (errnoErr as unknown as { stderr: string }).stderr.trim().split(/\r?\n/).slice(-10).join("\n")
+          ? (errnoErr as unknown as { stderr: string }).stderr
+              .trim()
+              .split(/\r?\n/)
+              .slice(-10)
+              .join("\n")
           : undefined;
 
       if (authError) {
@@ -1098,6 +1157,7 @@ class SessionManager {
 
     session.isProcessing = false;
     session.abortController = null;
+    session.currentQuery = null;
     // Turn is done — flip the dot off. If a queued message starts next,
     // handleUserMessage() will flip it straight back to "thinking".
     this.setStatus(session, "idle");
@@ -1446,12 +1506,14 @@ app.prepare().then(() => {
             readFileSync(join(dirname(sdkEntry), "package.json"), "utf-8"),
           ) as { version?: string };
           if (sdkPkg.version) version = `v${sdkPkg.version}`;
-        } catch { /* non-fatal */ }
+        } catch {
+          /* non-fatal */
+        }
         console.log(`> SDK resolved: ${sdkEntry} (${version})`);
       } catch (err) {
         console.warn(
           `!! Could not resolve @anthropic-ai/claude-agent-sdk: ${(err as Error).message}. ` +
-          `Chat queries will fail. Inside the container, run 'npm install' in /app.`,
+            `Chat queries will fail. Inside the container, run 'npm install' in /app.`,
         );
       }
     })();
@@ -1466,13 +1528,19 @@ app.prepare().then(() => {
         const url = new URL(API_ORIGIN);
         const allowed = Array.from(ALLOWED_ORIGINS);
         const chatHosts = allowed
-          .map((o) => { try { return new URL(o).host; } catch { return null; } })
+          .map((o) => {
+            try {
+              return new URL(o).host;
+            } catch {
+              return null;
+            }
+          })
           .filter((h): h is string => h !== null);
         if (chatHosts.includes(url.host) || url.host.startsWith("localhost")) {
           console.warn(
             `!! NEXT_PUBLIC_API_ORIGIN (${API_ORIGIN}) looks like the chat's own host — login will 401. ` +
-            `Set it to the ClawOps backend URL (e.g. https://clawops.example.com) in /opt/claw-chat/.env ` +
-            `and 'docker compose up -d --force-recreate claw-chat'.`,
+              `Set it to the ClawOps backend URL (e.g. https://clawops.example.com) in /opt/claw-chat/.env ` +
+              `and 'docker compose up -d --force-recreate claw-chat'.`,
           );
           return;
         }
@@ -1483,7 +1551,7 @@ app.prepare().then(() => {
         if (probe.status !== 401 && probe.status !== 403) {
           console.warn(
             `!! API_ORIGIN probe returned ${probe.status} (expected 401/403 for invalid token). ` +
-            `Check that ${API_ORIGIN} is reachable and speaks the ClawOps auth API.`,
+              `Check that ${API_ORIGIN} is reachable and speaks the ClawOps auth API.`,
           );
         } else {
           console.log(`> API_ORIGIN reachable (probe got ${probe.status} as expected)`);
@@ -1491,7 +1559,7 @@ app.prepare().then(() => {
       } catch (err) {
         console.warn(
           `!! Could not reach API_ORIGIN=${API_ORIGIN}: ${(err as Error).message}. ` +
-          `Login + WebSocket auth will fail until the backend is reachable.`,
+            `Login + WebSocket auth will fail until the backend is reachable.`,
         );
       }
     })();

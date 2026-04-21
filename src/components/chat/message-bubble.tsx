@@ -1,6 +1,6 @@
 "use client";
 
-import { lazy, memo, Suspense, useState } from "react";
+import { lazy, memo, Suspense, useMemo, useState } from "react";
 import {
   FiTerminal,
   FiFile,
@@ -119,14 +119,16 @@ export const MessageBubble = memo(function MessageBubble({
     );
   }
 
-  /* Tool use — only show the latest one (live activity indicator) */
+  /* Tool use — render every call as its own collapsible card. The old
+     behaviour (only the latest call visible) hid Claude's whole work
+     history; the timeline should show every step. `isLatestToolUse`
+     still drives the live pulse so the user can spot what's running. */
   if (message.type === "tool_use") {
-    if (!isLatestToolUse) return null;
-    return <ToolUseIndicator message={message} />;
+    return <ToolUseIndicator message={message} isLive={!!isLatestToolUse} />;
   }
-  /* Tool results — only show errors */
+  /* Tool results — show all results, collapsed by default. Errors open
+     expanded so the user sees failures immediately. */
   if (message.type === "tool_result") {
-    if (!(message.isError ?? false)) return null;
     return <ToolResultBlock message={message} />;
   }
   if (message.type === "thinking") return <ThinkingBlock message={message} />;
@@ -198,13 +200,41 @@ function AssistantTextContent({ content }: { content: string }) {
   );
 }
 
-function ToolUseIndicator({ message }: { message: ChatMessage }) {
+function ToolUseIndicator({ message, isLive }: { message: ChatMessage; isLive?: boolean }) {
   const { icon: Icon, label } = getToolDisplay(message.toolName);
   const desc = extractToolDescription(message.toolName, message.toolInput);
+  // Parse full input for the expanded view. Falls back to raw string if
+  // the tool_input isn't valid JSON (partial streaming or odd shapes).
+  const [expanded, setExpanded] = useState(false);
+  let fullInput = "";
+  if (message.toolInput) {
+    try {
+      fullInput = JSON.stringify(JSON.parse(message.toolInput), null, 2);
+    } catch {
+      fullInput = message.toolInput;
+    }
+  }
+  const hasBody = fullInput && fullInput.length > 0;
 
   return (
     <div className="px-4 py-0.5">
-      <div className="flex items-center gap-1.5 px-1 text-[11px] text-canvas-muted">
+      <button
+        type="button"
+        onClick={() => hasBody && setExpanded((e) => !e)}
+        disabled={!hasBody}
+        className={`flex w-full items-center gap-1.5 rounded-md px-1 py-0.5 text-left text-[11px] text-canvas-muted ${
+          hasBody ? "hover:bg-canvas-surface-hover" : "cursor-default"
+        } ${isLive ? "animate-session-active" : ""}`}
+      >
+        {hasBody ? (
+          expanded ? (
+            <FiChevronDown size={9} className="shrink-0 opacity-50" />
+          ) : (
+            <FiChevronRight size={9} className="shrink-0 opacity-50" />
+          )
+        ) : (
+          <span className="inline-block w-[9px]" />
+        )}
         <Icon size={11} className="shrink-0 opacity-60" style={{ color: "var(--accent)" }} />
         <span className="opacity-70" style={{ color: "var(--accent)" }}>
           {label}
@@ -214,14 +244,21 @@ function ToolUseIndicator({ message }: { message: ChatMessage }) {
             {desc}
           </span>
         )}
-      </div>
+      </button>
+      {expanded && hasBody && (
+        <pre className="mt-1 ml-2 max-h-[240px] overflow-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
+          {fullInput}
+        </pre>
+      )}
     </div>
   );
 }
 
 function ToolResultBlock({ message }: { message: ChatMessage }) {
-  const [collapsed, setCollapsed] = useState(true);
   const isError = message.isError ?? false;
+  // Errors expand by default so the user sees the failure immediately.
+  // Success output stays collapsed — click to inspect.
+  const [collapsed, setCollapsed] = useState(!isError);
 
   if (!isError && !message.content.trim()) return null;
 
@@ -252,8 +289,13 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
         </span>
       </button>
       {!collapsed && (
-        <pre className="ml-2 max-h-[200px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
-          {message.content.slice(0, 2000)}
+        <pre className="ml-2 max-h-[240px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
+          {message.content.slice(0, 4000)}
+          {message.content.length > 4000 && (
+            <span className="mt-1 block text-[9px] italic opacity-60">
+              … {message.content.length - 4000} more chars truncated
+            </span>
+          )}
         </pre>
       )}
     </div>
@@ -261,26 +303,38 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
 }
 
 function ThinkingBlock({ message }: { message: ChatMessage }) {
-  const [collapsed, setCollapsed] = useState(false);
+  // Default: collapsed with a one-line preview. Less visual noise than
+  // the old always-expanded pane; click to read the full reasoning.
+  const [collapsed, setCollapsed] = useState(true);
 
   if (!message.content) return null;
+
+  const preview = message.content.replace(/\s+/g, " ").trim().slice(0, 80);
+  const charCount = message.content.length;
 
   return (
     <div className="px-4 py-1">
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
-        className="flex items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-canvas-surface-hover"
+        className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left hover:bg-canvas-surface-hover"
       >
         {collapsed ? (
           <FiChevronRight size={10} className="shrink-0 text-accent/60" />
         ) : (
           <FiChevronDown size={10} className="shrink-0 text-accent/60" />
         )}
-        <span className="text-[11px] text-canvas-muted">Thinking...</span>
+        <span className="text-[11px] text-canvas-muted">Thinking</span>
+        {collapsed && preview && (
+          <span className="line-clamp-1 min-w-0 flex-1 text-[11px] italic text-canvas-muted/70">
+            {preview}
+            {message.content.length > preview.length && "…"}
+          </span>
+        )}
+        <span className="shrink-0 text-[9px] text-canvas-muted/40">{charCount}</span>
       </button>
       {!collapsed && (
-        <div className="ml-2 max-h-[300px] overflow-y-auto rounded-md border-l-2 border-accent/30 bg-canvas-surface-hover/50 px-3 py-2">
+        <div className="ml-2 max-h-[360px] overflow-y-auto rounded-md border-l-2 border-accent/30 bg-canvas-surface-hover/50 px-3 py-2">
           <p className="whitespace-pre-wrap text-[11px] italic leading-relaxed text-canvas-muted">
             {message.content}
           </p>
@@ -292,31 +346,140 @@ function ThinkingBlock({ message }: { message: ChatMessage }) {
 
 function PermissionRequestBlock({
   message,
+  onRespond,
 }: {
   message: ChatMessage;
   onRespond?: (id: string, allow: boolean, allowSession?: boolean, message?: string) => void;
 }) {
+  const [showDeny, setShowDeny] = useState(false);
+  const [denyText, setDenyText] = useState("");
   const resolved = message.permissionResolved;
   const allowed = message.permissionAllowed;
   const toolName = message.toolName ?? "Tool";
+  const { icon: Icon, label } = getToolDisplay(toolName);
 
-  if (!resolved) return null;
+  if (resolved) {
+    return (
+      <div className="px-4 py-0.5">
+        <div
+          className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
+            allowed ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
+          }`}
+        >
+          {allowed ? <FiCheck size={10} /> : <FiX size={10} />}
+          {allowed ? "Allowed" : "Denied"}: {toolName}
+        </div>
+        {!allowed && message.permissionMessage && (
+          <p className="mt-1 pl-4 text-[11px] italic text-red-400/80">
+            &ldquo;{message.permissionMessage}&rdquo;
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  // Pull a useful description from either the server-supplied `content`
+  // (short summary) or the raw input (fallback — shows the file path or
+  // bash command). Preserves the same information users see in the
+  // bottom-sheet modal.
+  const desc =
+    message.content ||
+    (() => {
+      const input = message.permissionInput;
+      if (!input) return "";
+      if (toolName === "Bash" && typeof input.command === "string") return input.command;
+      if (typeof input.file_path === "string") return input.file_path;
+      if (typeof input.pattern === "string") return String(input.pattern);
+      return JSON.stringify(input).slice(0, 200);
+    })();
+
+  const handleAllow = () => onRespond?.(message.permissionId ?? "", true);
+  const handleAlways = () => onRespond?.(message.permissionId ?? "", true, true);
+  const handleDenyImmediate = () => onRespond?.(message.permissionId ?? "", false);
+  const handleDenyWithReason = () =>
+    onRespond?.(message.permissionId ?? "", false, false, denyText.trim() || undefined);
 
   return (
-    <div className="px-4 py-0.5">
-      <div
-        className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium ${
-          allowed ? "bg-green-500/10 text-green-400" : "bg-red-500/10 text-red-400"
-        }`}
-      >
-        {allowed ? <FiCheck size={10} /> : <FiX size={10} />}
-        {allowed ? "Allowed" : "Denied"}: {toolName}
+    <div className="px-4 py-1.5">
+      <div className="rounded-lg border border-accent/30 bg-canvas-surface-hover px-3.5 py-3">
+        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-accent">
+          <Icon size={12} />
+          <span>Approval needed · {label}</span>
+        </div>
+
+        {desc && (
+          <div className="mb-2.5 rounded-md border border-canvas-border bg-canvas-bg px-2.5 py-1.5">
+            <p className="break-all font-mono text-[11px] leading-relaxed text-canvas-muted">
+              {desc}
+            </p>
+          </div>
+        )}
+
+        {showDeny ? (
+          <div>
+            <textarea
+              value={denyText}
+              onChange={(e) => setDenyText(e.target.value)}
+              placeholder="Tell Claude why you denied this (optional)"
+              rows={2}
+              className="w-full rounded-md border border-canvas-border bg-canvas-bg px-2.5 py-1.5 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none"
+              autoFocus
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleDenyWithReason}
+                className="rounded-md bg-red-500/90 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-red-500"
+              >
+                Send denial
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeny(false);
+                  setDenyText("");
+                }}
+                className="text-[12px] text-canvas-muted hover:text-canvas-fg"
+              >
+                Back
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={handleAllow}
+              className="rounded-md px-3 py-1.5 text-[12px] font-semibold text-white"
+              style={{ backgroundColor: "var(--accent)" }}
+            >
+              Allow
+            </button>
+            <button
+              type="button"
+              onClick={handleAlways}
+              className="rounded-md border border-accent/30 px-3 py-1.5 text-[12px] font-medium"
+              style={{ color: "var(--accent)" }}
+            >
+              Always allow {toolName}
+            </button>
+            <button
+              type="button"
+              onClick={handleDenyImmediate}
+              className="rounded-md border border-canvas-border px-3 py-1.5 text-[12px] font-medium text-canvas-fg hover:bg-canvas-surface-hover"
+            >
+              Deny
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowDeny(true)}
+              className="text-[12px] text-canvas-muted hover:text-canvas-fg"
+            >
+              Deny with reason
+            </button>
+          </div>
+        )}
       </div>
-      {!allowed && message.permissionMessage && (
-        <p className="mt-1 pl-4 text-[11px] italic text-red-400/80">
-          &ldquo;{message.permissionMessage}&rdquo;
-        </p>
-      )}
     </div>
   );
 }
@@ -367,6 +530,8 @@ function PlanProposalBlock({
             <MarkdownRenderer text={message.planContent || "*(empty plan)*"} />
           </Suspense>
         </div>
+
+        <PlanFilesPreview plan={message.planContent || ""} />
 
         {resolved ? (
           <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
@@ -621,4 +786,49 @@ function AskQuestionBlock({
       </div>
     </div>
   );
+}
+
+/**
+ * Scans the plan markdown for file paths and backticked filenames so the
+ * user can see at-a-glance what the plan will touch before approving.
+ * Read-only hint — does not gate approval, just surfaces scope. Extracted
+ * rather than inlined so the plan card stays readable and the regex
+ * lives in one place.
+ */
+function PlanFilesPreview({ plan }: { plan: string }) {
+  const files = useMemo(() => extractPlanFiles(plan), [plan]);
+  if (files.length === 0) return null;
+  return (
+    <div className="mt-2.5 rounded-md border border-canvas-border bg-canvas-bg/60 px-3 py-2">
+      <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-canvas-muted/70">
+        Files in this plan
+      </p>
+      <ul className="flex flex-col gap-0.5">
+        {files.slice(0, 12).map((f) => (
+          <li key={f} className="truncate font-mono text-[11px] text-canvas-muted" title={f}>
+            {f}
+          </li>
+        ))}
+        {files.length > 12 && (
+          <li className="text-[10px] italic text-canvas-muted/60">
+            … and {files.length - 12} more
+          </li>
+        )}
+      </ul>
+    </div>
+  );
+}
+
+function extractPlanFiles(plan: string): string[] {
+  if (!plan) return [];
+  const set = new Set<string>();
+  // 1. Backticked path-like tokens: `src/foo.ts`, `./config.json`, etc.
+  const backtick = /`([^`\s]+\.[a-z0-9]{1,6})`/gi;
+  for (const m of plan.matchAll(backtick)) set.add(m[1]);
+  // 2. Bare path-like tokens at word boundaries (with a slash or dot ext).
+  //    Requires either a `/` separator or a leading `./` to avoid matching
+  //    regular sentences like "plan.md is small."
+  const bare = /(?:^|[\s(])((?:\.\/|[\w@][\w@.\-/]*\/)[\w.\-/]+\.[a-z0-9]{1,6})/gi;
+  for (const m of plan.matchAll(bare)) set.add(m[1]);
+  return [...set];
 }

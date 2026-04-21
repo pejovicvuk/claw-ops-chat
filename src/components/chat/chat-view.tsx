@@ -6,9 +6,6 @@ import {
   FiArrowLeft,
   FiShield,
   FiChevronDown,
-  FiTerminal,
-  FiFile,
-  FiEdit,
   FiMessageCircle,
   FiAlertTriangle,
 } from "react-icons/fi";
@@ -43,33 +40,6 @@ const EFFORT_OPTIONS = [
   { value: "high", label: "High" },
   { value: "max", label: "Max" },
 ];
-
-const TOOL_ICONS: Record<string, typeof FiTerminal> = {
-  Bash: FiTerminal,
-  Read: FiFile,
-  Write: FiEdit,
-  Edit: FiEdit,
-  Glob: FiFile,
-  Grep: FiFile,
-};
-const TOOL_LABELS: Record<string, string> = {
-  Bash: "Run command",
-  Read: "Read file",
-  Write: "Write file",
-  Edit: "Edit file",
-  Glob: "Search files",
-  Grep: "Search content",
-};
-function getToolDisplayForPermission(name: string) {
-  return { icon: TOOL_ICONS[name] ?? FiTerminal, label: TOOL_LABELS[name] ?? `Use ${name}` };
-}
-function getPermDescForModal(toolName: string, input?: Record<string, unknown>): string {
-  if (!input) return "";
-  if (toolName === "Bash" && input.command) return String(input.command).slice(0, 200);
-  if (["Read", "Write", "Edit"].includes(toolName) && input.file_path)
-    return String(input.file_path);
-  return JSON.stringify(input).slice(0, 200);
-}
 
 const STATUS_LABELS: Record<string, string> = {
   disconnected: "Disconnected",
@@ -188,6 +158,47 @@ export function ChatView({
       }
     }
   }, [status, permissionMode, setPermissionMode]);
+
+  // Keyboard parity with the Claude Code CLI: Shift+Tab cycles modes,
+  // Esc interrupts while Claude is working. Ignored while a text input
+  // / textarea is focused so message composition isn't disrupted.
+  useEffect(() => {
+    function isTypingTarget(el: EventTarget | null): boolean {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable;
+    }
+    function onKey(e: KeyboardEvent) {
+      if (isTypingTarget(e.target)) return;
+
+      // Shift+Tab → cycle default → plan → acceptEdits → default
+      if (e.key === "Tab" && e.shiftKey) {
+        e.preventDefault();
+        const order = ["default", "plan", "acceptEdits"] as const;
+        const idx = order.indexOf(permissionMode as (typeof order)[number]);
+        const next = order[(idx + 1) % order.length] ?? "default";
+        setMode(next);
+        setPermissionMode(next);
+        setInfoMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            content: `Mode: ${MODE_LABELS[next] ?? next}`,
+            timestamp: Date.now(),
+          },
+        ]);
+        return;
+      }
+
+      // Esc → stop Claude mid-turn
+      if (e.key === "Escape" && (status === "thinking" || status === "tool_running")) {
+        e.preventDefault();
+        stopGeneration();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [permissionMode, setPermissionMode, status, stopGeneration]);
 
   useEffect(() => {
     if (!resumeSessionId) return;
@@ -548,22 +559,55 @@ export function ChatView({
             </div>
           )}
           {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
-          {sortedMessages.map((msg) => {
+          {sortedMessages.map((msg, idx) => {
+            // Staggered enter animation for first-load history only —
+            // streaming messages (idx not in historyIdsRef) animate
+            // instantly. Capped at 12 * 25ms so a huge backlog doesn't
+            // visibly cascade for half a second.
             const histIdx = historyIdsRef.current.indexOf(msg.id);
             const staggerStyle =
               histIdx >= 0 ? { animationDelay: `${Math.min(histIdx, 12) * 25}ms` } : undefined;
-            return msg._isInfo ? (
+
+            if (msg._isInfo) {
+              return (
+                <div
+                  key={msg.id}
+                  className="animate-msg-in flex justify-center px-4 py-1.5"
+                  style={staggerStyle}
+                >
+                  <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
+                    {msg.content}
+                  </span>
+                </div>
+              );
+            }
+            // Timeline nodes (thinking / tool_use / tool_result) are the
+            // ambient "Claude is working" stream. Wrap each one in a
+            // container that paints a subtle left rail so contiguous nodes
+            // read as a single vertical timeline. User bubbles, assistant
+            // replies, and interactive cards break the rail cleanly.
+            const isTimelineNode =
+              msg.type === "thinking" || msg.type === "tool_use" || msg.type === "tool_result";
+            const prev = idx > 0 ? sortedMessages[idx - 1] : null;
+            const next = idx < sortedMessages.length - 1 ? sortedMessages[idx + 1] : null;
+            const prevIsTimeline =
+              !!prev &&
+              !prev._isInfo &&
+              (prev.type === "thinking" || prev.type === "tool_use" || prev.type === "tool_result");
+            const nextIsTimeline =
+              !!next &&
+              !next._isInfo &&
+              (next.type === "thinking" || next.type === "tool_use" || next.type === "tool_result");
+            return (
               <div
                 key={msg.id}
-                className="animate-msg-in flex justify-center px-4 py-1.5"
+                className={`animate-msg-in ${
+                  isTimelineNode ? "ml-4 border-l border-accent/15 pl-1" : ""
+                } ${isTimelineNode && !prevIsTimeline ? "mt-2 pt-1" : ""} ${
+                  isTimelineNode && !nextIsTimeline ? "mb-2 pb-1" : ""
+                }`}
                 style={staggerStyle}
               >
-                <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
-                  {msg.content}
-                </span>
-              </div>
-            ) : (
-              <div key={msg.id} className="animate-msg-in" style={staggerStyle}>
                 <MessageBubble
                   message={msg}
                   isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
@@ -600,90 +644,30 @@ export function ChatView({
           <div ref={bottomRef} />
         </div>
 
-        {/* Permission modal — slides up from bottom on mobile */}
+        {/* Floating pill that scrolls the user to the inline approval
+            card when it's off-screen. Replaces the old blocking modal —
+            the inline PermissionRequestBlock now renders full Allow /
+            Deny / Always-allow / Deny-with-reason controls directly in
+            the stream, so the modal was redundant. This pill is a
+            no-JS-deps fallback: it always shows while a permission is
+            pending, and a tap scrolls to the bottom (where the latest
+            inline card lives). */}
         {(() => {
           const pending = messages.find(
             (m) => m.type === "permission_request" && !m.permissionResolved,
           );
           if (!pending) return null;
           const toolName = pending.toolName ?? "Tool";
-          const { icon: PermIcon, label: permLabel } = getToolDisplayForPermission(toolName);
-          const permDesc =
-            pending.content || getPermDescForModal(toolName, pending.permissionInput);
           return (
-            <div className="absolute inset-0 z-10 flex items-end sm:items-center justify-center bg-black/25 backdrop-blur-[3px]">
-              <div
-                className="animate-sheet-up sm:animate-modal-in mx-0 sm:mx-4 w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl bg-canvas-bg p-5 shadow-2xl"
-                style={{ borderTop: "1px solid var(--canvas-border)" }}
-              >
-                <div className="mb-4 flex items-center gap-3">
-                  <div
-                    className="flex h-10 w-10 items-center justify-center rounded-xl"
-                    style={{
-                      backgroundColor: "color-mix(in srgb, var(--accent) 12%, transparent)",
-                    }}
-                  >
-                    <PermIcon size={18} style={{ color: "var(--accent)" }} />
-                  </div>
-                  <div>
-                    <p className="text-[14px] font-semibold text-canvas-fg">{permLabel}</p>
-                    <p className="text-[11px] text-canvas-muted">Claude wants to use this tool</p>
-                  </div>
-                </div>
-                {permDesc && (
-                  <div className="mb-4 rounded-xl bg-canvas-surface-hover p-3">
-                    <p className="break-all font-mono text-[11px] leading-relaxed text-canvas-muted">
-                      {permDesc}
-                    </p>
-                  </div>
-                )}
-                <div className="space-y-2">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      onClick={() => respondPermission(pending.permissionId!, true)}
-                      className="flex-1 rounded-xl py-3 text-[14px] font-semibold text-white active:opacity-80 transition-opacity duration-150"
-                      style={{ backgroundColor: "var(--accent)" }}
-                    >
-                      Allow
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => respondPermission(pending.permissionId!, false)}
-                      className="flex-1 rounded-xl border border-canvas-border bg-canvas-surface-hover py-3 text-[14px] font-semibold text-canvas-fg active:bg-canvas-border transition-colors duration-150"
-                    >
-                      Deny
-                    </button>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      respondPermission(pending.permissionId!, true, true);
-                      setMode("acceptEdits");
-                      setPermissionMode("acceptEdits");
-                      setInfoMessages((prev) => [
-                        ...prev,
-                        {
-                          id: crypto.randomUUID(),
-                          content: "Switched to Accept Edits mode",
-                          timestamp: Date.now(),
-                        },
-                      ]);
-                    }}
-                    className="w-full rounded-xl py-2.5 text-[12px] font-medium transition-colors duration-150 active:opacity-70"
-                    style={{
-                      backgroundColor: "color-mix(in srgb, var(--accent) 10%, transparent)",
-                      color: "var(--accent)",
-                      border: "1px solid color-mix(in srgb, var(--accent) 20%, transparent)",
-                    }}
-                  >
-                    Always allow {toolName} this session
-                  </button>
-                </div>
-                {/* Safe area padding for bottom */}
-                <div style={{ height: "env(safe-area-inset-bottom, 0px)" }} />
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
+              className="animate-msg-in absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/40 bg-canvas-bg/95 px-3 py-1.5 text-[11px] font-medium shadow-lg backdrop-blur"
+              style={{ color: "var(--accent)" }}
+            >
+              <FiShield size={11} />
+              <span>Approval needed · {toolName} — tap to review</span>
+            </button>
           );
         })()}
       </div>

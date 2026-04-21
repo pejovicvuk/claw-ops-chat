@@ -10,6 +10,7 @@ import {
   FiFile,
   FiEdit,
   FiMessageCircle,
+  FiAlertTriangle,
 } from "react-icons/fi";
 import { useClaudeChat } from "@/lib/use-claude-chat";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -118,6 +119,8 @@ export function ChatView({
     sendMessage,
     stopGeneration,
     setupRequired,
+    authRequired,
+    clearAuthRequired,
     contextUsage,
     respondPermission,
     respondQuestion,
@@ -484,6 +487,32 @@ export function ChatView({
           </div>
         )}
       </div>
+
+      {authRequired && (
+        <div className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5">
+          <div className="flex items-start gap-2.5">
+            <FiAlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+            <div className="min-w-0 flex-1 text-[12px] leading-relaxed">
+              <p className="font-medium text-amber-300">Claude sign-in expired</p>
+              <p className="mt-0.5 text-canvas-muted">{authRequired.message}</p>
+              <p className="mt-1 text-canvas-muted">
+                Open <span className="font-mono">Settings → Terminal</span> and run{" "}
+                <code className="rounded bg-canvas-bg px-1 py-0.5 font-mono text-[11px]">
+                  claude auth login
+                </code>
+                , then click <span className="italic">Retry</span>.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearAuthRequired}
+              className="shrink-0 rounded-md bg-canvas-bg px-2 py-1 text-[11px] font-medium text-canvas-fg hover:bg-canvas-surface-hover"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Messages */}
       <div className="relative flex-1">

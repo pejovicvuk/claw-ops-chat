@@ -921,12 +921,36 @@ class SessionManager {
         lowered.includes("native binary not found") ||
         lowered.includes("no such file");
 
+      // Detect Anthropic / Claude-Code auth failures specifically. The
+      // SDK surfaces these as a plain Error whose message contains the
+      // JSON body from api.anthropic.com — something like:
+      //   API Error: 401 {"type":"error","error":{
+      //       "type":"authentication_error",
+      //       "message":"Invalid authentication credentials"}}
+      // When we see that shape, emit a dedicated auth-required event so
+      // the UI can pop the "sign in to Claude" flow instead of showing
+      // the raw 401 blob as a generic error bubble.
+      const authError =
+        lowered.includes("authentication_error") ||
+        lowered.includes("invalid authentication credentials") ||
+        /\b401\b/.test(rawMessage) ||
+        lowered.includes("unauthorized");
+
       const stderrTail =
         typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
           ? (errnoErr as unknown as { stderr: string }).stderr.trim().split(/\r?\n/).slice(-10).join("\n")
           : undefined;
 
-      if (setupRequired) {
+      if (authError) {
+        this.broadcast(session, {
+          type: "auth_required",
+          provider: "claude",
+          message:
+            "Claude rejected the stored credentials (HTTP 401). Your OAuth " +
+            "token has probably expired — sign in again to keep chatting.",
+          hint: "Run `claude auth login` in the container terminal, or click below.",
+        });
+      } else if (setupRequired) {
         this.broadcast(session, {
           type: "setup_required",
           message:

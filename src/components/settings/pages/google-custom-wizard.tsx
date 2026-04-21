@@ -805,32 +805,29 @@ export function GoogleCustomWizard() {
               >
                 Credentials
               </a>{" "}
-              → Create Credentials → OAuth client ID → pick a type:
-              <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                <li>
-                  <span className="font-medium text-canvas-fg">TVs and Limited Input devices</span>{" "}
-                  — recommended. Enables the device-flow sign-in below; works on any remote server,
-                  no redirect URL needed.
-                </li>
-                <li>
-                  <span className="font-medium text-canvas-fg">Web application</span> — only if you
-                  can register{" "}
-                  <code className="text-[10px]">
-                    https://&lt;your-host&gt;/chat/api/google-custom/oauth-callback
-                  </code>{" "}
-                  as an authorized redirect URI.
-                </li>
-                <li>
-                  <span className="font-medium text-canvas-fg">Desktop app</span> — does{" "}
-                  <span className="font-medium text-red-500">not</span> work with device flow.
-                  Google rejects it with &quot;Invalid client type&quot;. Pick TVs &amp; Limited
-                  Input instead.
-                </li>
-              </ul>
+              → Create Credentials → OAuth client ID → pick{" "}
+              <span className="font-medium text-canvas-fg">Web application</span>.
+            </li>
+            <li>
+              Under <span className="font-medium text-canvas-fg">Authorized redirect URIs</span>,
+              add this exact URL:
+              <code className="mt-1 block overflow-x-auto rounded bg-canvas-bg px-2 py-1 text-[10px] text-canvas-fg">
+                https://&lt;your-host&gt;/chat/api/google-custom/oauth-callback
+              </code>
+              Replace <code>&lt;your-host&gt;</code> with the domain you access this app on (e.g.{" "}
+              <code>vukasin-claude.viksi.ai</code>).
             </li>
             <li>
               Click <span className="font-medium text-canvas-fg">Download JSON</span> on the client
-              row and paste the file contents into the box below.
+              row and paste the file contents into the box below. Then use the &quot;Run Setup in
+              Terminal&quot; button in Step 3 to finish sign-in.
+            </li>
+            <li className="text-canvas-muted/80">
+              <span className="font-medium">Why not Desktop app or TVs and Limited Input?</span>{" "}
+              Desktop clients can&apos;t register a public https redirect, and Google&apos;s device
+              flow (TVs / Limited Input) only allows identity, YouTube, and file-scoped Drive — no
+              Gmail, no Calendar, no Docs/Sheets. Web application is the only type that works for
+              full Workspace access on a remote host.
             </li>
           </ol>
         )}

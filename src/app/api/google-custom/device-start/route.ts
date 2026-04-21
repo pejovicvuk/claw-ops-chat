@@ -93,19 +93,43 @@ export async function POST(request: Request) {
     // "installed" key), so we can't detect this client-side; we only see
     // it when Google rejects the request. Translate the terse Google
     // message into something actionable.
-    const desc = (data.error_description || "").toLowerCase();
+    const rawDesc = data.error_description || "";
+    const desc = rawDesc.toLowerCase();
     const code = (data.error || "").toLowerCase();
     const isInvalidClientType = desc.includes("invalid client type") || code === "invalid_client";
-    const friendly = isInvalidClientType
-      ? "Your OAuth client was created as 'Desktop app' (or 'Web application'). " +
+    // Google's device flow only permits a small whitelist of scopes: identity
+    // (openid / email / profile), YouTube, and file-scoped Drive
+    // (drive.file / drive.appdata). Workspace scopes — Gmail, Calendar, full
+    // Drive, Docs, Sheets — are not on that list, so there is *no* workable
+    // device-flow configuration for a Google Workspace MCP. The only way
+    // forward is a Web-application OAuth client with a registered redirect
+    // URI. Surface that instead of the terse "Invalid device flow scope"
+    // Google hands back.
+    const isScopeRejection = desc.includes("invalid device flow scope") || code === "invalid_scope";
+    let friendly: string;
+    if (isScopeRejection) {
+      friendly =
+        "Google's device flow doesn't support Workspace scopes (Gmail, Calendar, " +
+        "Drive, Docs, Sheets) — only identity + YouTube + file-scoped Drive. " +
+        "That rules out using the device flow for workspace-mcp. " +
+        "Switch to a Web-application OAuth client: Google Cloud Console → " +
+        "Credentials → Create credentials → OAuth client ID → Web application, " +
+        "add 'https://<your-host>/chat/api/google-custom/oauth-callback' as an " +
+        "authorized redirect URI, download the JSON, paste it here, then use the " +
+        "'Run Setup in Terminal' path that appears for Web clients." +
+        (rawDesc ? ` (Google said: ${rawDesc})` : "");
+    } else if (isInvalidClientType) {
+      friendly =
+        "Your OAuth client was created as 'Desktop app' (or 'Web application'). " +
         "Google's device flow only accepts clients registered as " +
         "'TVs and Limited Input devices'. Go to Google Cloud Console → " +
         "Credentials → Create credentials → OAuth client ID → pick " +
         "'TVs and Limited Input devices', download that JSON, and paste it " +
-        "back into the credentials box above."
-      : data.error_description ||
-        data.error ||
-        `Google returned HTTP ${upstream.status} without a device code.`;
+        "back into the credentials box above.";
+    } else {
+      friendly =
+        rawDesc || data.error || `Google returned HTTP ${upstream.status} without a device code.`;
+    }
     return Response.json(
       { error: friendly },
       { status: upstream.status >= 400 && upstream.status < 600 ? upstream.status : 502 },

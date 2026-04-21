@@ -12,6 +12,8 @@ import {
   FiLogOut,
   FiRefreshCw,
   FiTerminal,
+  FiUpload,
+  FiX,
 } from "react-icons/fi";
 import { authFetch } from "@/lib/auth";
 import { GoogleSetupTerminal } from "@/components/settings/google-setup-terminal";
@@ -97,7 +99,12 @@ export function GoogleCustomWizard() {
   const [mode, setMode] = useState<UiMode>("loading");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  // Client-parsed credentials.json — read from an uploaded file. Stored as
+  // a string so it lands on the server exactly the way the credentials
+  // endpoint expects (the { json } POST body).
   const [jsonPaste, setJsonPaste] = useState("");
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [detectedType, setDetectedType] = useState<"installed" | "web" | null>(null);
   const [jsonError, setJsonError] = useState<string | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
@@ -149,9 +156,11 @@ export function GoogleCustomWizard() {
     void refreshStatus();
   }, [refreshStatus]);
 
-  // Auto-parse on every keystroke so the type chip reflects the current
-  // paste in real time. Empty textarea clears the detected state.
-  const onJsonPasteChange = useCallback((raw: string) => {
+  // Parse the credentials.json contents in the browser so the user sees
+  // the detected client type before they even hit Save. The same string
+  // lands on the server via the { json } POST body — the server repeats
+  // the parse for validation.
+  const handleParsedJson = useCallback((raw: string) => {
     setJsonPaste(raw);
     setJsonError(null);
     if (!raw.trim()) {
@@ -168,11 +177,41 @@ export function GoogleCustomWizard() {
       return;
     }
     setDetectedType(parsed.clientType);
-    // Auto-fill the two fields so the user can inspect / edit if needed.
-    // Also means the Save button enables without requiring them to tab
-    // through the lower inputs.
+    // Auto-fill the two manual fields so the user can inspect / edit if
+    // needed, and so the Save button enables without extra tabbing.
     setClientId(parsed.clientId);
     setClientSecret(parsed.clientSecret);
+  }, []);
+
+  // File-upload entrypoint: read the picked file as text, then reuse the
+  // same validation path as the manual fields.
+  const onJsonFilePicked = useCallback(
+    (file: File | null | undefined) => {
+      if (!file) return;
+      setUploadedFileName(file.name);
+      setJsonError(null);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = typeof reader.result === "string" ? reader.result : "";
+        handleParsedJson(text);
+      };
+      reader.onerror = () => {
+        setJsonError("Could not read that file.");
+        setDetectedType(null);
+      };
+      reader.readAsText(file);
+    },
+    [handleParsedJson],
+  );
+
+  const clearUploadedJson = useCallback(() => {
+    setUploadedFileName(null);
+    setJsonPaste("");
+    setDetectedType(null);
+    setJsonError(null);
+    setClientId("");
+    setClientSecret("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
   const saveCredentials = useCallback(async () => {
@@ -195,10 +234,14 @@ export function GoogleCustomWizard() {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || "Failed to save credentials");
       }
-      // Clear the paste + secret so nothing lingers in the DOM after save.
+      // Clear the parsed JSON + secret so nothing lingers in the DOM after
+      // save. Filename is cleared too so the user sees a fresh state if
+      // they come back to edit.
       setJsonPaste("");
+      setUploadedFileName(null);
       setClientSecret("");
       setDetectedType(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
       await refreshStatus();
     } catch (err) {
       setCredentialsError(err instanceof Error ? err.message : "Failed to save credentials");
@@ -384,7 +427,9 @@ export function GoogleCustomWizard() {
     setClientId("");
     setClientSecret("");
     setJsonPaste("");
+    setUploadedFileName(null);
     setDetectedType(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
     setAuthUrl(null);
     setAuthorizedEmail(null);
     setSignedInEmail(null);
@@ -805,32 +850,76 @@ export function GoogleCustomWizard() {
               >
                 Credentials
               </a>{" "}
-              → Create Credentials → OAuth client ID →{" "}
-              <span className="font-medium text-canvas-fg">Desktop app</span> (recommended) or{" "}
+              → Create Credentials → OAuth client ID → pick{" "}
               <span className="font-medium text-canvas-fg">Web application</span>.
             </li>
             <li>
+              Under <span className="font-medium text-canvas-fg">Authorized redirect URIs</span>,
+              add this exact URL:
+              <code className="mt-1 block overflow-x-auto rounded bg-canvas-bg px-2 py-1 text-[10px] text-canvas-fg">
+                https://&lt;your-host&gt;/chat/api/google-custom/oauth-callback
+              </code>
+              Replace <code>&lt;your-host&gt;</code> with the domain you access this app on (e.g.{" "}
+              <code>vukasin-claude.viksi.ai</code>).
+            </li>
+            <li>
               Click <span className="font-medium text-canvas-fg">Download JSON</span> on the client
-              row and paste the file contents into the box below.
+              row and upload the file below. Then use the &quot;Run Setup in Terminal&quot; button
+              in Step 3 to finish sign-in.
+            </li>
+            <li className="text-canvas-muted/80">
+              <span className="font-medium">Why not Desktop app or TVs and Limited Input?</span>{" "}
+              Desktop clients can&apos;t register a public https redirect, and Google&apos;s device
+              flow (TVs / Limited Input) only allows identity, YouTube, and file-scoped Drive — no
+              Gmail, no Calendar, no Docs/Sheets. Web application is the only type that works for
+              full Workspace access on a remote host.
             </li>
           </ol>
         )}
 
-        {/* JSON paste (primary) */}
+        {/* credentials.json upload (primary) */}
         <div className="mb-3">
-          <label className="mb-1 block text-[11px] text-canvas-muted" htmlFor="gc-json-paste">
-            Paste <code className="text-canvas-fg">credentials.json</code>
+          <label className="mb-1 block text-[11px] text-canvas-muted">
+            Upload <code className="text-canvas-fg">credentials.json</code>
           </label>
-          <textarea
-            id="gc-json-paste"
-            value={jsonPaste}
-            onChange={(e) => onJsonPasteChange(e.target.value)}
-            placeholder='{ "installed": { "client_id": "...", "client_secret": "...", ... } }'
-            disabled={!status.uvxInstalled}
-            rows={4}
-            spellCheck={false}
-            className="w-full resize-y rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 font-mono text-[11px] leading-relaxed text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none disabled:opacity-50"
+          {/* Hidden file input — click is proxied from the visible button.
+              Parsing, detection, and field auto-fill happen in
+              onJsonFilePicked. The file contents never leave the browser
+              except as part of the eventual Save POST body. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => onJsonFilePicked(e.target.files?.[0])}
           />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={!status.uvxInstalled}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] font-medium text-canvas-fg transition-colors hover:bg-canvas-surface-hover disabled:opacity-50"
+            >
+              <FiUpload size={12} />
+              {uploadedFileName ? "Replace file" : "Choose credentials.json"}
+            </button>
+            {uploadedFileName && (
+              <>
+                <span className="inline-flex items-center gap-1 rounded-md bg-canvas-surface-hover px-2 py-1 font-mono text-[11px] text-canvas-fg">
+                  {uploadedFileName}
+                </span>
+                <button
+                  type="button"
+                  onClick={clearUploadedJson}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                  title="Clear uploaded file"
+                >
+                  <FiX size={11} />
+                  Clear
+                </button>
+              </>
+            )}
+          </div>
           <div className="mt-1.5 flex items-center gap-2 text-[11px]">
             {detectedType === "installed" && (
               <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-green-600">
@@ -928,9 +1017,13 @@ export function GoogleCustomWizard() {
         {effectiveType === "installed" ? (
           <>
             <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
-              Your OAuth client is a <span className="font-medium text-canvas-fg">Desktop app</span>
-              , so we&apos;ll use Google&apos;s device flow — no redirect URL needed. You&apos;ll
-              get a code to enter on any device.
+              We&apos;ll use Google&apos;s device flow — no redirect URL needed. You&apos;ll get a
+              code to enter on any device.{" "}
+              <span className="font-medium text-canvas-fg">
+                Your OAuth client must be registered as &quot;TVs and Limited Input devices&quot;
+              </span>{" "}
+              — Google rejects Desktop-app clients here with &quot;Invalid client type&quot;. Both
+              types produce identical JSON, so paste-time detection can&apos;t tell them apart.
             </p>
             <button
               type="button"

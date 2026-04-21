@@ -115,8 +115,18 @@ const markdownComponents = {
 interface MessageBubbleProps {
   message: ChatMessage;
   isLatestToolUse?: boolean;
-  onPermissionRespond?: (id: string, allow: boolean, allowSession?: boolean) => void;
-  onQuestionRespond?: (id: string, answers: Record<string, string>) => void;
+  onPermissionRespond?: (
+    id: string,
+    allow: boolean,
+    allowSession?: boolean,
+    message?: string,
+  ) => void;
+  onQuestionRespond?: (id: string, answers: Record<string, string | string[]>) => void;
+  onPlanRespond?: (
+    id: string,
+    approve: boolean,
+    opts?: { newMode?: "default" | "acceptEdits"; message?: string },
+  ) => void;
 }
 
 export function MessageBubble({
@@ -124,6 +134,7 @@ export function MessageBubble({
   isLatestToolUse,
   onPermissionRespond,
   onQuestionRespond,
+  onPlanRespond,
 }: MessageBubbleProps) {
   if (message.type === "error") {
     return (
@@ -166,6 +177,8 @@ export function MessageBubble({
   if (message.type === "thinking") return <ThinkingBlock message={message} />;
   if (message.type === "permission_request")
     return <PermissionRequestBlock message={message} onRespond={onPermissionRespond} />;
+  if (message.type === "plan_proposal")
+    return <PlanProposalBlock message={message} onRespond={onPlanRespond} />;
   if (message.type === "ask_question")
     return <AskQuestionBlock message={message} onRespond={onQuestionRespond} />;
 
@@ -326,7 +339,7 @@ function PermissionRequestBlock({
   message,
 }: {
   message: ChatMessage;
-  onRespond?: (id: string, allow: boolean, allowSession?: boolean) => void;
+  onRespond?: (id: string, allow: boolean, allowSession?: boolean, message?: string) => void;
 }) {
   const resolved = message.permissionResolved;
   const allowed = message.permissionAllowed;
@@ -344,29 +357,210 @@ function PermissionRequestBlock({
         {allowed ? <FiCheck size={10} /> : <FiX size={10} />}
         {allowed ? "Allowed" : "Denied"}: {toolName}
       </div>
+      {!allowed && message.permissionMessage && (
+        <p className="mt-1 pl-4 text-[11px] italic text-red-400/80">
+          &ldquo;{message.permissionMessage}&rdquo;
+        </p>
+      )}
     </div>
   );
 }
+
+/**
+ * Plan-proposal card. Renders when Claude calls ExitPlanMode in plan
+ * mode. Shows the plan as markdown + three actions: approve & keep
+ * auto-approving edits (default — matches what most users want right
+ * after they OK a plan), approve but keep confirming each edit, or
+ * reject with an optional reason. Falls back to a resolved badge once
+ * the user has chosen.
+ */
+function PlanProposalBlock({
+  message,
+  onRespond,
+}: {
+  message: ChatMessage;
+  onRespond?: (
+    id: string,
+    approve: boolean,
+    opts?: { newMode?: "default" | "acceptEdits"; message?: string },
+  ) => void;
+}) {
+  const [showReject, setShowReject] = useState(false);
+  const [rejectText, setRejectText] = useState("");
+  const resolved = !!message.planResolved;
+  const outcome = message.planOutcome;
+
+  const handleApprove = (newMode: "default" | "acceptEdits") => {
+    if (resolved) return;
+    onRespond?.(message.planId ?? "", true, { newMode });
+  };
+  const handleReject = () => {
+    if (resolved) return;
+    onRespond?.(message.planId ?? "", false, { message: rejectText.trim() || undefined });
+  };
+
+  return (
+    <div className="px-4 py-1.5">
+      <div className="rounded-lg border border-accent/30 bg-canvas-surface-hover px-3.5 py-3">
+        <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-accent">
+          <FiCheck size={11} />
+          <span>Plan ready for review</span>
+        </div>
+
+        <div className="rounded-md border border-canvas-border bg-canvas-bg px-3 py-2">
+          <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+            {message.planContent || "*(empty plan)*"}
+          </Markdown>
+        </div>
+
+        {resolved ? (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px]">
+            {outcome === "approved_accept_edits" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-1 font-medium text-green-400">
+                <FiCheck size={10} /> Approved — auto-approving edits
+              </span>
+            )}
+            {outcome === "approved_default" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-1 font-medium text-green-400">
+                <FiCheck size={10} /> Approved — confirm each step
+              </span>
+            )}
+            {outcome === "rejected" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-red-500/10 px-2.5 py-1 font-medium text-red-400">
+                <FiX size={10} /> Rejected
+              </span>
+            )}
+            {outcome === "rejected" && message.planMessage && (
+              <p className="w-full pl-1 text-[11px] italic text-red-400/80">
+                &ldquo;{message.planMessage}&rdquo;
+              </p>
+            )}
+          </div>
+        ) : showReject ? (
+          <div className="mt-3">
+            <textarea
+              value={rejectText}
+              onChange={(e) => setRejectText(e.target.value)}
+              placeholder="Tell Claude what to change about the plan (optional)"
+              rows={3}
+              className="w-full rounded-md border border-canvas-border bg-canvas-bg px-2.5 py-1.5 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none"
+              autoFocus
+            />
+            <div className="mt-2 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleReject}
+                className="rounded-md bg-red-500/90 px-3 py-1.5 text-[12px] font-medium text-white hover:bg-red-500"
+              >
+                Send rejection
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowReject(false);
+                  setRejectText("");
+                }}
+                className="rounded-md px-3 py-1.5 text-[12px] text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleApprove("acceptEdits")}
+              className="rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white active:opacity-80"
+            >
+              Approve &amp; auto-apply
+            </button>
+            <button
+              type="button"
+              onClick={() => handleApprove("default")}
+              className="rounded-md border border-canvas-border px-3 py-1.5 text-[12px] font-medium text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+              title="Approve the plan, but keep asking before each edit or command"
+            >
+              Approve &amp; confirm each step
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowReject(true)}
+              className="rounded-md px-3 py-1.5 text-[12px] font-medium text-red-400 hover:bg-red-500/10"
+            >
+              Reject
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Per-question answer shape:
+ *   single-select → string (label of chosen option)
+ *   multi-select  → string[] (labels of chosen options)
+ *   custom text   → prefix "Other: " + user text (single-select) OR array
+ *                   containing "Other: <text>" entries (multi-select)
+ */
+type AnswerValue = string | string[];
+
+const OTHER_LABEL = "Other";
 
 function AskQuestionBlock({
   message,
   onRespond,
 }: {
   message: ChatMessage;
-  onRespond?: (id: string, answers: Record<string, string>) => void;
+  onRespond?: (id: string, answers: Record<string, AnswerValue>) => void;
 }) {
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string>>({});
   const questions = message.askQuestions ?? [];
   const resolved = message.askResolved;
 
-  const handleSelect = (question: string, label: string) => {
-    setSelectedAnswers((prev) => ({ ...prev, [question]: label }));
+  // Keyed by question text. Each entry is a Set of selected option labels
+  // (covers single- and multi-select uniformly — the submit handler
+  // unwraps a single-element set back to a string).
+  const [selections, setSelections] = useState<Record<string, Set<string>>>({});
+  const [customTexts, setCustomTexts] = useState<Record<string, string>>({});
+
+  const toggle = (q: string, label: string, multi: boolean) => {
+    setSelections((prev) => {
+      const next = { ...prev };
+      const current = new Set(next[q] ?? []);
+      if (multi) {
+        if (current.has(label)) current.delete(label);
+        else current.add(label);
+      } else {
+        current.clear();
+        current.add(label);
+      }
+      next[q] = current;
+      return next;
+    });
   };
 
+  const isComplete = questions.every((q) => {
+    const selected = selections[q.question];
+    if (!selected || selected.size === 0) return false;
+    // If "Other" is picked, require non-empty custom text.
+    if (selected.has(OTHER_LABEL) && !(customTexts[q.question] ?? "").trim()) return false;
+    return true;
+  });
+
   const handleSubmit = () => {
-    if (Object.keys(selectedAnswers).length === questions.length) {
-      onRespond?.(message.askId!, selectedAnswers);
+    if (!isComplete) return;
+    const answers: Record<string, AnswerValue> = {};
+    for (const q of questions) {
+      const picked = Array.from(selections[q.question] ?? []);
+      const withCustom = picked.map((label) =>
+        label === OTHER_LABEL
+          ? `${OTHER_LABEL}: ${(customTexts[q.question] ?? "").trim()}`
+          : label,
+      );
+      answers[q.question] = q.multiSelect ? withCustom : withCustom[0];
     }
+    onRespond?.(message.askId ?? "", answers);
   };
 
   if (questions.length === 0) return null;
@@ -374,43 +568,88 @@ function AskQuestionBlock({
   return (
     <div className="px-4 py-1.5">
       <div className="rounded-lg border border-accent/30 bg-canvas-surface-hover px-3.5 py-3">
-        {questions.map((q) => (
-          <div key={q.question} className="mb-3 last:mb-0">
-            <p className="text-[13px] font-medium text-canvas-fg mb-2">{q.question}</p>
-            <div className="space-y-1.5">
-              {q.options.map((opt) => {
-                const isSelected = selectedAnswers[q.question] === opt.label;
-                return (
-                  <button
-                    key={opt.label}
-                    type="button"
-                    onClick={() => !resolved && handleSelect(q.question, opt.label)}
-                    disabled={!!resolved}
-                    className={`flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left transition-colors ${
-                      isSelected
-                        ? "border-accent bg-accent/10"
-                        : "border-canvas-border bg-canvas-bg active:bg-canvas-surface-hover"
-                    } ${resolved ? "opacity-60" : ""}`}
-                  >
-                    <div
-                      className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${
-                        isSelected ? "border-accent bg-accent" : "border-gray-600"
-                      }`}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-[12px] font-medium text-canvas-fg">{opt.label}</p>
-                      {opt.description && (
-                        <p className="text-[11px] text-gray-500">{opt.description}</p>
-                      )}
+        {questions.map((q) => {
+          const selected = selections[q.question] ?? new Set<string>();
+          const otherSelected = selected.has(OTHER_LABEL);
+          const optionsWithOther = [
+            ...q.options,
+            // Auto-add "Other" per SDK contract — SDK docs promise every
+            // AskUserQuestion option list gets one. We generate locally.
+            { label: OTHER_LABEL, description: "Type your own answer", preview: undefined },
+          ];
+          return (
+            <div key={q.question} className="mb-3 last:mb-0">
+              {q.header && (
+                <span className="mb-1 inline-block rounded bg-canvas-bg px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-canvas-muted">
+                  {q.header}
+                </span>
+              )}
+              <p className="mb-2 text-[13px] font-medium text-canvas-fg">{q.question}</p>
+              {q.multiSelect && (
+                <p className="mb-2 text-[10px] text-canvas-muted">Pick one or more</p>
+              )}
+              <div className="space-y-1.5">
+                {optionsWithOther.map((opt) => {
+                  const isSelected = selected.has(opt.label);
+                  return (
+                    <div key={opt.label}>
+                      <button
+                        type="button"
+                        onClick={() => !resolved && toggle(q.question, opt.label, q.multiSelect)}
+                        disabled={!!resolved}
+                        className={`flex w-full items-start gap-2 rounded-md border px-3 py-2 text-left transition-colors ${
+                          isSelected
+                            ? "border-accent bg-accent/10"
+                            : "border-canvas-border bg-canvas-bg active:bg-canvas-surface-hover"
+                        } ${resolved ? "opacity-60" : ""}`}
+                      >
+                        {q.multiSelect ? (
+                          <div
+                            className={`mt-0.5 flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border-2 ${
+                              isSelected ? "border-accent bg-accent" : "border-gray-600"
+                            }`}
+                          >
+                            {isSelected && <FiCheck size={9} className="text-white" />}
+                          </div>
+                        ) : (
+                          <div
+                            className={`mt-0.5 h-3.5 w-3.5 shrink-0 rounded-full border-2 ${
+                              isSelected ? "border-accent bg-accent" : "border-gray-600"
+                            }`}
+                          />
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[12px] font-medium text-canvas-fg">{opt.label}</p>
+                          {opt.description && (
+                            <p className="text-[11px] text-gray-500">{opt.description}</p>
+                          )}
+                          {opt.preview && (
+                            <pre className="mt-1.5 max-h-40 overflow-auto rounded border border-canvas-border bg-canvas-bg px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted whitespace-pre">
+                              {opt.preview}
+                            </pre>
+                          )}
+                        </div>
+                      </button>
                     </div>
-                  </button>
-                );
-              })}
+                  );
+                })}
+              </div>
+              {otherSelected && !resolved && (
+                <textarea
+                  value={customTexts[q.question] ?? ""}
+                  onChange={(e) =>
+                    setCustomTexts((prev) => ({ ...prev, [q.question]: e.target.value }))
+                  }
+                  placeholder="Type your answer…"
+                  rows={2}
+                  className="mt-1.5 w-full rounded-md border border-accent/50 bg-canvas-bg px-2.5 py-1.5 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none"
+                />
+              )}
             </div>
-          </div>
-        ))}
+          );
+        })}
 
-        {!resolved && Object.keys(selectedAnswers).length === questions.length && (
+        {!resolved && isComplete && (
           <button
             type="button"
             onClick={handleSubmit}

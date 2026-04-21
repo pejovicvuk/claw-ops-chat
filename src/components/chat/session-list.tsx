@@ -1,9 +1,11 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { FiPlus, FiRefreshCw, FiSettings } from "react-icons/fi";
 import type { ChatSession } from "@/lib/types";
 import { useUrlState } from "@/lib/use-url-state";
 import { useSessionStatuses } from "@/lib/use-session-statuses";
+import { useDesktopNotifications } from "@/lib/use-desktop-notifications";
 import type { SessionStatus } from "@/lib/session-status-store";
 
 /**
@@ -56,6 +58,49 @@ export function SessionList({
   const { setParam } = useUrlState();
   const openSettings = () => setParam("settings", "main");
   const statuses = useSessionStatuses();
+  const { notify } = useDesktopNotifications();
+
+  /**
+   * Fire a desktop notification whenever a session transitions INTO an
+   * awaiting_permission / awaiting_input state while the tab is hidden.
+   * Only the transition matters — we don't re-notify on every 2 s poll
+   * while the state sticks. Stored per-session in a ref so we don't
+   * re-render when the snapshot updates.
+   */
+  const prevStatusRef = useRef<Record<string, SessionStatus>>({});
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    for (const [sid, entry] of Object.entries(statuses)) {
+      const s = entry.status;
+      const was = prev[sid];
+      if (
+        (s === "awaiting_permission" || s === "awaiting_input") &&
+        was !== s
+      ) {
+        const display =
+          sessions.find((x) => x.sessionId === sid)?.display || "Chat";
+        void notify({
+          title:
+            s === "awaiting_permission"
+              ? `${display} needs approval`
+              : `${display} needs input`,
+          body:
+            s === "awaiting_permission"
+              ? "Claude is waiting for you to allow or deny a tool."
+              : "Claude is waiting for your answer.",
+          tag: `claw-chat:${sid}:${s}`,
+          onClick: () => {
+            setParam("chat", sid);
+          },
+        });
+      }
+      prev[sid] = s;
+    }
+    // Prune missing sessions so the ref doesn't grow forever.
+    for (const sid of Object.keys(prev)) {
+      if (!(sid in statuses)) delete prev[sid];
+    }
+  }, [statuses, sessions, notify, setParam]);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">

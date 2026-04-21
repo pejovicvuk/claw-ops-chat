@@ -121,6 +121,7 @@ export function ChatView({
     contextUsage,
     respondPermission,
     respondQuestion,
+    respondPlan,
     setPermissionMode,
     setEffort,
     reconnect,
@@ -518,6 +519,7 @@ export function ChatView({
                   isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
                   onPermissionRespond={respondPermission}
                   onQuestionRespond={respondQuestion}
+                  onPlanRespond={respondPlan}
                 />
               </div>
             ),

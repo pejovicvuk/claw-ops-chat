@@ -42,30 +42,35 @@ export async function POST(request: Request) {
 
   const args = method === "token" ? ["setup-token"] : ["auth", "login", `--${method}`];
 
-  // Augment PATH with ~/.local/bin so `claude` resolves when the CLI
-  // was installed via the in-app installer after the chat server
-  // started. Same reasoning as the fix in server.ts handleUserMessage
-  // — without this, the subprocess may fail to find `claude`.
-  const spawnEnv = augmentPathWithLocalBin();
-
   let subprocess: LoginSubprocess;
   let backend: "pty" | "pipe";
 
-  // Pipe is the default path. It's what was deployed before the earlier
-  // PTY experiment and what's verified to surface the OAuth URL on the
-  // production container. PTY stays available as an opt-in escape hatch
-  // via CLAUDE_AUTH_USE_PTY=1 — it's the right fix for CLI versions
+  // Pipe is the default path. PTY stays available as an opt-in escape
+  // hatch via CLAUDE_AUTH_USE_PTY=1 — the right fix for CLI versions
   // that read the paste-code through a raw TTY, but defaulting to it
   // regressed URL detection on the reporting deployment.
+  //
+  // Env: deliberately NOT overridden for the pipe path. Passing
+  // `augmentPathWithLocalBin()` clobbered PATH on at least one prod
+  // container — the shell resolved `claude` fine from the inherited
+  // process.env but could not find it once we replaced env with our
+  // spread clone (`/bin/sh: claude: not found`). Node's default
+  // behavior when `env` is omitted is exactly what we want: child
+  // inherits process.env verbatim, just like the original working
+  // code did before the PATH-augmentation was added.
   const usePty = process.env.CLAUDE_AUTH_USE_PTY === "1";
   const ptyModule = usePty ? tryLoadPtyModule() : null;
   if (ptyModule) {
+    // PTY still needs an explicit env since node-pty doesn't inherit
+    // by default on all platforms. Use augmented PATH here because the
+    // PTY path also needs to find `claude` and there's no shell layer
+    // to fall back on if it isn't found.
     const pty = ptyModule.spawn("claude", args, {
       name: "xterm-256color",
       cols: 120,
       rows: 30,
       cwd: process.cwd(),
-      env: spawnEnv as Record<string, string>,
+      env: augmentPathWithLocalBin() as Record<string, string>,
     });
     subprocess = adaptPty(pty);
     backend = "pty";
@@ -74,7 +79,8 @@ export async function POST(request: Request) {
       stdio: ["pipe", "pipe", "pipe"],
       shell: true, // required on Windows to resolve `claude.exe` via PATH
       windowsHide: true,
-      env: spawnEnv,
+      // No `env` — inherit process.env so the shell can resolve
+      // `claude` from the container's own PATH. See reasoning above.
     });
     subprocess = adaptChildProcess(child);
     backend = "pipe";

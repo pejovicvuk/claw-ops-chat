@@ -61,7 +61,18 @@ export async function POST(request: Request) {
 // Path A — direct OAuth finish
 // ────────────────────────────────────────────────────────────────
 
-async function directOAuthFinish(email: string, code: string): Promise<Response> {
+async function directOAuthFinish(email: string, rawInput: string): Promise<Response> {
+  // Anthropic's success page shows the user a single string of the form
+  // `<code>#<state>`. The CLI's paste-code handler splits on `#` and sends
+  // the two halves as separate `code` / `state` fields to the token
+  // endpoint — sending the raw concatenated string gets rejected as
+  // `invalid_grant`. Accept either form (with or without the state suffix)
+  // and fall back to the server-side state we issued at /login time.
+  const [codePart, statePartFromPaste] = rawInput.split("#");
+  if (!codePart) {
+    return Response.json({ error: "The pasted code is empty." }, { status: 400 });
+  }
+
   const state = consumeAuthState(email);
   if (!state) {
     return Response.json(
@@ -69,6 +80,8 @@ async function directOAuthFinish(email: string, code: string): Promise<Response>
       { status: 404 },
     );
   }
+
+  const stateForExchange = statePartFromPaste || state.state;
 
   // Respond to the browser before doing the upstream work so the
   // client's "Verifying…" spinner flips on immediately. The terminal
@@ -80,14 +93,18 @@ async function directOAuthFinish(email: string, code: string): Promise<Response>
   // Fire-and-forget the upstream dance. Any failure broadcasts a
   // `done{success:false}` over SSE — the UI surfaces that, and our
   // 25 s client-side safety timeout won't fire.
-  void finishInBackground(email, code, state.codeVerifier, state.state, state.method).catch(
-    (err) => {
-      broadcastToSession(email, "done", {
-        success: false,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    },
-  );
+  void finishInBackground(
+    email,
+    codePart,
+    state.codeVerifier,
+    stateForExchange,
+    state.method,
+  ).catch((err) => {
+    broadcastToSession(email, "done", {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
 
   return Response.json({ ok: true });
 }

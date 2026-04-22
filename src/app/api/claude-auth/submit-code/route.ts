@@ -1,10 +1,27 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
-import { getLoginSession } from "@/lib/claude-auth-sessions";
+import { getLoginSession, broadcastToSession } from "@/lib/claude-auth-sessions";
 
 /**
  * Relay the OAuth code from the browser to the running `claude auth login`
- * child process's stdin. The SSE stream from /login will emit the eventual
+ * child process's stdin. The SSE stream from /login emits the eventual
  * "done" event when the child exits.
+ *
+ * The status codes matter here — the UI uses them to distinguish "keep
+ * waiting for done" from "the login process is gone; start over":
+ *
+ *   200 { ok: true }   → code written, SSE will emit "done" shortly
+ *   400 { error }      → empty code body (client bug)
+ *   404 { error }      → no active login session — user hit /submit-code
+ *                        without ever calling /login (or the session
+ *                        cleaner swept it).
+ *   410 { error }      → login process already exited. UI should bail
+ *                        out of the "verifying" spinner and offer a
+ *                        fresh Start-over.
+ *   502 { error }      → stdin.write threw. Rare; shell or pipe broke.
+ *
+ * We also emit a synthetic "log" SSE event into the same session when
+ * the code is accepted for relay, so the client sees immediate movement
+ * on the stream even before the CLI starts printing.
  */
 export async function POST(request: Request) {
   const session = extractSession(request);
@@ -25,12 +42,38 @@ export async function POST(request: Request) {
     );
   }
 
-  const stdin = loginSession.process.stdin;
-  if (!stdin || stdin.destroyed) {
-    return Response.json({ error: "Login process is not accepting input" }, { status: 409 });
+  // Subprocess liveness: if it already exited (10-minute session timer
+  // fired, or the CLI crashed, or the user clicked Submit twice), we
+  // have nothing to feed. Returning 410 is the signal the UI uses to
+  // bail out of "verifying" instead of waiting forever for a `done`
+  // event that will never come.
+  const subprocess = loginSession.process;
+  if (subprocess.exitCode !== null || subprocess.killed) {
+    return Response.json(
+      { error: "Login process already ended — start the sign-in flow again." },
+      { status: 410 },
+    );
   }
 
-  stdin.write(`${code}\n`);
+  try {
+    subprocess.write(`${code}\n`);
+  } catch (err) {
+    return Response.json(
+      {
+        error: `Couldn't reach the Claude CLI: ${
+          err instanceof Error ? err.message : "unknown error"
+        }`,
+      },
+      { status: 502 },
+    );
+  }
+
+  // Synthetic log line on the SSE stream so the client sees something
+  // happen the instant Submit completes — the CLI itself is often silent
+  // for a second or two while it verifies the code against Anthropic.
+  broadcastToSession(session.email, "log", {
+    line: "Submitted code, waiting for Claude…",
+  });
 
   return Response.json({ ok: true });
 }

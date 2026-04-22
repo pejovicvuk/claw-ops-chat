@@ -62,7 +62,36 @@ export function detectClaude(): ClaudeInfo {
       };
     }
   } catch {
-    // SDK not installed
+    // SDK not installed — or, more commonly in a Next.js route context,
+    // `require.resolve` was rewritten by SWC and couldn't find the
+    // package even though it's sitting in node_modules. The direct-file
+    // probe below catches that case.
+  }
+
+  // 3. Direct file probe. Mirrors what `sdk-loader.js` does at server
+  //    boot (server.ts:13) — it's a plain `require("./sdk-loader.js")`
+  //    that then does a cwd-relative path resolve. If server.ts booted,
+  //    that file loaded, which means the SDK is present on disk. Next.js's
+  //    API-route bundler doesn't touch cwd-relative fs.existsSync, so this
+  //    path works where require.resolve fails.
+  try {
+    const direct = join(
+      process.cwd(),
+      "node_modules",
+      "@anthropic-ai",
+      "claude-agent-sdk",
+      "sdk.mjs",
+    );
+    if (existsSync(direct)) {
+      const v = readSdkVersion(dirname(direct));
+      return {
+        available: true,
+        version: v ? `sdk ${v}` : "sdk",
+        path: normalizePath(direct),
+      };
+    }
+  } catch {
+    /* ignore */
   }
 
   return { available: false, error: "Claude Code CLI is not installed" };

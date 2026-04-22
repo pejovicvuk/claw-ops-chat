@@ -12,6 +12,7 @@ import {
 import { useClaudeChat } from "@/lib/use-claude-chat";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
+import { useUrlState } from "@/lib/use-url-state";
 import { fetchSessionMessages } from "@/lib/api";
 import { StatusIndicator } from "./status-indicator";
 import { ContextIndicator } from "./context-indicator";
@@ -102,7 +103,25 @@ export function ChatView({
     setInitialContextUsage,
   } = useClaudeChat(sessionId, sessionCwd);
   const notifiedSessionRef = useRef<string | null>(null);
+  const { setParam } = useUrlState();
   const { viewportHeight } = useVisualViewport();
+
+  // Auto-open the Claude Code sign-in panel on the rising edge of
+  // `authRequired`. The server emits that event when Anthropic's API
+  // returns 401 inside a turn — the user almost always wants to
+  // re-auth right now, so pushing them straight to the right settings
+  // page beats the old copy that told them to manually navigate to
+  // "Settings → Terminal". The ref gates the effect to the transition
+  // from null → non-null so re-renders during an active expired state
+  // don't keep re-opening the panel.
+  const prevAuthRequiredRef = useRef<boolean>(false);
+  useEffect(() => {
+    const isActive = !!authRequired;
+    if (isActive && !prevAuthRequiredRef.current) {
+      setParam("settings", "connections/claude");
+    }
+    prevAuthRequiredRef.current = isActive;
+  }, [authRequired, setParam]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
@@ -520,20 +539,26 @@ export function ChatView({
               <p className="font-medium text-amber-300">Claude sign-in expired</p>
               <p className="mt-0.5 text-canvas-muted">{authRequired.message}</p>
               <p className="mt-1 text-canvas-muted">
-                Open <span className="font-mono">Settings → Terminal</span> and run{" "}
-                <code className="rounded bg-canvas-bg px-1 py-0.5 font-mono text-[11px]">
-                  claude auth login
-                </code>
-                , then click <span className="italic">Retry</span>.
+                The sign-in panel has opened — finish the flow there, then retry the message.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={clearAuthRequired}
-              className="shrink-0 rounded-md bg-canvas-bg px-2 py-1 text-[11px] font-medium text-canvas-fg hover:bg-canvas-surface-hover"
-            >
-              Retry
-            </button>
+            <div className="flex shrink-0 gap-1.5">
+              <button
+                type="button"
+                onClick={() => setParam("settings", "connections/claude")}
+                className="rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+              >
+                Go to sign-in
+              </button>
+              <button
+                type="button"
+                onClick={clearAuthRequired}
+                aria-label="Dismiss"
+                className="rounded-md bg-canvas-bg px-2 py-1 text-[11px] font-medium text-canvas-fg hover:bg-canvas-surface-hover"
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
         </div>
       )}

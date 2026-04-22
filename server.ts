@@ -15,7 +15,6 @@ const { query } = sdk as typeof import("@anthropic-ai/claude-agent-sdk");
 import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
-import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
 import { loadCredentialsSync as loadJiraCredentials } from "./src/lib/jira-custom-config";
 import { loadCredentialsSync as loadTrelloCredentials } from "./src/lib/trello-custom-config";
 import { augmentPathWithLocalBin } from "./src/lib/platform-detect";
@@ -876,19 +875,16 @@ class SessionManager {
       env: (() => {
         const base = augmentPathWithLocalBin();
         const out: NodeJS.ProcessEnv = { ...base };
-        const bb = loadBitbucketCredentials();
+        // Bitbucket creds no longer live here — they ride along with the
+        // `bitbucket` MCP server's own env block in ~/.claude.json (see
+        // src/lib/bitbucket-custom-config.ts#registerMcpServer).
         const jira = loadJiraCredentials();
         const trello = loadTrelloCredentials();
-        if (bb) {
-          out.ATLASSIAN_EMAIL = bb.email;
-          out.BITBUCKET_API_TOKEN = bb.apiToken;
-          out.BITBUCKET_WORKSPACE = bb.workspace;
-        }
         if (jira) {
           out.JIRA_URL = `https://${jira.domain}`;
           out.JIRA_EMAIL = jira.email;
           out.JIRA_API_TOKEN = jira.apiToken;
-          if (!bb) out.ATLASSIAN_EMAIL = jira.email;
+          out.ATLASSIAN_EMAIL = jira.email;
         }
         if (trello) {
           out.TRELLO_API_KEY = trello.apiKey;

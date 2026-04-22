@@ -42,6 +42,10 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/server.js ./server.js
 COPY --from=builder /app/sdk-loader.js ./sdk-loader.js
+# In-repo MCP wrapper for the Bitbucket skill. Registered in ~/.claude.json
+# by src/lib/bitbucket-custom-config.ts and spawned by the Agent SDK as a
+# stdio MCP server — it shells out to /opt/skills/bitbucket/bitbucket-cli.sh.
+COPY --from=builder /app/bitbucket-mcp.js ./bitbucket-mcp.js
 # Ship the entire compiled lib dir, not hand-picked files. tsc follows
 # server.ts's import graph and can emit new src/lib/*.js any time a new
 # import lands; allowlisting specific files broke the container the

@@ -183,40 +183,64 @@ export async function fetchProfile(accessToken: string): Promise<ProfileResult> 
     throw new Error(`Profile endpoint returned non-JSON: ${text.slice(0, 200)}`);
   }
 
-  // Try multiple likely shapes. Anthropic hasn't published this
-  // schema; first deploy will confirm which keys are live and we can
-  // tighten the picker later.
-  const email = pickStr(raw, ["email", "emailAddress", "email_address"]);
-  const orgUuid = pickStr(raw, [
-    "organizationUuid",
-    "organization_uuid",
-    "organizationId",
-    "organization_id",
-  ]);
-  const subscriptionType = pickStr(raw, [
-    "subscriptionType",
-    "subscription_type",
-    "subscription",
-    "plan",
-  ]);
+  // Anthropic's live response is wrapped: top-level keys are `account`,
+  // `organization`, `application`. The email lives at `account.email`,
+  // the org UUID at `organization.uuid`, and the plan at
+  // `organization.organization_type` or similar. `pickStr` walks the
+  // known wrappers so the field-name variants keep working if the
+  // server ever flattens the shape.
+  const email = pickStr(
+    raw,
+    ["email", "emailAddress", "email_address"],
+    ["account", "user", "oauthAccount", "profile"],
+  );
+  const orgUuid = pickStr(
+    raw,
+    ["uuid", "organizationUuid", "organization_uuid", "organizationId", "organization_id", "id"],
+    ["organization", "org"],
+  );
+  const subscriptionType = pickStr(
+    raw,
+    [
+      "subscriptionType",
+      "subscription_type",
+      "subscription",
+      "plan",
+      "organization_type",
+      "organizationType",
+    ],
+    ["organization", "account", "application"],
+  );
 
   if (!email) {
-    throw new Error(`Profile response missing email. Keys: ${Object.keys(raw).join(", ")}`);
+    throw new Error(
+      `Profile response missing email. Top-level keys: ${Object.keys(raw).join(", ")}`,
+    );
   }
 
   return { email, organizationUuid: orgUuid, subscriptionType, raw };
 }
 
-function pickStr(obj: Record<string, unknown>, keys: string[]): string | undefined {
+/**
+ * Look up one of `keys` directly on `obj`, then inside each of the
+ * `wrappers` sub-objects. Returns the first non-empty string found,
+ * or undefined.
+ */
+function pickStr(
+  obj: Record<string, unknown>,
+  keys: string[],
+  wrappers: string[] = [],
+): string | undefined {
   for (const k of keys) {
     const v = obj[k];
     if (typeof v === "string" && v) return v;
-    // Sometimes the backend nests under `account` / `user` / `oauthAccount`.
-    if (v && typeof v === "object") {
-      const nested = v as Record<string, unknown>;
-      for (const k2 of keys) {
-        const v2 = nested[k2];
-        if (typeof v2 === "string" && v2) return v2;
+  }
+  for (const w of wrappers) {
+    const nested = obj[w];
+    if (nested && typeof nested === "object") {
+      for (const k of keys) {
+        const v = (nested as Record<string, unknown>)[k];
+        if (typeof v === "string" && v) return v;
       }
     }
   }

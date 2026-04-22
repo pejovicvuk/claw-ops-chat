@@ -10,6 +10,40 @@ export interface ClaudeInfo {
 }
 
 /**
+ * Resolve the absolute path to the `claude` binary bundled with the
+ * claude-agent-sdk. The SDK ships per-platform optional dep packages
+ * (`claude-agent-sdk-linux-x64/claude`, `claude-agent-sdk-win32-x64/claude.exe`,
+ * etc.) that npm installs alongside the main package — so if the chat
+ * server can load the SDK, the binary is on disk at a known relative path.
+ *
+ * Used by the auth-login flow to avoid relying on `claude` being on the
+ * container's PATH (it often isn't — the CLI may never have been
+ * installed globally; only the SDK is a direct dependency). Returns
+ * null only when the platform tarball didn't install (unsupported
+ * arch), in which case callers should fall back to `which claude`.
+ */
+export function resolveBundledClaudeBinary(): string | null {
+  const pkgName = `claude-agent-sdk-${process.platform}-${process.arch}`;
+  const binName = process.platform === "win32" ? "claude.exe" : "claude";
+  const candidate = join(process.cwd(), "node_modules", "@anthropic-ai", pkgName, binName);
+  if (existsSync(candidate)) return candidate;
+  // Very unlikely secondary location — older npm layouts put optional
+  // platform packages inside the main package's node_modules.
+  const nested = join(
+    process.cwd(),
+    "node_modules",
+    "@anthropic-ai",
+    "claude-agent-sdk",
+    "node_modules",
+    "@anthropic-ai",
+    pkgName,
+    binName,
+  );
+  if (existsSync(nested)) return nested;
+  return null;
+}
+
+/**
  * Detect whether Claude Code CLI is installed and usable.
  * Tries system-installed `claude` first (user-managed, always up to date),
  * then falls back to the bundled SDK cli.js.

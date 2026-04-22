@@ -13,6 +13,7 @@ import {
   type LoginSubprocess,
 } from "@/lib/claude-auth-subprocess";
 import { augmentPathWithLocalBin } from "@/lib/platform-detect";
+import { resolveBundledClaudeBinary } from "@/lib/claude-status";
 
 /**
  * Spawn `claude auth login --<method>` and stream its output as SSE.
@@ -42,6 +43,21 @@ export async function POST(request: Request) {
 
   const args = method === "token" ? ["setup-token"] : ["auth", "login", `--${method}`];
 
+  // Resolve the claude binary by absolute path from the SDK's bundled
+  // platform package (node_modules/@anthropic-ai/claude-agent-sdk-{plat}-{arch}/claude[.exe]).
+  // The bare string "claude" goes through PATH resolution, which is
+  // brittle in Node-spawned subprocesses — a non-interactive /bin/sh
+  // doesn't source ~/.bashrc or ~/.profile, so CLIs installed into
+  // user-scoped npm prefixes (~/.npm-global/bin, ~/.nvm/versions/node/*/bin,
+  // etc.) are invisible even though `claude auth login` works when
+  // the user runs it from their own SSH shell.
+  //
+  // The bundled binary is a dependency of the SDK that's already
+  // loaded in server.ts, so it's guaranteed present on every platform
+  // the chat server itself runs on.
+  const bundledClaude = resolveBundledClaudeBinary();
+  const claudeCmd = bundledClaude ?? "claude";
+
   let subprocess: LoginSubprocess;
   let backend: "pty" | "pipe";
 
@@ -49,23 +65,10 @@ export async function POST(request: Request) {
   // hatch via CLAUDE_AUTH_USE_PTY=1 — the right fix for CLI versions
   // that read the paste-code through a raw TTY, but defaulting to it
   // regressed URL detection on the reporting deployment.
-  //
-  // Env: deliberately NOT overridden for the pipe path. Passing
-  // `augmentPathWithLocalBin()` clobbered PATH on at least one prod
-  // container — the shell resolved `claude` fine from the inherited
-  // process.env but could not find it once we replaced env with our
-  // spread clone (`/bin/sh: claude: not found`). Node's default
-  // behavior when `env` is omitted is exactly what we want: child
-  // inherits process.env verbatim, just like the original working
-  // code did before the PATH-augmentation was added.
   const usePty = process.env.CLAUDE_AUTH_USE_PTY === "1";
   const ptyModule = usePty ? tryLoadPtyModule() : null;
   if (ptyModule) {
-    // PTY still needs an explicit env since node-pty doesn't inherit
-    // by default on all platforms. Use augmented PATH here because the
-    // PTY path also needs to find `claude` and there's no shell layer
-    // to fall back on if it isn't found.
-    const pty = ptyModule.spawn("claude", args, {
+    const pty = ptyModule.spawn(claudeCmd, args, {
       name: "xterm-256color",
       cols: 120,
       rows: 30,
@@ -75,12 +78,14 @@ export async function POST(request: Request) {
     subprocess = adaptPty(pty);
     backend = "pty";
   } else {
-    const child = spawn("claude", args, {
+    // `shell` is needed only when we're falling back to bare "claude"
+    // (PATH resolution path, Windows-friendly). With an absolute path
+    // we spawn directly so there's no shell layer to strip env from.
+    const useShell = !bundledClaude;
+    const child = spawn(claudeCmd, args, {
       stdio: ["pipe", "pipe", "pipe"],
-      shell: true, // required on Windows to resolve `claude.exe` via PATH
+      shell: useShell,
       windowsHide: true,
-      // No `env` — inherit process.env so the shell can resolve
-      // `claude` from the container's own PATH. See reasoning above.
     });
     subprocess = adaptChildProcess(child);
     backend = "pipe";

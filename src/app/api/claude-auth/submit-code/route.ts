@@ -80,12 +80,14 @@ async function directOAuthFinish(email: string, code: string): Promise<Response>
   // Fire-and-forget the upstream dance. Any failure broadcasts a
   // `done{success:false}` over SSE — the UI surfaces that, and our
   // 25 s client-side safety timeout won't fire.
-  void finishInBackground(email, code, state.codeVerifier, state.method).catch((err) => {
-    broadcastToSession(email, "done", {
-      success: false,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  });
+  void finishInBackground(email, code, state.codeVerifier, state.state, state.method).catch(
+    (err) => {
+      broadcastToSession(email, "done", {
+        success: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    },
+  );
 
   return Response.json({ ok: true });
 }
@@ -94,12 +96,13 @@ async function finishInBackground(
   email: string,
   code: string,
   codeVerifier: string,
+  state: string,
   method: string,
 ): Promise<void> {
   // 1. Token exchange.
   let tokens;
   try {
-    tokens = await exchangeCodeForTokens({ code, codeVerifier });
+    tokens = await exchangeCodeForTokens({ code, codeVerifier, state });
   } catch (err) {
     broadcastToSession(email, "done", {
       success: false,
@@ -130,12 +133,8 @@ async function finishInBackground(
   //    silently to plain OAuth tokens — the chat still works,
   //    auto-refreshing on expiry.
   let apiKey: string | undefined;
-  if (method === "token" && profile.organizationUuid) {
-    const key = await createLongLivedApiKey({
-      accessToken: tokens.access_token,
-      organizationUuid: profile.organizationUuid,
-      keyName: "claw-chat",
-    });
+  if (method === "token") {
+    const key = await createLongLivedApiKey({ accessToken: tokens.access_token });
     if (key) {
       apiKey = key;
       broadcastToSession(email, "log", { line: "Long-lived API key minted." });

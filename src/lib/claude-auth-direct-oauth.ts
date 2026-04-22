@@ -22,10 +22,20 @@ import { homedir } from "os";
 // Anthropic endpoints / constants (verified against bundled CLI)
 // ────────────────────────────────────────────────────────────────
 
+// The CLI splits OAuth concerns across two hosts: the browser-facing
+// authorize / callback pages live on platform.claude.com and
+// claude.com, but the BACKEND endpoints (token exchange, profile,
+// API-key creation) are on api.anthropic.com. My first draft pointed
+// token + profile at platform.claude.com — same host as the
+// authorize URL, looked consistent — and got a 400
+// "Invalid request format" back from what must have been some other
+// endpoint living at that path. Fixed per the CLI's `iI$` config
+// block in the bundled binary.
 export const AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
-export const TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token";
-export const PROFILE_ENDPOINT = "https://platform.claude.com/api/oauth/profile";
-export const ORGANIZATIONS_ENDPOINT = "https://platform.claude.com/api/oauth/organizations/";
+export const TOKEN_ENDPOINT = "https://api.anthropic.com/v1/oauth/token";
+export const PROFILE_ENDPOINT = "https://api.anthropic.com/api/oauth/profile";
+export const CREATE_API_KEY_ENDPOINT =
+  "https://api.anthropic.com/api/oauth/claude_cli/create_api_key";
 export const REDIRECT_URI = "https://platform.claude.com/oauth/code/callback";
 
 /**
@@ -90,21 +100,26 @@ export interface TokenResponse {
 export async function exchangeCodeForTokens(opts: {
   code: string;
   codeVerifier: string;
+  state: string;
 }): Promise<TokenResponse> {
-  // Anthropic's published CLI uses standard OAuth form-encoded
-  // bodies; we mirror exactly.
-  const body = new URLSearchParams({
-    grant_type: "authorization_code",
-    code: opts.code,
-    client_id: CLIENT_ID,
-    code_verifier: opts.codeVerifier,
-    redirect_uri: REDIRECT_URI,
-  });
-
+  // The CLI sends a *JSON* body (not the standard OAuth form
+  // encoding) and includes `state` in the payload. Verified against
+  // the `g06` function in the bundled binary:
+  //   { grant_type, code, redirect_uri, client_id, code_verifier, state }
+  //   headers: { "Content-Type": "application/json" }
+  // My first draft used URLSearchParams — the endpoint returned
+  // `{ type: "invalid_request_error", message: "Invalid request format" }`.
   const res = await fetch(TOKEN_ENDPOINT, {
     method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      grant_type: "authorization_code",
+      code: opts.code,
+      redirect_uri: REDIRECT_URI,
+      client_id: CLIENT_ID,
+      code_verifier: opts.codeVerifier,
+      state: opts.state,
+    }),
   });
 
   const text = await res.text();
@@ -149,8 +164,13 @@ export interface ProfileResult {
 }
 
 export async function fetchProfile(accessToken: string): Promise<ProfileResult> {
+  // Matches `_d(H)` in the bundled CLI — the profile fetch sends
+  // `Content-Type: application/json` alongside the Bearer header.
   const res = await fetch(PROFILE_ENDPOINT, {
-    headers: { Authorization: `Bearer ${accessToken}` },
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
   });
   const text = await res.text();
   if (!res.ok) {
@@ -310,34 +330,27 @@ export async function mergeApiKeyIntoCredentialsFile(apiKey: string): Promise<vo
 // ────────────────────────────────────────────────────────────────
 
 /**
- * Use an active OAuth access token (with the `org:create_api_key`
- * scope) to mint a persistent API key against the organization.
+ * Mint a persistent API key using the active OAuth access token
+ * (`org:create_api_key` scope). Endpoint path is verified from the
+ * bundled CLI's `API_KEY_URL` config constant:
+ *   https://api.anthropic.com/api/oauth/claude_cli/create_api_key
  *
- * The exact endpoint path isn't in public docs; the bundled CLI
- * strings include `/api/oauth/organizations/` as a prefix. Standard
- * REST naming would put `api_keys` under the org UUID. If the path
- * 404s we return null and the caller falls back to the
- * short-lived OAuth tokens — chat still works, the feature is just
- * degraded to "auto-refresh OAuth" instead of "persistent key".
+ * Returns null on any failure; the caller degrades gracefully to the
+ * short-lived OAuth tokens already in the credentials file.
  */
-export async function createLongLivedApiKey(opts: {
-  accessToken: string;
-  organizationUuid: string;
-  keyName?: string;
-}): Promise<string | null> {
-  const url = `${ORGANIZATIONS_ENDPOINT}${encodeURIComponent(opts.organizationUuid)}/api_keys`;
-  const res = await fetch(url, {
+export async function createLongLivedApiKey(opts: { accessToken: string }): Promise<string | null> {
+  const res = await fetch(CREATE_API_KEY_ENDPOINT, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${opts.accessToken}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ name: opts.keyName || "claw-chat" }),
+    body: JSON.stringify({}),
   }).catch(() => null);
   if (!res || !res.ok) return null;
   try {
     const data = (await res.json()) as Record<string, unknown>;
-    const key = pickStr(data, ["apiKey", "api_key", "key", "raw_key", "rawKey"]);
+    const key = pickStr(data, ["apiKey", "api_key", "key", "raw_key", "rawKey", "primary_key"]);
     return key ?? null;
   } catch {
     return null;

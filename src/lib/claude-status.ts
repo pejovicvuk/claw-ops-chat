@@ -11,35 +11,59 @@ export interface ClaudeInfo {
 
 /**
  * Resolve the absolute path to the `claude` binary bundled with the
- * claude-agent-sdk. The SDK ships per-platform optional dep packages
- * (`claude-agent-sdk-linux-x64/claude`, `claude-agent-sdk-win32-x64/claude.exe`,
- * etc.) that npm installs alongside the main package — so if the chat
- * server can load the SDK, the binary is on disk at a known relative path.
+ * claude-agent-sdk. The SDK ships per-platform optional-dep packages
+ * (`claude-agent-sdk-linux-x64-musl/claude`,
+ *  `claude-agent-sdk-win32-x64/claude.exe`, etc.) that npm installs
+ * alongside the main package — so if the chat server can load the
+ * SDK, the binary is on disk at a known relative path.
  *
- * Used by the auth-login flow to avoid relying on `claude` being on the
- * container's PATH (it often isn't — the CLI may never have been
+ * Used by the auth-login flow to avoid relying on `claude` being on
+ * the container's PATH (it often isn't — the CLI may never have been
  * installed globally; only the SDK is a direct dependency). Returns
- * null only when the platform tarball didn't install (unsupported
- * arch), in which case callers should fall back to `which claude`.
+ * null only when no platform tarball installed (unsupported arch), in
+ * which case callers should fall back to `which claude`.
+ *
+ * On Linux we probe the **musl** variant first because the production
+ * Docker image is based on `node:24-alpine`, and npm installs the
+ * `-musl` tarball there — not the glibc one. Probe order on other
+ * platforms is inconsequential because only one variant is installed.
  */
+const PLATFORM_PACKAGES: Record<string, string[]> = {
+  // Names mirror the SDK's optionalDependencies list verbatim; see
+  // node_modules/@anthropic-ai/claude-agent-sdk/package.json.
+  "linux-x64": ["claude-agent-sdk-linux-x64-musl", "claude-agent-sdk-linux-x64"],
+  "linux-arm64": ["claude-agent-sdk-linux-arm64-musl", "claude-agent-sdk-linux-arm64"],
+  "darwin-x64": ["claude-agent-sdk-darwin-x64"],
+  "darwin-arm64": ["claude-agent-sdk-darwin-arm64"],
+  "win32-x64": ["claude-agent-sdk-win32-x64"],
+  "win32-arm64": ["claude-agent-sdk-win32-arm64"],
+};
+
 export function resolveBundledClaudeBinary(): string | null {
-  const pkgName = `claude-agent-sdk-${process.platform}-${process.arch}`;
+  const key = `${process.platform}-${process.arch}`;
+  const candidates = PLATFORM_PACKAGES[key] ?? [];
+  if (candidates.length === 0) return null;
   const binName = process.platform === "win32" ? "claude.exe" : "claude";
-  const candidate = join(process.cwd(), "node_modules", "@anthropic-ai", pkgName, binName);
-  if (existsSync(candidate)) return candidate;
-  // Very unlikely secondary location — older npm layouts put optional
-  // platform packages inside the main package's node_modules.
-  const nested = join(
-    process.cwd(),
-    "node_modules",
-    "@anthropic-ai",
-    "claude-agent-sdk",
-    "node_modules",
-    "@anthropic-ai",
-    pkgName,
-    binName,
-  );
-  if (existsSync(nested)) return nested;
+  const roots = [
+    // Flat hoist (standard npm layout).
+    join(process.cwd(), "node_modules", "@anthropic-ai"),
+    // Nested fallback — older npm versions occasionally tuck optional
+    // platform tarballs under the parent package's own node_modules.
+    join(
+      process.cwd(),
+      "node_modules",
+      "@anthropic-ai",
+      "claude-agent-sdk",
+      "node_modules",
+      "@anthropic-ai",
+    ),
+  ];
+  for (const pkg of candidates) {
+    for (const root of roots) {
+      const candidate = join(root, pkg, binName);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
   return null;
 }
 

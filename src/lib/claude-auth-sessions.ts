@@ -1,16 +1,21 @@
-import type { ChildProcess } from "child_process";
+import type { LoginSubprocess } from "./claude-auth-subprocess";
 
 /**
  * Server-side store of in-flight Claude auth login child processes.
  * Keyed by user email (from the signed session cookie).
  *
  * One login flow per user at a time — starting a new one replaces the old.
+ *
+ * `process` is a `LoginSubprocess` abstraction so this map works the
+ * same whether the underlying subprocess was spawned via
+ * `child_process.spawn` (fallback) or `node-pty` (preferred — needed
+ * for CLI versions that read the paste-code from a raw TTY).
  */
 
 const TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 export interface LoginSession {
-  process: ChildProcess;
+  process: LoginSubprocess;
   method: "claudeai" | "console" | "token";
   startedAt: number;
   /** SSE writers subscribed to this process's events. */
@@ -24,7 +29,7 @@ const sessions = new Map<string, LoginSession>();
 /** Start a new login session, replacing any existing one for this user. */
 export function setLoginSession(
   email: string,
-  process: ChildProcess,
+  subprocess: LoginSubprocess,
   method: LoginSession["method"],
 ): LoginSession {
   // Kill any existing session for this user.
@@ -39,7 +44,7 @@ export function setLoginSession(
   }, TIMEOUT_MS);
 
   const session: LoginSession = {
-    process,
+    process: subprocess,
     method,
     startedAt: Date.now(),
     subscribers: new Set(),
@@ -48,7 +53,7 @@ export function setLoginSession(
   sessions.set(email, session);
 
   // Auto-cleanup on process exit.
-  process.on("close", () => {
+  subprocess.onClose(() => {
     const current = sessions.get(email);
     if (current === session) {
       clearTimeout(session.timeout);

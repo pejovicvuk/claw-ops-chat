@@ -81,47 +81,58 @@ export async function POST(request: Request) {
 
   // URL regex — matches any https:// link printed by the CLI.
   const URL_RE = /(https?:\/\/[^\s"'`]+)/;
+  // ANSI CSI sequences (colors, cursor moves, clear-line, etc.). PTY
+  // output under node-pty is full of these; without stripping first,
+  // the URL regex matches control-sequence noise and the prompt-detect
+  // heuristic drifts. Stripping also makes the log events readable.
+  const ANSI_RE = /\x1b\[[0-9;?]*[a-zA-Z]/g;
 
   let urlEmitted = false;
   let promptEmitted = false;
-  let lineBuffer = ""; // PTY data arrives in arbitrary chunks, not line-aligned
 
-  function processLine(line: string): void {
-    const trimmed = line.trim();
-    if (!trimmed) return;
+  subprocess.onData((chunk) => {
+    // Strip terminal control codes first — the rest of the detection
+    // logic assumes plain text.
+    const cleaned = chunk.replace(ANSI_RE, "");
+    if (!cleaned.trim()) return;
 
+    // Scan for the URL on the *whole* chunk (not per-line). The CLI
+    // frequently prints the login URL on the same line as a prompt with
+    // no trailing newline — the old line-buffered path sat on that
+    // fragment forever and the browser was stuck on "Waiting for login
+    // URL…". Matching the raw cleaned text releases it as soon as the
+    // bytes arrive.
     if (!urlEmitted) {
-      const match = trimmed.match(URL_RE);
+      const match = cleaned.match(URL_RE);
       if (match) {
         urlEmitted = true;
         broadcastToSession(email, "url", { url: match[1] });
       }
     }
 
-    // Detect prompts asking for the code (varies by CLI version).
-    if (!promptEmitted && /code|paste/i.test(trimmed) && /\?|:/.test(trimmed)) {
+    // Prompt sniffer. Same tolerant matching — runs on the raw chunk so
+    // a CR-terminated prompt isn't lost.
+    if (!promptEmitted && /code|paste/i.test(cleaned) && /\?|:/.test(cleaned)) {
       promptEmitted = true;
-      broadcastToSession(email, "prompt", { message: trimmed });
+      const lastLine =
+        cleaned
+          .split(/\r?\n/)
+          .filter((l) => l.trim())
+          .pop() ?? "";
+      broadcastToSession(email, "prompt", { message: lastLine.trim() });
     }
 
-    broadcastToSession(email, "log", { line: trimmed });
-  }
-
-  subprocess.onData((chunk) => {
-    // Both backends emit text; split on \n and keep a trailing partial
-    // line in the buffer so we don't drop the last fragment when a
-    // chunk boundary cuts through the middle of a line.
-    lineBuffer += chunk;
-    const lines = lineBuffer.split(/\r?\n/);
-    lineBuffer = lines.pop() ?? "";
-    for (const line of lines) processLine(line);
+    // Emit every non-empty line of the chunk as a log event so the
+    // settings UI surfaces live CLI output. Splitting on both CR and LF
+    // catches progress indicators that rewrite themselves with bare
+    // carriage returns — otherwise we'd drop their text entirely.
+    for (const raw of cleaned.split(/\r?\n|\r/)) {
+      const line = raw.trim();
+      if (line) broadcastToSession(email, "log", { line });
+    }
   });
 
   subprocess.onClose((code) => {
-    // Flush any trailing partial line so we don't miss a final error
-    // that arrived without a newline before exit.
-    if (lineBuffer.trim()) processLine(lineBuffer);
-    lineBuffer = "";
     broadcastToSession(email, "done", {
       success: code === 0,
       ...(code !== 0 ? { error: `Process exited with code ${code ?? "?"}` } : {}),

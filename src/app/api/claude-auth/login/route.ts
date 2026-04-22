@@ -51,9 +51,15 @@ export async function POST(request: Request) {
   let subprocess: LoginSubprocess;
   let backend: "pty" | "pipe";
 
-  const ptyModule = tryLoadPtyModule();
+  // Pipe is the default path. It's what was deployed before the earlier
+  // PTY experiment and what's verified to surface the OAuth URL on the
+  // production container. PTY stays available as an opt-in escape hatch
+  // via CLAUDE_AUTH_USE_PTY=1 — it's the right fix for CLI versions
+  // that read the paste-code through a raw TTY, but defaulting to it
+  // regressed URL detection on the reporting deployment.
+  const usePty = process.env.CLAUDE_AUTH_USE_PTY === "1";
+  const ptyModule = usePty ? tryLoadPtyModule() : null;
   if (ptyModule) {
-    // PTY path — the claude CLI thinks it has a real terminal.
     const pty = ptyModule.spawn("claude", args, {
       name: "xterm-256color",
       cols: 120,
@@ -64,9 +70,6 @@ export async function POST(request: Request) {
     subprocess = adaptPty(pty);
     backend = "pty";
   } else {
-    // Fallback — no native PTY bindings available. The CLI may wedge
-    // on stdin if it uses raw-mode input, but most versions read via
-    // plain readline and work fine with a pipe.
     const child = spawn("claude", args, {
       stdio: ["pipe", "pipe", "pipe"],
       shell: true, // required on Windows to resolve `claude.exe` via PATH

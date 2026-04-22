@@ -563,7 +563,7 @@ export function SettingsClaudePage() {
           {verifying ? (
             <div className="flex items-center gap-2 rounded-lg bg-canvas-bg px-3 py-2 text-[12px] text-canvas-muted">
               <FiLoader size={12} className="shrink-0 animate-spin text-accent" />
-              <span>Verifying code with Claude…</span>
+              <span>Exchanging code with Anthropic…</span>
             </div>
           ) : verifyTimedOut ? (
             <div className="space-y-2">

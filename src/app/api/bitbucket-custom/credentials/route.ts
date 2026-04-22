@@ -1,19 +1,19 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import {
   deleteCredentials,
+  registerMcpServer,
   saveCredentials,
+  unregisterMcpServer,
   type BitbucketCredentials,
 } from "@/lib/bitbucket-custom-config";
 
 /**
- * Save Bitbucket Cloud credentials (email + API token + workspace slug).
- * We validate the token by hitting https://api.bitbucket.org/2.0/user
- * with basic-auth — if Bitbucket rejects it we bail out instead of
- * persisting a broken config.
- *
- * The skill at /opt/skills/bitbucket/bitbucket-cli.sh reads these same
- * three env vars when Claude invokes it; server.ts injects them into
- * the Claude Agent SDK child process env on every query.
+ * Save Bitbucket Cloud credentials (email + API token + workspace slug)
+ * and register the in-repo Bitbucket MCP wrapper in ~/.claude.json, so
+ * Claude sees bitbucket_* tools on its next turn. We validate the token
+ * by hitting https://api.bitbucket.org/2.0/user with basic-auth first —
+ * invalid / expired tokens fail fast instead of silently landing in
+ * claude.json.
  */
 export async function POST(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
@@ -57,10 +57,7 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
     if (!probe.ok) {
-      return Response.json(
-        { error: `Bitbucket /user returned ${probe.status}.` },
-        { status: 400 },
-      );
+      return Response.json({ error: `Bitbucket /user returned ${probe.status}.` }, { status: 400 });
     }
     const data = (await probe.json()) as { display_name?: string; nickname?: string };
     displayName = data.display_name ?? data.nickname ?? null;
@@ -76,6 +73,7 @@ export async function POST(request: Request): Promise<Response> {
   const creds: BitbucketCredentials = { email, apiToken, workspace, displayName };
   try {
     await saveCredentials(creds);
+    await registerMcpServer(creds);
   } catch (err) {
     return Response.json(
       { error: `Failed to save credentials: ${err instanceof Error ? err.message : String(err)}` },
@@ -89,5 +87,6 @@ export async function POST(request: Request): Promise<Response> {
 export async function DELETE(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   await deleteCredentials();
+  await unregisterMcpServer();
   return Response.json({ ok: true });
 }

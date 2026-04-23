@@ -1,44 +1,90 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiAlertTriangle, FiDownload, FiWifiOff } from "react-icons/fi";
+import { FiDownload, FiWifiOff } from "react-icons/fi";
+import type { UploadEntry } from "@/lib/batch-upload";
 
 interface FileDropzoneProps {
-  onUpload: (files: File[]) => Promise<void> | void;
+  onUpload: (entries: UploadEntry[]) => Promise<void> | void;
   disabled?: boolean;
   children: React.ReactNode;
   /** Pass through className to the outer wrapper. */
   className?: string;
 }
 
-type DragState = "idle" | "accepting" | "rejecting";
+type DragState = "idle" | "accepting";
+
+// ──────────────────────────────────────────────────────────────────
+// Directory traversal
+// ──────────────────────────────────────────────────────────────────
+
+interface FileSystemEntryLike {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  file?: (cb: (f: File) => void, err?: (e: unknown) => void) => void;
+  createReader?: () => FileSystemDirectoryReaderLike;
+}
+
+interface FileSystemDirectoryReaderLike {
+  readEntries: (cb: (entries: FileSystemEntryLike[]) => void, err?: (e: unknown) => void) => void;
+}
+
+/** Promise wrapper around the callback-style `FileSystemFileEntry.file`. */
+function entryToFile(entry: FileSystemEntryLike): Promise<File | null> {
+  return new Promise((resolve) => {
+    if (!entry.file) return resolve(null);
+    entry.file(
+      (f) => resolve(f),
+      () => resolve(null),
+    );
+  });
+}
 
 /**
- * Detect whether a drag payload includes any directory entries.
- *
- * `DataTransferItem.webkitGetAsEntry` is standardized but some browsers
- * (notably Firefox on Linux) leave `items` empty during `dragenter`,
- * populating it only on `dragover` or `drop`. Callers should re-check
- * on every dragover so the overlay reflects reality as soon as the
- * browser tells us.
+ * Drain a directory reader. `readEntries` returns at most 100 entries per
+ * call — the empty-result sentinel means "done" — so we loop until we see
+ * one.
  */
-function payloadIncludesDirectory(dt: DataTransfer): boolean {
-  if (!dt.items || dt.items.length === 0) return false;
-  for (let i = 0; i < dt.items.length; i++) {
-    const item = dt.items[i];
-    if (item.kind !== "file") continue;
-    const getAs = (item as unknown as { webkitGetAsEntry?: () => { isDirectory: boolean } | null })
-      .webkitGetAsEntry;
-    if (typeof getAs !== "function") continue;
-    let entry: { isDirectory: boolean } | null = null;
-    try {
-      entry = getAs.call(item);
-    } catch {
-      /* some browsers throw on cross-origin items — treat as unknown */
-    }
-    if (entry?.isDirectory) return true;
+function readAllEntries(reader: FileSystemDirectoryReaderLike): Promise<FileSystemEntryLike[]> {
+  return new Promise((resolve) => {
+    const out: FileSystemEntryLike[] = [];
+    const drain = () => {
+      reader.readEntries(
+        (batch) => {
+          if (batch.length === 0) return resolve(out);
+          for (const e of batch) out.push(e);
+          drain();
+        },
+        () => resolve(out),
+      );
+    };
+    drain();
+  });
+}
+
+/**
+ * Recursively flatten a `FileSystemEntry` into a list of `{file, relativePath}`
+ * entries suitable for `uploadBatch`. The root entry's name becomes the first
+ * path segment so the original folder shape is preserved on the server.
+ */
+async function walkEntry(entry: FileSystemEntryLike, prefix: string): Promise<UploadEntry[]> {
+  const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+  if (entry.isFile) {
+    const file = await entryToFile(entry);
+    if (!file) return [];
+    return [{ file, relativePath: relPath }];
   }
-  return false;
+  if (entry.isDirectory && entry.createReader) {
+    const children = await readAllEntries(entry.createReader());
+    const results: UploadEntry[] = [];
+    for (const child of children) {
+      const sub = await walkEntry(child, relPath);
+      for (const u of sub) results.push(u);
+    }
+    return results;
+  }
+  return [];
 }
 
 /** True if the drag payload is a file (vs. a text/HTML/etc drag). */
@@ -49,6 +95,10 @@ function payloadIsFileDrag(dt: DataTransfer): boolean {
   }
   return false;
 }
+
+// ──────────────────────────────────────────────────────────────────
+// Component
+// ──────────────────────────────────────────────────────────────────
 
 export function FileDropzone({ onUpload, disabled, children, className }: FileDropzoneProps) {
   const [drag, setDrag] = useState<DragState>("idle");
@@ -74,19 +124,15 @@ export function FileDropzone({ onUpload, disabled, children, className }: FileDr
   }, []);
 
   /**
-   * Resolve the current drag state from the DataTransfer and schedule a
-   * re-render only if the value changed. rAF-coalesced to keep dragover
-   * (which fires 60×/s) from thrashing React.
+   * Coalesce dragover's 60×/s firing into one state update per frame.
+   * Folders are now accepted — the only reject path left is "not a file
+   * drag at all" (text, HTML, URLs, etc.), which we treat as idle.
    */
   const reconcile = useCallback((dt: DataTransfer) => {
     if (rafId.current !== null) return;
     rafId.current = requestAnimationFrame(() => {
       rafId.current = null;
-      if (!payloadIsFileDrag(dt)) {
-        setDrag((prev) => (prev === "idle" ? prev : "idle"));
-        return;
-      }
-      const next: DragState = payloadIncludesDirectory(dt) ? "rejecting" : "accepting";
+      const next: DragState = payloadIsFileDrag(dt) ? "accepting" : "idle";
       setDrag((prev) => (prev === next ? prev : next));
     });
   }, []);
@@ -122,12 +168,10 @@ export function FileDropzone({ onUpload, disabled, children, className }: FileDr
     (e: React.DragEvent) => {
       if (disabled) return;
       e.preventDefault();
-      // Always re-check — dragenter may have fired before items were
-      // populated (Firefox/Linux) so the first answer can be wrong.
       reconcile(e.dataTransfer);
-      e.dataTransfer.dropEffect = drag === "rejecting" || !online ? "none" : "copy";
+      e.dataTransfer.dropEffect = online ? "copy" : "none";
     },
-    [disabled, drag, online, reconcile],
+    [disabled, online, reconcile],
   );
 
   const onDrop = useCallback(
@@ -142,20 +186,50 @@ export function FileDropzone({ onUpload, disabled, children, className }: FileDr
       setDrag("idle");
       if (disabled || !wasAccepting || !online) return;
 
-      // Reject the entire drop if any item is a directory — partial
-      // uploads confuse more than they help.
-      if (payloadIncludesDirectory(e.dataTransfer)) return;
+      const entries: UploadEntry[] = [];
 
-      const files: File[] = [];
-      for (let i = 0; i < e.dataTransfer.files.length; i++) {
-        const file = e.dataTransfer.files[i];
-        // Defensive: skip anything masquerading as a folder (size 0 + no
-        // extension + empty MIME). The server enforces this too.
-        if (file.size === 0 && file.type === "" && !file.name.includes(".")) continue;
-        files.push(file);
+      // Prefer `webkitGetAsEntry` — it's the only way to detect dropped
+      // folders and walk into them. Fall back to the flat `files` list if
+      // the browser doesn't support the entry API (Safari versions, some
+      // mobile browsers).
+      const items = e.dataTransfer.items;
+      if (items && items.length > 0) {
+        const roots: FileSystemEntryLike[] = [];
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.kind !== "file") continue;
+          const getAs = (item as unknown as { webkitGetAsEntry?: () => FileSystemEntryLike | null })
+            .webkitGetAsEntry;
+          let entry: FileSystemEntryLike | null = null;
+          if (typeof getAs === "function") {
+            try {
+              entry = getAs.call(item);
+            } catch {
+              entry = null;
+            }
+          }
+          if (entry) {
+            roots.push(entry);
+          } else {
+            // No entry API — fall back to the DataTransferItem's file.
+            const f = item.getAsFile();
+            if (f) entries.push({ file: f, relativePath: f.name });
+          }
+        }
+        for (const root of roots) {
+          const walked = await walkEntry(root, "");
+          for (const u of walked) entries.push(u);
+        }
+      } else {
+        // Legacy `files` list path (no entry API at all).
+        for (let i = 0; i < e.dataTransfer.files.length; i++) {
+          const f = e.dataTransfer.files[i];
+          entries.push({ file: f, relativePath: f.name });
+        }
       }
-      if (files.length === 0) return;
-      await onUpload(files);
+
+      if (entries.length === 0) return;
+      await onUpload(entries);
     },
     [drag, disabled, onUpload, online],
   );
@@ -171,34 +245,25 @@ export function FileDropzone({ onUpload, disabled, children, className }: FileDr
       {children}
       {drag !== "idle" && (
         <div
-          className={`pointer-events-none absolute inset-0 flex items-center justify-center rounded-md border-2 border-dashed backdrop-blur-[2px] ${
-            drag === "rejecting"
-              ? "border-red-400 bg-red-500/15"
-              : !online
-                ? "border-canvas-muted bg-canvas-bg/80"
-                : "border-accent bg-accent/10"
+          className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-md border-2 border-dashed backdrop-blur-sm ${
+            !online ? "border-canvas-muted bg-canvas-bg/80" : "border-accent bg-accent/25"
           }`}
           aria-live="polite"
         >
-          <div className="flex flex-col items-center gap-2 text-center text-[12px]">
-            {drag === "rejecting" ? (
+          <div className="flex flex-col items-center gap-3 text-center">
+            {!online ? (
               <>
-                <FiAlertTriangle size={22} className="text-red-400" />
-                <p className="font-medium text-red-400">Folders aren&apos;t supported</p>
-                <p className="text-[11px] text-canvas-muted">Drag individual files only.</p>
-              </>
-            ) : !online ? (
-              <>
-                <FiWifiOff size={22} className="text-canvas-muted" />
-                <p className="font-medium text-canvas-fg">You&apos;re offline</p>
+                <FiWifiOff size={32} className="text-canvas-muted" />
+                <p className="text-[14px] font-semibold text-canvas-fg">You&apos;re offline</p>
                 <p className="text-[11px] text-canvas-muted">
                   Files can&apos;t be uploaded right now.
                 </p>
               </>
             ) : (
               <>
-                <FiDownload size={22} className="text-accent" />
-                <p className="font-medium text-canvas-fg">Drop to upload</p>
+                <FiDownload size={36} className="text-accent" />
+                <p className="text-[15px] font-semibold text-canvas-fg">Drop to upload</p>
+                <p className="text-[11px] text-canvas-muted">Files or folders</p>
               </>
             )}
           </div>

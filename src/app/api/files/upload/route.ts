@@ -34,20 +34,11 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
+    const relativePathRaw = formData.get("relativePath");
+    const relativePath = typeof relativePathRaw === "string" ? relativePathRaw : "";
 
     if (!file) {
       return Response.json({ error: "No file provided", code: "no_file" }, { status: 400 });
-    }
-
-    // Belt-and-braces folder reject. Browsers represent a dragged folder as
-    // a File-ish entry with size 0 and empty MIME type; genuine empty files
-    // keep their extension so the combined check is a reliable rule of
-    // thumb. The primary defense is the client-side webkitGetAsEntry check.
-    if (file.size === 0 && file.type === "" && !file.name.includes(".")) {
-      return Response.json(
-        { error: "Folders cannot be uploaded — drag individual files", code: "folder_reject" },
-        { status: 400 },
-      );
     }
 
     if (file.size > MAX_UPLOAD_SIZE) {
@@ -60,18 +51,45 @@ export async function POST(request: Request) {
       );
     }
 
-    // Sanitize filename to prevent path traversal via file.name
-    const sanitizedName = safeFilename(file.name);
-    if (!sanitizedName || sanitizedName === "." || sanitizedName === "..") {
-      return Response.json(
-        { error: "Invalid filename", code: "invalid_filename" },
-        { status: 400 },
-      );
+    // Build the destination. Two cases:
+    //  - Flat upload (`relativePath` missing): <dirPath>/<sanitized file name>
+    //  - Folder upload (`relativePath` present): <dirPath>/<relativePath>
+    //    The client sends the full in-folder path ("src/lib/foo.ts"); we
+    //    sanitize each segment individually to prevent traversal, then
+    //    let safePath validate the final resolved location.
+    let destPath: string;
+    if (relativePath) {
+      const segments = relativePath.split(/[/\\]+/).filter(Boolean);
+      if (segments.length === 0) {
+        return Response.json(
+          { error: "Invalid relativePath", code: "invalid_filename" },
+          { status: 400 },
+        );
+      }
+      const safeSegments: string[] = [];
+      for (const seg of segments) {
+        const cleaned = safeFilename(seg);
+        if (!cleaned || cleaned === "." || cleaned === "..") {
+          return Response.json(
+            { error: "Invalid relativePath", code: "invalid_filename" },
+            { status: 400 },
+          );
+        }
+        safeSegments.push(cleaned);
+      }
+      destPath = join(dirPath, ...safeSegments);
+    } else {
+      const sanitizedName = safeFilename(file.name);
+      if (!sanitizedName || sanitizedName === "." || sanitizedName === "..") {
+        return Response.json(
+          { error: "Invalid filename", code: "invalid_filename" },
+          { status: 400 },
+        );
+      }
+      destPath = join(dirPath, sanitizedName);
     }
 
-    const destPath = join(dirPath, sanitizedName);
-
-    // Validate the final destination path as well
+    // Validate the final destination path stays under the base.
     try {
       await safePath(destPath);
     } catch {

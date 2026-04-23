@@ -350,7 +350,7 @@ export function FileEditorPanel({
         onDragStart={onDragStart}
       />
 
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-auto">
         {loading && (
           <div className="flex h-full items-center justify-center">
             <FiLoader size={16} className="animate-spin text-canvas-muted" />

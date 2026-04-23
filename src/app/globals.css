@@ -110,11 +110,177 @@ html:not(.dark) {
 }
 
 .glass-input {
-  background: var(--glass-bg);
+  background-color: var(--glass-bg);
   backdrop-filter: blur(var(--glass-blur));
   -webkit-backdrop-filter: blur(var(--glass-blur));
   border: 1px solid var(--glass-border);
   box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+}
+
+/* Focus-within swaps the glass bg to a more opaque value. Both the base
+   and focused values are explicit colors (not var()) so the browser can
+   interpolate smoothly. Tailwind's transition-all on the element picks up
+   background-color, max-width, transform, padding, and box-shadow. */
+.glass-input:focus-within {
+  background-color: rgba(255, 255, 255, 0.88);
+  border-color: rgba(255, 255, 255, 0.6);
+}
+.dark .glass-input:focus-within {
+  background-color: rgba(40, 40, 40, 0.88);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+/* Tumbling bar + orange bowl loader for the "thinking" indicator. The
+   ::before is the orange half-disc; the ::after is a thin bar that rotates
+   independently. Bar color uses --canvas-fg so it stays crisp white in
+   dark mode and dark in light mode (the original design only contrasted
+   in dark mode). */
+@keyframes thinkingLoaderRotate {
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.thinking-loader {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  animation: thinkingLoaderRotate 1.5s ease-in infinite alternate;
+}
+.thinking-loader::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  width: 20px;
+  height: 10px;
+  background: var(--accent);
+  border-radius: 0 0 16px 16px;
+}
+.thinking-loader::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 10%;
+  width: 3px;
+  height: 20px;
+  background: var(--canvas-fg);
+  animation: thinkingLoaderRotate 1.2s linear infinite alternate-reverse;
+}
+
+/* Thinking-indicator text — muted base color with a white sheen that
+   periodically sweeps left→right to hint at live activity. Same two-layer
+   clip-to-text trick as .text-gradient-accent but starts from muted gray
+   instead of the accent gradient. */
+@keyframes textShimmerMuted {
+  0% {
+    background-position:
+      200% center,
+      0 0;
+  }
+  40% {
+    background-position:
+      -100% center,
+      0 0;
+  }
+  100% {
+    background-position:
+      -100% center,
+      0 0;
+  }
+}
+
+.text-shimmer-muted {
+  background-image:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent 40%,
+      rgba(255, 255, 255, 0.85) 50%,
+      transparent 60%,
+      transparent 100%
+    ),
+    linear-gradient(90deg, var(--canvas-muted), var(--canvas-muted));
+  background-size:
+    200% 100%,
+    100% 100%;
+  background-repeat: no-repeat, no-repeat;
+  background-position:
+    200% center,
+    0 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: var(--canvas-muted);
+  -webkit-text-fill-color: transparent;
+  animation: textShimmerMuted 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+/* Empty-state entrance — gentle lift + fade. Applied to greeting, subtitle,
+   and each suggestion chip with staggered animation-delay so they cascade
+   in softly when a fresh chat opens. */
+@keyframes emptyFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-empty-in {
+  animation: emptyFadeIn 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Greeting headline: base accent gradient with a white sheen that sweeps
+   left-to-right across the text. Two background layers are both clipped to
+   the glyph shape — the top (moving) layer is a transparent→white→transparent
+   stripe, the bottom (static) layer is the accent gradient. The shine
+   animates only the top layer's background-position. The first ~30% of the
+   keyframes is the pass; the rest holds off-screen so the effect reads as a
+   periodic sparkle rather than a constant shimmer. */
+@keyframes textShimmer {
+  0% {
+    background-position:
+      200% center,
+      0 0;
+  }
+  35% {
+    background-position:
+      -100% center,
+      0 0;
+  }
+  100% {
+    background-position:
+      -100% center,
+      0 0;
+  }
+}
+
+.text-gradient-accent {
+  background-image:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent 40%,
+      rgba(255, 255, 255, 0.9) 50%,
+      transparent 60%,
+      transparent 100%
+    ),
+    linear-gradient(135deg, var(--canvas-fg) 0%, var(--accent) 120%);
+  background-size:
+    200% 100%,
+    100% 100%;
+  background-repeat: no-repeat, no-repeat;
+  background-position:
+    200% center,
+    0 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: textShimmer 4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
 }
 
 /* ── Scrollbar ── */
@@ -340,8 +506,13 @@ html:not(.dark) {
  * reads as "alive" from the corner of your eye, without the loud
  * animate-pulse that makes the text hard to read. */
 @keyframes sessionRowGlow {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.7; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
 }
 .animate-session-active {
   animation: sessionRowGlow 2.4s ease-in-out infinite;

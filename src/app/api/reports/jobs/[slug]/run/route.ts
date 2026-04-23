@@ -41,12 +41,16 @@ export async function POST(request: Request, ctx: Params) {
   const sm = getSessionManager();
   if (!sm) {
     console.warn(
-      `[reports] Run Now ${slug}: both scheduler and SessionManager singletons are null`,
+      `[reports] Run Now ${slug}: both scheduler and SessionManager singletons are null. ` +
+        `The container must run 'node server.js' (custom server), not 'next start'. ` +
+        `Check /api/reports/diagnostics for runtime state.`,
     );
     return Response.json(
       {
         error:
-          "Reports runtime not initialised. The custom server may still be booting — retry in a few seconds.",
+          "Reports runtime not initialised. Check /chat/api/reports/diagnostics — " +
+          "the container probably needs a rebuild with the latest code or is running " +
+          "without the custom server.",
       },
       { status: 503 },
     );
@@ -58,6 +62,7 @@ export async function POST(request: Request, ctx: Params) {
   // Fire-and-forget: respond 202 immediately, let the run complete in the
   // background. The runner writes the sidecar + index synchronously enough
   // that the next /api/reports/runs poll will show the "running" entry.
+  console.log(`[reports] Run Now ${slug} via direct path (scheduler singleton was null)`);
   executeRun({
     job: parsed.job,
     trigger: "manual",

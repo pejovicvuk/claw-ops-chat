@@ -64,11 +64,40 @@ export class ReportScheduler {
     const task = cron.schedule(
       job.schedule,
       () => {
+        // Loud log on every tick so operators can diagnose "my job
+        // isn't running" by tailing container stdout. Previously a
+        // tick that no-op'd (misparsed schedule, etc.) was invisible.
+        console.log(`[reports] tick ${job.slug} @ ${new Date().toISOString()}`);
         this.tick(job).catch((err) => console.error(`[reports] ${job.slug} tick error`, err));
       },
       { timezone: job.timezone || "UTC" },
     );
     this.tasks.set(job.slug, task);
+    // Log the scheduled first-run so we can see whether node-cron
+    // actually parsed the expression.
+    try {
+      const next = task.getNextRun?.();
+      if (next) {
+        console.log(
+          `[reports] registered ${job.slug} (${job.schedule} ${job.timezone}) — next: ${next.toISOString()}`,
+        );
+      } else {
+        console.log(`[reports] registered ${job.slug} (${job.schedule} ${job.timezone})`);
+      }
+    } catch {
+      /* getNextRun is optional in some builds */
+    }
+  }
+
+  /** Look up the next fire time for a registered job, if any. */
+  nextRunFor(slug: string): Date | null {
+    const task = this.tasks.get(slug);
+    if (!task) return null;
+    try {
+      return task.getNextRun?.() ?? null;
+    } catch {
+      return null;
+    }
   }
 
   unregister(slug: string): void {

@@ -30,6 +30,10 @@ import {
   persistSession,
   type PersistedSession,
 } from "./src/lib/session-persistence";
+import { decideCronTool, type ToolPolicy } from "./src/lib/reports/tool-policy";
+import type { CronRunOutcome } from "./src/lib/reports/runner";
+import { ReportScheduler } from "./src/lib/reports/scheduler";
+import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 
 // node-pty has a native binding — require it lazily so the server can still
 // start if the binding is missing, and only blow up when the terminal is used.
@@ -184,6 +188,31 @@ interface ChatSession {
    * so the first client to reconnect sees a banner.
    */
   wasInterrupted: boolean;
+  /**
+   * When set, this session is an autonomous cron run and every tool
+   * decision routes through decideCronTool — the interactive permission
+   * prompts are bypassed entirely. Null for regular chat sessions.
+   */
+  cronPolicy: Extract<ToolPolicy, { kind: "cron" }> | null;
+  /**
+   * Callback fired exactly once when a cron run terminates (success,
+   * error, or abort). Cleared immediately after invocation.
+   */
+  cronOnComplete: ((outcome: CronRunOutcome) => void) | null;
+  /**
+   * Fan-out hook for cron runs so the runner can tee SDK events into a
+   * .log.jsonl without taking a dependency on the WebSocket pipeline.
+   */
+  cronOnEvent: ((event: Record<string, unknown>) => void) | null;
+  /** Wall-clock abort timer for the current cron run (if any). */
+  cronAbortTimer: NodeJS.Timeout | null;
+  /** Accumulates token usage across assistant messages for cron runs. */
+  cronTokenUsage: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheCreate: number;
+  };
 }
 
 /**
@@ -263,6 +292,11 @@ class SessionManager {
         status: "idle",
         lastUserMessage: "",
         wasInterrupted: false,
+        cronPolicy: null,
+        cronOnComplete: null,
+        cronOnEvent: null,
+        cronAbortTimer: null,
+        cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
       };
       this.sessions.set(sessionId, session);
       setSessionStatus(sessionId, "idle");
@@ -336,6 +370,11 @@ class SessionManager {
       status: "idle",
       lastUserMessage: persisted.lastUserMessage ?? "",
       wasInterrupted: wasMidTurn,
+      cronPolicy: null,
+      cronOnComplete: null,
+      cronOnEvent: null,
+      cronAbortTimer: null,
+      cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
     };
     this.sessions.set(session.id, session);
     setSessionStatus(session.id, "idle");
@@ -662,6 +701,22 @@ class SessionManager {
       // with CLAUDE_THINKING=off if the extra tokens cost matter.
       ...(process.env.CLAUDE_THINKING !== "off" ? { thinking: { type: "adaptive" } } : {}),
       canUseTool: async (toolName: string, input: Record<string, unknown>) => {
+        // Autonomous cron runs take a short-circuit path: decideCronTool
+        // enforces the per-job allowlist, bash-prefix filter, and turn
+        // budget — with no interactive prompts at all. Returning here
+        // keeps the interactive branches below 100% untouched so the
+        // existing chat behavior is byte-identical after this refactor.
+        if (session.cronPolicy) {
+          const decision = decideCronTool(session.cronPolicy, toolName, input);
+          if (decision.behavior === "allow") {
+            return { behavior: "allow", updatedInput: decision.updatedInput ?? input };
+          }
+          return {
+            behavior: "deny",
+            message: decision.message ?? "Denied by cron policy",
+          };
+        }
+
         // Handle AskUserQuestion
         if (toolName === "AskUserQuestion") {
           const id = `req-${++session.requestCounter}`;
@@ -1061,6 +1116,24 @@ class SessionManager {
           this.broadcastContextUsage(session, msg.modelUsage);
           // Clear event history after turn completes — JSONL has the persisted record
           session.eventHistory = [];
+          // Notify an awaiting cron runner that the turn reached its
+          // terminal result. The sidecar write happens in the runner,
+          // so we pass through everything it needs to finalize.
+          if (session.cronOnComplete) {
+            session.cronOnComplete({
+              claudeSessionId: session.claudeSessionId,
+              turnsUsed: 0,
+              toolCallsCount: 0,
+              denials: [],
+              tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+              isError: Boolean(msg.is_error),
+              errorMessage: msg.is_error
+                ? typeof msg.result === "string"
+                  ? msg.result
+                  : "Run ended with error"
+                : undefined,
+            });
+          }
           continue;
         }
 
@@ -1182,6 +1255,21 @@ class SessionManager {
     // handleUserMessage() will flip it straight back to "thinking".
     this.setStatus(session, "idle");
 
+    // If a cron run is still awaiting resolution (e.g. the stream ended
+    // without emitting a result event — abort, spawn failure, etc.),
+    // settle with an error so the runner doesn't hang forever.
+    if (session.cronOnComplete) {
+      session.cronOnComplete({
+        claudeSessionId: session.claudeSessionId,
+        turnsUsed: 0,
+        toolCallsCount: 0,
+        denials: [],
+        tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+        isError: true,
+        errorMessage: "Run ended without a terminal result event",
+      });
+    }
+
     // Process queued messages
     if (session.messageQueue.length > 0) {
       const next = session.messageQueue.shift()!;
@@ -1234,6 +1322,17 @@ class SessionManager {
       this.queuePersist(session);
     }
 
+    // Tee into the cron run log if this session is an autonomous run.
+    // Errors in the hook are deliberately swallowed — a failing log
+    // writer must never break the SDK stream.
+    if (session.cronOnEvent) {
+      try {
+        session.cronOnEvent(event);
+      } catch {
+        /* ignore */
+      }
+    }
+
     const data = JSON.stringify(event);
     for (const client of session.clients) {
       if (client.readyState === WebSocket.OPEN) {
@@ -1282,6 +1381,14 @@ class SessionManager {
       (usage.input_tokens || 0) +
       (usage.cache_read_input_tokens || 0) +
       (usage.cache_creation_input_tokens || 0);
+    // Accumulate for cron token accounting — the sidecar stores the
+    // total at run-end, not per-message. Out-of-band of any broadcast.
+    if (session.cronPolicy) {
+      session.cronTokenUsage.input += usage.input_tokens || 0;
+      session.cronTokenUsage.output += usage.output_tokens || 0;
+      session.cronTokenUsage.cacheRead += usage.cache_read_input_tokens || 0;
+      session.cronTokenUsage.cacheCreate += usage.cache_creation_input_tokens || 0;
+    }
     // Context window isn't in assistant usage — assume 1M.
     // The final `result` event corrects this with the real contextWindow from modelUsage.
     const max = 1_000_000;
@@ -1292,6 +1399,75 @@ class SessionManager {
       used,
       max,
       percentage: Math.round((used / max) * 100),
+    });
+  }
+
+  /**
+   * Drive one autonomous run through the existing SDK pipeline. Sets up
+   * session.cronPolicy so canUseTool takes the allowlist path, then calls
+   * handleUserMessage and returns a promise that resolves when the SDK
+   * emits its terminal result (or errors out).
+   */
+  runCron(args: {
+    sessionId: string;
+    prompt: string;
+    cwd: string;
+    allowedTools: string[];
+    allowedBashPrefixes: string[];
+    maxTurns: number;
+    maxDurationSec: number;
+    onEvent?: (event: Record<string, unknown>) => void;
+  }): Promise<CronRunOutcome> {
+    const session = this.getOrCreateSession(args.sessionId);
+    session.sessionCwd = args.cwd;
+    session.cronTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+    session.cronOnEvent = args.onEvent ?? null;
+    session.cronPolicy = {
+      kind: "cron",
+      allowed: args.allowedTools,
+      allowedBashPrefixes: args.allowedBashPrefixes,
+      turnBudget: { remaining: args.maxTurns },
+      denials: [],
+    };
+
+    return new Promise<CronRunOutcome>((resolve) => {
+      let settled = false;
+      const settle = (outcome: CronRunOutcome) => {
+        if (settled) return;
+        settled = true;
+        if (session.cronAbortTimer) {
+          clearTimeout(session.cronAbortTimer);
+          session.cronAbortTimer = null;
+        }
+        const policy = session.cronPolicy;
+        session.cronPolicy = null;
+        session.cronOnComplete = null;
+        session.cronOnEvent = null;
+        resolve({
+          ...outcome,
+          denials: policy ? [...policy.denials] : outcome.denials,
+          turnsUsed: policy ? args.maxTurns - policy.turnBudget.remaining : outcome.turnsUsed,
+          tokenUsage: { ...session.cronTokenUsage },
+        });
+      };
+
+      session.cronOnComplete = settle;
+
+      // Wall-clock safety: abort if the SDK stream runs past maxDurationSec.
+      session.cronAbortTimer = setTimeout(() => {
+        try {
+          const q = session.currentQuery;
+          if (q?.interrupt) {
+            q.interrupt().catch(() => session.abortController?.abort());
+          } else {
+            session.abortController?.abort();
+          }
+        } catch {
+          /* best-effort abort */
+        }
+      }, Math.max(1, args.maxDurationSec) * 1000);
+
+      this.handleUserMessage(session, args.prompt);
     });
   }
 }
@@ -1432,6 +1608,18 @@ const sessionManager = new SessionManager();
     }
   } catch (err) {
     console.warn(`!! Could not rehydrate sessions: ${(err as Error).message}`);
+  }
+})();
+
+// Bootstrap the reports scheduler. Sibling IIFE so a scheduler failure
+// (e.g. corrupt .jobs/ directory) doesn't block chat from coming up.
+(async () => {
+  try {
+    const scheduler = new ReportScheduler(sessionManager);
+    setScheduler(scheduler);
+    await scheduler.bootstrap();
+  } catch (err) {
+    console.warn(`!! Could not start reports scheduler: ${(err as Error).message}`);
   }
 })();
 

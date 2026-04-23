@@ -47,6 +47,10 @@ interface SessionListProps {
   loading: boolean;
   onRefresh: () => void;
   runningSessionIds?: Set<string>;
+  /** When true, the component renders only the list (Sidebar supplies its own header). */
+  hideHeader?: boolean;
+  /** When true, the Settings footer row is omitted (Sidebar supplies its own). */
+  hideFooter?: boolean;
 }
 
 export function SessionList({
@@ -57,6 +61,8 @@ export function SessionList({
   loading,
   onRefresh,
   runningSessionIds,
+  hideHeader = false,
+  hideFooter = false,
 }: SessionListProps) {
   const { setParam } = useUrlState();
   const openSettings = () => setParam("settings", "main");
@@ -106,38 +112,40 @@ export function SessionList({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-3 py-2.5">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-semibold text-canvas-fg">Chats</span>
-          {activeCount > 0 && (
-            <span
-              className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
-              style={{ backgroundColor: "#3b82f633", color: "#60a5fa" }}
-              title={`${activeCount} session(s) currently doing something`}
+      {!hideHeader && (
+        <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-3 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-semibold text-canvas-fg">Chats</span>
+            {activeCount > 0 && (
+              <span
+                className="rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+                style={{ backgroundColor: "#3b82f633", color: "#60a5fa" }}
+                title={`${activeCount} session(s) currently doing something`}
+              >
+                {activeCount} active
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onRefresh}
+              className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
             >
-              {activeCount} active
-            </span>
-          )}
+              <FiRefreshCw size={13} />
+            </button>
+            <button
+              type="button"
+              onClick={onNewChat}
+              className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-accent hover:bg-canvas-surface-hover"
+            >
+              <FiPlus size={15} />
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={onRefresh}
-            className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-          >
-            <FiRefreshCw size={13} />
-          </button>
-          <button
-            type="button"
-            onClick={onNewChat}
-            className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-accent hover:bg-canvas-surface-hover"
-          >
-            <FiPlus size={15} />
-          </button>
-        </div>
-      </div>
+      )}
 
-      <div className="flex-1 overflow-y-auto px-2 py-2">
+      <div className={hideHeader ? "flex-1" : "flex-1 overflow-y-auto px-2 py-2"}>
         {loading && (
           <div className="space-y-1.5 px-1">
             {Array.from({ length: 6 }).map((_, i) => (
@@ -222,16 +230,18 @@ export function SessionList({
       </div>
 
       {/* Footer — Settings */}
-      <div className="shrink-0 border-t border-canvas-border px-2 py-2">
-        <button
-          type="button"
-          onClick={openSettings}
-          className="row-hover focus-ring flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
-        >
-          <FiSettings size={14} />
-          Settings
-        </button>
-      </div>
+      {!hideFooter && (
+        <div className="shrink-0 border-t border-canvas-border px-2 py-2">
+          <button
+            type="button"
+            onClick={openSettings}
+            className="row-hover focus-ring flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+          >
+            <FiSettings size={14} />
+            Settings
+          </button>
+        </div>
+      )}
     </div>
   );
 }

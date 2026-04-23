@@ -17,10 +17,11 @@ import { Z_INDEX } from "@/lib/z-index";
 import { uploadFile } from "@/lib/api";
 import type { ChatSession, FileEntry } from "@/lib/types";
 import { ChatView } from "./chat-view";
-import { SessionList } from "./session-list";
 import { MobileFileSheet } from "./mobile-file-sheet";
 import { FileBrowser, type FileBrowserHandle } from "./file-browser";
 import { ErrorBoundary } from "@/components/error-boundary";
+import { Sidebar } from "@/components/reports/sidebar";
+import { ReportsMainPane } from "@/components/reports/reports-main-pane";
 
 // Lazy: CodeMirror core (~180kb gz) is pulled into this chunk. Only loads
 // when the user opens a file. ssr:false because the editor is pointer-driven.
@@ -236,6 +237,9 @@ export function ChatLayout({
           className="flex min-h-0 flex-1 flex-col"
           style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 0px)" }}
         >
+          {params.get("view") === "reports" ? (
+            <ReportsMainPane onOpenSessions={() => setSidebarOpen(true)} />
+          ) : (
           <ChatView
             sessionId={sessionId}
             resumeSessionId={selectedSessionId}
@@ -268,6 +272,7 @@ export function ChatLayout({
               </div>
             }
           />
+          )}
         </div>
 
         {sidebarOpen && (
@@ -292,10 +297,10 @@ export function ChatLayout({
                     closes by tapping the backdrop, swiping left, or
                     selecting a session. An inline X wastes vertical
                     space that's better spent on the session list. */}
-                <SessionList
+                <Sidebar
                   selectedSessionId={selectedSessionId}
                   sessions={sessions}
-                  loading={sessionsLoading}
+                  sessionsLoading={sessionsLoading}
                   onSelectSession={(sid) => {
                     onSelectSession(sid);
                     setSidebarOpen(false);
@@ -304,7 +309,7 @@ export function ChatLayout({
                     onNewChat();
                     setSidebarOpen(false);
                   }}
-                  onRefresh={onRefreshSessions}
+                  onRefreshSessions={onRefreshSessions}
                   runningSessionIds={runningSessionIds}
                 />
               </div>
@@ -372,27 +377,31 @@ export function ChatLayout({
                   <FiChevronsLeft size={14} />
                 </button>
               </div>
-              <SessionList
+              <Sidebar
                 selectedSessionId={selectedSessionId}
                 sessions={sessions}
-                loading={sessionsLoading}
+                sessionsLoading={sessionsLoading}
                 onSelectSession={onSelectSession}
                 onNewChat={onNewChat}
-                onRefresh={onRefreshSessions}
+                onRefreshSessions={onRefreshSessions}
               />
             </div>
           )}
         </aside>
 
-        {/* Center: Chat */}
+        {/* Center: Chat or Reports dashboard */}
         <main className="flex min-w-0 flex-col">
-          <ChatView
-            key={sessionId}
-            sessionId={sessionId}
-            resumeSessionId={selectedSessionId}
-            onSessionCreated={onSessionCreated}
-            headerless
-          />
+          {params.get("view") === "reports" ? (
+            <ReportsMainPane />
+          ) : (
+            <ChatView
+              key={sessionId}
+              sessionId={sessionId}
+              resumeSessionId={selectedSessionId}
+              onSessionCreated={onSessionCreated}
+              headerless
+            />
+          )}
         </main>
 
         {/* Right: File panel — same pattern: grid drives width, aside clips fixed-width inner */}

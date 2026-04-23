@@ -93,6 +93,52 @@ export async function listRunsForJob(slug: string): Promise<ReportRun[]> {
   return out;
 }
 
+export interface RunCountStats {
+  total: number;
+  success: number;
+  error: number;
+  running: number;
+  /** ms epoch of the most-recent run's startedAt, or null if no runs. */
+  lastRunAt: number | null;
+}
+
+/**
+ * Aggregate counts for a single job — used by the dashboard to show
+ * "N runs · M% success" without the client having to fetch the full run
+ * list. Reads sidecars directly (not the index) so disabled/archived
+ * jobs with live runs still count correctly.
+ */
+export async function countRunsForJob(slug: string): Promise<RunCountStats> {
+  assertSlug(slug);
+  const dir = jobRunsDir(slug);
+  const stats: RunCountStats = {
+    total: 0,
+    success: 0,
+    error: 0,
+    running: 0,
+    lastRunAt: null,
+  };
+  if (!existsSync(dir)) return stats;
+  const entries = await readdir(dir).catch(() => [] as string[]);
+  for (const name of entries) {
+    if (!name.endsWith(".json")) continue;
+    try {
+      const raw = await readFile(`${dir}/${name}`, "utf-8");
+      const run = JSON.parse(raw) as ReportRun;
+      stats.total += 1;
+      if (run.status === "success") stats.success += 1;
+      else if (run.status === "running") stats.running += 1;
+      else stats.error += 1;
+      if (!stats.lastRunAt || run.startedAt > stats.lastRunAt) {
+        stats.lastRunAt = run.startedAt;
+      }
+    } catch {
+      /* skip corrupt */
+    }
+  }
+  return stats;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Read/unread index                                                  */
 /* ------------------------------------------------------------------ */

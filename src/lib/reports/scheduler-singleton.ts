@@ -13,6 +13,10 @@ let instance: ReportScheduler | null = null;
 
 export function setScheduler(scheduler: ReportScheduler): void {
   instance = scheduler;
+  // Loud log so a missing singleton in prod is diagnosable from the
+  // container stdout rather than requiring the user to debug a 503 with
+  // no context. Bootstrap() logs its own "N jobs loaded" once finished.
+  console.log("> Reports scheduler singleton registered");
 }
 
 export function getScheduler(): ReportScheduler | null {

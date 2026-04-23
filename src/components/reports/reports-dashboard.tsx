@@ -19,7 +19,10 @@ interface ReportsDashboardProps {
  */
 export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
   const { params, setParam } = useUrlState();
-  const { jobs, loading, refresh } = useReportJobs();
+  // Dashboard is the frontmost UI for the reports feature — poll fast so
+  // the "Running" pill appears ~3s after a user triggers Run Now instead
+  // of the previous 30s wait.
+  const { jobs, loading, refresh } = useReportJobs({ fast: true });
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const isNew = params.get("newReport") === "1";
 
@@ -37,7 +40,11 @@ export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
     async (slug: string) => {
       try {
         await runJobNow(slug);
-        setTimeout(refresh, 800);
+        // Two-step refresh: immediate so the "Running" pill appears
+        // within a tick, plus a follow-up at 1.5s in case the runner
+        // hasn't written the sidecar yet on the first tick.
+        refresh();
+        setTimeout(refresh, 1500);
       } catch (err) {
         alert(`Failed to trigger run: ${(err as Error).message}`);
       }
@@ -77,6 +84,7 @@ export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
             activeJobs={jobs.filter((j) => j.enabled).length}
             runningJobs={jobs.filter((j) => j.running).length}
           />
+          <TotalsPill jobs={jobs} />
         </div>
         <div className="flex items-center gap-1.5">
           <button
@@ -151,6 +159,39 @@ function SchedulerPill({ activeJobs, runningJobs }: { activeJobs: number; runnin
     >
       {activeJobs} active
       {runningJobs > 0 && ` · ${runningJobs} running`}
+    </span>
+  );
+}
+
+function TotalsPill({
+  jobs,
+}: {
+  jobs: Array<{ runCounts?: { total: number; success: number; error: number; running: number } }>;
+}) {
+  // Sum execution counts across all jobs — gives the user a feel for
+  // how hard the system is working without clicking into each card.
+  const totals = jobs.reduce(
+    (acc, j) => {
+      const c = j.runCounts ?? { total: 0, success: 0, error: 0, running: 0 };
+      return {
+        total: acc.total + c.total,
+        success: acc.success + c.success,
+        error: acc.error + c.error,
+        running: acc.running + c.running,
+      };
+    },
+    { total: 0, success: 0, error: 0, running: 0 },
+  );
+  if (totals.total === 0) return null;
+  const completed = totals.total - totals.running;
+  const successRate = completed > 0 ? Math.round((totals.success / completed) * 100) : 0;
+  return (
+    <span
+      className="hidden rounded-full bg-canvas-surface-hover px-2 py-0.5 text-[10px] font-medium text-canvas-muted sm:inline-block"
+      title="Aggregate execution counts across all jobs"
+    >
+      {totals.total} run{totals.total === 1 ? "" : "s"}
+      {completed > 0 && ` · ${successRate}% success`}
     </span>
   );
 }

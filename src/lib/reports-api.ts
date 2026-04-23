@@ -11,9 +11,18 @@ import type { ReportJob, ReportRun, ReportsIndexEntry } from "./reports/types";
 
 const BASE = "/chat/api/reports";
 
+export interface JobRunCounts {
+  total: number;
+  success: number;
+  error: number;
+  running: number;
+  lastRunAt: number | null;
+}
+
 export interface JobWithMeta extends ReportJob {
   nextRuns: string[];
   running: boolean;
+  runCounts: JobRunCounts;
 }
 
 export interface RunsFeed {
@@ -40,6 +49,19 @@ export interface ReportContentResponse {
   content: string | null;
   truncated: boolean;
   sizeBytes: number;
+}
+
+export interface RunLogEvent {
+  type: string;
+  at: number;
+  [key: string]: unknown;
+}
+
+export interface RunLogResponse {
+  run: ReportRun | null;
+  status: ReportRun["status"] | null;
+  events: RunLogEvent[];
+  total: number;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -95,6 +117,11 @@ export async function fetchRuns(unreadOnly = false): Promise<RunsFeed> {
 
 export async function fetchReportContent(runId: string): Promise<ReportContentResponse> {
   return request(`/runs/${encodeURIComponent(runId)}`);
+}
+
+export async function fetchRunLog(runId: string, since = 0): Promise<RunLogResponse> {
+  const qs = since > 0 ? `?since=${since}` : "";
+  return request(`/runs/${encodeURIComponent(runId)}/log${qs}`);
 }
 
 export async function deleteRun(runId: string): Promise<{ ok: boolean }> {

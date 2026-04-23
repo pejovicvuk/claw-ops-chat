@@ -3,15 +3,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { fetchJobs, fetchRuns, type JobWithMeta, type RunsFeed } from "./reports-api";
 
-const POLL_INTERVAL_MS = 30_000;
+/** Cadence when the Reports view isn't open — cheap background refresh. */
+const SLOW_POLL_MS = 30_000;
+/** Cadence while the user is actively in Reports view — surfaces new runs
+ * almost immediately without burning a WebSocket channel on each endpoint. */
+const FAST_POLL_MS = 3_000;
+
+interface PollOptions {
+  /** When true, polls every FAST_POLL_MS (≈3s) instead of the slow 30s. */
+  fast?: boolean;
+}
 
 /**
- * Polls /api/reports/runs and /api/reports/jobs on a 30s cadence. Exposed
- * as two separate hooks so the sidebar (which only needs runs) doesn't
- * pay the cost of re-fetching the job catalog.
+ * Polls /api/reports/runs and /api/reports/jobs. Exposed as two hooks so
+ * the sidebar (runs only) doesn't pay the cost of the job catalog. Both
+ * accept a `fast` flag that callers flip on while the Reports view is
+ * visible — 3s is snappy enough to feel "live" for the running-now
+ * indicators without needing a WebSocket channel.
  */
 
-export function useReportRuns() {
+export function useReportRuns(options: PollOptions = {}) {
+  const { fast = false } = options;
   const [feed, setFeed] = useState<RunsFeed>({ runs: [], unreadCount: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -31,16 +43,18 @@ export function useReportRuns() {
 
   useEffect(() => {
     refresh();
-    timerRef.current = setInterval(refresh, POLL_INTERVAL_MS);
+    const interval = fast ? FAST_POLL_MS : SLOW_POLL_MS;
+    timerRef.current = setInterval(refresh, interval);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [refresh]);
+  }, [refresh, fast]);
 
   return { feed, loading, error, refresh };
 }
 
-export function useReportJobs() {
+export function useReportJobs(options: PollOptions = {}) {
+  const { fast = false } = options;
   const [jobs, setJobs] = useState<JobWithMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,11 +74,12 @@ export function useReportJobs() {
 
   useEffect(() => {
     refresh();
-    timerRef.current = setInterval(refresh, POLL_INTERVAL_MS);
+    const interval = fast ? FAST_POLL_MS : SLOW_POLL_MS;
+    timerRef.current = setInterval(refresh, interval);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [refresh]);
+  }, [refresh, fast]);
 
   return { jobs, loading, error, refresh };
 }

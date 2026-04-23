@@ -3,6 +3,7 @@ import { listJobs, readJob, writeJob } from "@/lib/reports/job-store";
 import { parseJobMarkdown } from "@/lib/reports/job-parser";
 import { validateJob } from "@/lib/reports/job-validator";
 import { getScheduler } from "@/lib/reports/scheduler-singleton";
+import { countRunsForJob } from "@/lib/reports/run-store";
 import { nextRunTimes } from "@/lib/cron-humanize";
 import type { ReportJob } from "@/lib/reports/types";
 
@@ -11,13 +12,22 @@ export async function GET(request: Request) {
   const jobs = await listJobs();
   const scheduler = getScheduler();
   const out = await Promise.all(
-    jobs.map(async ({ job }) => ({
-      ...job,
-      // Light enrichment: next scheduled run times (for dashboard preview)
-      // and whether the scheduler currently has a run in flight.
-      nextRuns: await nextRunTimes(job.schedule, job.timezone, 3),
-      running: scheduler?.isRunning(job.slug) ?? false,
-    })),
+    jobs.map(async ({ job }) => {
+      // Enrichment per job: next scheduled run times (for dashboard
+      // preview), in-flight flag from the scheduler, and aggregate run
+      // counts so the UI can show "N runs · M% success" without a second
+      // request per card.
+      const [nextRuns, runCounts] = await Promise.all([
+        nextRunTimes(job.schedule, job.timezone, 3),
+        countRunsForJob(job.slug),
+      ]);
+      return {
+        ...job,
+        nextRuns,
+        running: scheduler?.isRunning(job.slug) ?? runCounts.running > 0,
+        runCounts,
+      };
+    }),
   );
   return Response.json({ jobs: out });
 }

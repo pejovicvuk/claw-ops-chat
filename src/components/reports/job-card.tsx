@@ -56,6 +56,32 @@ export function JobCard({ job, onEdit, onRun, onDelete }: JobCardProps) {
                 ` (${((lastRun.finishedAt - lastRun.startedAt) / 1000).toFixed(1)}s)`}
             </p>
           )}
+          {job.runCounts && job.runCounts.total > 0 && (
+            // Execution counter — gives the user an at-a-glance sense of
+            // a job's health without expanding the run history. Success
+            // rate calculated from completed runs (excludes in-flight).
+            <p className="mt-0.5 text-[11px] text-canvas-muted">
+              {job.runCounts.total} run{job.runCounts.total === 1 ? "" : "s"}
+              {job.runCounts.total - job.runCounts.running > 0 && (
+                <>
+                  {" "}
+                  ·{" "}
+                  {Math.round(
+                    (job.runCounts.success /
+                      Math.max(1, job.runCounts.total - job.runCounts.running)) *
+                      100,
+                  )}
+                  % success
+                </>
+              )}
+              {job.runCounts.error > 0 && (
+                <>
+                  {" · "}
+                  <span style={{ color: "#f87171" }}>{job.runCounts.error} failed</span>
+                </>
+              )}
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-1">
           <IconButton label="Run now" onClick={onRun} disabled={job.running}>

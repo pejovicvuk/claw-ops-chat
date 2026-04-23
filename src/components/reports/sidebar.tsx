@@ -42,23 +42,39 @@ export function Sidebar({
   onDeleteSession,
 }: SidebarProps) {
   const { params, setParam } = useUrlState();
-  const mode: SidebarMode = params.get("sidebar") === "reports" ? "reports" : "chats";
+  // Derive mode from BOTH ?view and ?sidebar so any URL that targets the
+  // reports area (e.g. a deep-linked report runId) consistently shows the
+  // reports list instead of silently falling back to chats.
+  const mode: SidebarMode =
+    params.get("view") === "reports" || params.get("sidebar") === "reports" ? "reports" : "chats";
   const selectedReportId = params.get("report");
 
   const openSettings = useCallback(() => setParam("settings", "main"), [setParam]);
 
-  const { feed, loading: reportsLoading, refresh: refreshReports } = useReportRuns();
+  // Flip to fast polling while the user is looking at the reports list or
+  // the reports view overall — 3s lag vs 30s lag makes running indicators
+  // feel live without any WebSocket plumbing.
+  const fastPoll = mode === "reports" || params.get("view") === "reports";
+  const {
+    feed,
+    loading: reportsLoading,
+    refresh: refreshReports,
+  } = useReportRuns({
+    fast: fastPoll,
+  });
 
   const handleNewReport = useCallback(() => {
     // Navigate to Reports view + open the New Job drawer. The
     // ReportsDashboard honors ?newReport=1.
     setParam("view", "reports");
+    setParam("sidebar", "reports");
     setParam("newReport", "1");
   }, [setParam]);
 
   const handleSelectReport = useCallback(
     (runId: string) => {
       setParam("view", "reports");
+      setParam("sidebar", "reports");
       setParam("report", runId);
     },
     [setParam],
@@ -66,11 +82,20 @@ export function Sidebar({
 
   const handleChangeMode = useCallback(
     (next: SidebarMode) => {
-      setParam("sidebar", next === "reports" ? "reports" : null);
-      if (next === "chats") {
-        // Leaving the reports view also clears the view overlay so the
-        // user lands back on the chat they had open.
+      if (next === "reports") {
+        // Clicking the Reports tab must flip BOTH the sidebar list AND
+        // the main pane — the previous behavior (only setting ?sidebar)
+        // left the main pane on chat, which users correctly perceived as
+        // broken: "I clicked Reports but nothing happened."
+        setParam("sidebar", "reports");
+        setParam("view", "reports");
+      } else {
+        // Leaving reports clears every reports-scoped URL param so a
+        // stale ?report=… doesn't resurrect on the next switch-back.
+        setParam("sidebar", null);
         setParam("view", null);
+        setParam("report", null);
+        setParam("newReport", null);
       }
     },
     [setParam],

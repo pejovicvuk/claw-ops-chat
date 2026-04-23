@@ -34,6 +34,7 @@ import { decideCronTool, type ToolPolicy } from "./src/lib/reports/tool-policy";
 import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
+import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
 
 // node-pty has a native binding — require it lazily so the server can still
 // start if the binding is missing, and only blow up when the terminal is used.
@@ -1531,18 +1532,21 @@ class SessionManager {
       session.cronOnComplete = settle;
 
       // Wall-clock safety: abort if the SDK stream runs past maxDurationSec.
-      session.cronAbortTimer = setTimeout(() => {
-        try {
-          const q = session.currentQuery;
-          if (q?.interrupt) {
-            q.interrupt().catch(() => session.abortController?.abort());
-          } else {
-            session.abortController?.abort();
+      session.cronAbortTimer = setTimeout(
+        () => {
+          try {
+            const q = session.currentQuery;
+            if (q?.interrupt) {
+              q.interrupt().catch(() => session.abortController?.abort());
+            } else {
+              session.abortController?.abort();
+            }
+          } catch {
+            /* best-effort abort */
           }
-        } catch {
-          /* best-effort abort */
-        }
-      }, Math.max(1, args.maxDurationSec) * 1000);
+        },
+        Math.max(1, args.maxDurationSec) * 1000,
+      );
 
       this.handleUserMessage(session, args.prompt);
     });
@@ -1669,6 +1673,12 @@ function isOriginAllowed(origin: string | undefined): boolean {
 const app = next({ dev });
 const handle = app.getRequestHandler();
 const sessionManager = new SessionManager();
+// Publish the SessionManager via a module-level singleton so API routes
+// can reach it even when the scheduler hasn't finished booting. This was
+// the root cause of the "Run Now" 503s: the scheduler singleton was the
+// only handle API routes had, and any transient bootstrap failure made
+// manual runs unrunnable.
+setSessionManager(sessionManager);
 
 // Rehydrate session state from disk so a container restart doesn't
 // wipe every in-flight conversation. Runs synchronously (well, fire

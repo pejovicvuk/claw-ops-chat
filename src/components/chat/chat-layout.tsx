@@ -293,32 +293,8 @@ export function ChatLayout({
             resumeSessionId={selectedSessionId}
             onSessionCreated={onSessionCreated}
             onOpenSessions={() => setSidebarOpen(true)}
+            onOpenFiles={() => setFilesPanelOpen(true)}
             headerless
-            fileButton={
-              <div className="flex items-center">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  multiple
-                  className="hidden"
-                  onChange={handleUpload}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg transition-colors duration-150"
-                >
-                  <FiUpload size={17} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setFilesPanelOpen(true)}
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg transition-colors duration-150"
-                >
-                  <FiFolder size={18} />
-                </button>
-              </div>
-            }
           />
         </div>
 

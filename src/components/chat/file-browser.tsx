@@ -23,16 +23,10 @@ import {
   FiX,
 } from "react-icons/fi";
 import { List, type RowComponentProps } from "react-window";
-import {
-  createFolder,
-  deleteFile,
-  downloadFile,
-  FileApiError,
-  listFiles,
-  writeFile,
-} from "@/lib/api";
-import { getCachedDir, invalidateDir, isCacheFresh, setCachedDir } from "@/lib/file-cache";
+import { createFolder, deleteFile, downloadFile, FileApiError, writeFile } from "@/lib/api";
+import { invalidateDir } from "@/lib/file-cache";
 import { useExitAnimation } from "@/lib/use-exit-animation";
+import { useFileListings } from "@/lib/use-file-listings";
 import { useToast } from "@/lib/use-toast";
 import { uploadBatch, type BatchProgress, type UploadEntry } from "@/lib/batch-upload";
 import type { FileEntry } from "@/lib/types";
@@ -100,9 +94,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
 ) {
   const { toast } = useToast();
   const [currentPath, setCurrentPath] = useState(initialPath || "~");
-  const [entries, setEntries] = useState<FileEntry[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { entries, loading, error, reload } = useFileListings(currentPath);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "name", dir: "asc" });
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -130,62 +122,42 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
   const { mounted: confirmMounted, state: confirmAnim } = useExitAnimation(confirm !== null, 200);
   const { mounted: newItemMounted, state: newItemAnim } = useExitAnimation(newItem !== null, 200);
 
-  const loadDir = useCallback(
-    async (path: string, opts: { bypassCache?: boolean } = {}) => {
-      setError(null);
+  /**
+   * Switch the browser to a new directory. The heavy lifting (cache lookup,
+   * revalidation, error state) is owned by `useFileListings`; this function
+   * just updates the bookkeeping that's specific to the panel view.
+   */
+  const navigateTo = useCallback(
+    (path: string) => {
       setQuery("");
       setSelectedIndex(-1);
-
-      const cached = opts.bypassCache ? null : getCachedDir(path);
-      if (cached) {
-        setEntries(cached);
-        setCurrentPath(path);
-        onPathChange?.(path);
-      }
-
-      if (cached && !opts.bypassCache && isCacheFresh(path)) return;
-
-      if (!cached) setLoading(true);
-
-      try {
-        const files = await listFiles(path);
-        setEntries(files);
-        setCurrentPath(path);
-        onPathChange?.(path);
-        setCachedDir(path, files);
-      } catch (err) {
-        if (!cached) {
-          setEntries([]);
-          setError(mapError(err));
-        } else {
-          // Stale-while-revalidate failed — keep showing cached content but
-          // surface the error as a toast. The inline banner is gone.
-          toast.error(mapError(err));
-        }
-      } finally {
-        setLoading(false);
-      }
+      setCurrentPath(path);
+      onPathChange?.(path);
     },
-    [onPathChange, toast],
+    [onPathChange],
   );
 
-  useImperativeHandle(ref, () => ({
-    navigateTo: (path: string) => loadDir(path),
-  }));
+  useImperativeHandle(ref, () => ({ navigateTo }));
 
+  // Surface stale-revalidate failures as a toast. When entries are empty the
+  // inline "retry" block handles the error — no toast needed in that case.
+  const prevErrorRef = useRef<string | null>(null);
   useEffect(() => {
-    loadDir(currentPath);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (error && entries.length > 0 && prevErrorRef.current !== error) {
+      toast.error(error);
+    }
+    prevErrorRef.current = error;
+  }, [error, entries.length, toast]);
 
   const handleEntryClick = useCallback(
     (entry: FileEntry) => {
       if (entry.directory) {
-        loadDir(entry.path);
+        navigateTo(entry.path);
       } else {
         onFileClick?.(entry.path);
       }
     },
-    [loadDir, onFileClick],
+    [navigateTo, onFileClick],
   );
 
   const handleEntryDoubleClick = useCallback(
@@ -246,7 +218,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       });
 
       invalidateDir(currentPath);
-      loadDir(currentPath, { bypassCache: true });
+      reload();
       setBatch(null);
 
       if (result.aborted) {
@@ -269,7 +241,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
         );
       }
     },
-    [currentPath, loadDir, toast],
+    [currentPath, reload, toast],
   );
 
   const triggerFileInput = useCallback(() => {
@@ -296,13 +268,13 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       try {
         await deleteFile(entry.path, entry.directory);
         invalidateDir(currentPath);
-        loadDir(currentPath, { bypassCache: true });
+        reload();
         setConfirm(null);
       } catch (err) {
         setConfirm((prev) => (prev ? { ...prev, error: mapError(err) } : prev));
       }
     },
-    [currentPath, loadDir],
+    [currentPath, reload],
   );
 
   const handleCreateItem = useCallback(
@@ -321,9 +293,9 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       }
       setNewItem(null);
       invalidateDir(currentPath);
-      loadDir(currentPath, { bypassCache: true });
+      reload();
     },
-    [currentPath, loadDir, newItem, toast],
+    [currentPath, reload, newItem, toast],
   );
 
   /** Derived filtered + sorted list. */
@@ -369,15 +341,15 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
         const entry = visibleEntries[selectedIndex];
         if (!entry) return;
         e.preventDefault();
-        if (entry.directory) loadDir(entry.path);
+        if (entry.directory) navigateTo(entry.path);
         else onFileOpen?.(entry);
       } else if (e.key === "Backspace") {
         e.preventDefault();
         const parent = parentOf(currentPath);
-        loadDir(parent);
+        navigateTo(parent);
       }
     },
-    [visibleEntries, selectedIndex, loadDir, onFileOpen, parentOf, currentPath],
+    [visibleEntries, selectedIndex, navigateTo, onFileOpen, parentOf, currentPath],
   );
 
   // Row renderer shared between virtualized and plain paths.
@@ -426,7 +398,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
         onKeyDown={handleKeyDown}
         onClick={() => contextMenu && closeMenu()}
       >
-        <Breadcrumbs path={currentPath} onNavigate={loadDir} />
+        <Breadcrumbs path={currentPath} onNavigate={navigateTo} />
         <FileToolbar
           key={currentPath}
           query={query}
@@ -436,7 +408,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           onUpload={triggerFileInput}
           onRefresh={() => {
             invalidateDir(currentPath);
-            loadDir(currentPath, { bypassCache: true });
+            reload();
           }}
           loading={loading}
         />
@@ -489,7 +461,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
               <p className="text-center text-[12px] text-red-400">{error}</p>
               <button
                 type="button"
-                onClick={() => loadDir(currentPath, { bypassCache: true })}
+                onClick={() => reload()}
                 className="flex items-center gap-1 text-[11px] text-blue-400 hover:underline"
               >
                 <FiRefreshCw size={10} />

@@ -64,6 +64,11 @@ export function ChatInput({
     status === "idle" &&
     !hasPendingUpload;
   const isActive = ACTIVE_STATUSES.has(status);
+  // Pill stays in its "expanded" visual state whenever there's something
+  // to send — typed text or any attachment (including ones still
+  // uploading). Otherwise expansion falls back to CSS `:focus-within` so
+  // the pill grows while the user is interacting with it.
+  const hasContent = text.trim().length > 0 || attachments.length > 0;
 
   // Sync external pre-fills (suggestion chips) into the composer.
   const initialSeq = initialText?.seq ?? 0;
@@ -160,6 +165,12 @@ export function ChatInput({
   }, []);
 
   const triggerFileInput = useCallback(() => {
+    // Focus the textarea BEFORE opening the native picker so `:focus-within`
+    // on the pill stays true while the file dialog is open. Without this,
+    // Safari (where button clicks don't move focus) plus the focus the
+    // dialog steals elsewhere can briefly collapse the pill mid-flow and
+    // the user sees the composer shrink while they're picking a file.
+    textareaRef.current?.focus();
     fileInputRef.current?.click();
   }, []);
 
@@ -176,8 +187,18 @@ export function ChatInput({
       className="shrink-0 px-3 py-2"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
     >
-      <div className="mx-auto md:max-w-3xl md:focus-within:max-w-4xl">
-        <div className="glass-input flex flex-col rounded-2xl px-2.5 py-1.5 transition-all duration-300 ease-out focus-within:-translate-y-1 focus-within:px-3 focus-within:py-2 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]">
+      <div
+        className={`mx-auto ${
+          hasContent ? "md:max-w-4xl" : "md:max-w-3xl md:focus-within:max-w-4xl"
+        }`}
+      >
+        <div
+          className={`glass-input flex flex-col rounded-2xl transition-all duration-300 ease-out ${
+            hasContent
+              ? "-translate-y-1 px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
+              : "px-2.5 py-1.5 focus-within:-translate-y-1 focus-within:px-3 focus-within:py-2 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
+          }`}
+        >
           <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
           <div className="flex items-end gap-1.5">

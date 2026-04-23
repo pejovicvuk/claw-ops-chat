@@ -56,5 +56,23 @@ export function useUrlState() {
     listeners.forEach((l) => l());
   }, []);
 
-  return { params, setParam };
+  /**
+   * Replace every value of a repeated key. Used for ordered lists that need
+   * to survive refresh (e.g. `?open=a&open=b&open=c`). Passing an empty
+   * array removes the key entirely.
+   */
+  const setParamMulti = useCallback((key: string, values: string[]) => {
+    if (typeof window === "undefined") return;
+    const next = new URLSearchParams(window.location.search);
+    next.delete(key);
+    for (const v of values) {
+      if (v) next.append(key, v);
+    }
+    const qs = next.toString();
+    const url = `${window.location.pathname}${qs ? `?${qs}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", url);
+    listeners.forEach((l) => l());
+  }, []);
+
+  return { params, setParam, setParamMulti };
 }

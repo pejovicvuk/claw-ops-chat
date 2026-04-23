@@ -22,22 +22,20 @@ export async function GET(request: Request) {
   try {
     const entries = await readdir(dirPath, { withFileTypes: true });
     const results = await Promise.all(
-      entries
-        .filter((e) => !e.name.startsWith("."))
-        .map(async (entry) => {
-          const fullPath = join(dirPath, entry.name);
-          const isDir = entry.isDirectory();
-          let size = 0;
-          let mtime = 0;
-          try {
-            const s = await stat(fullPath);
-            if (!isDir) size = s.size;
-            mtime = s.mtimeMs;
-          } catch {
-            /* skip */
-          }
-          return { name: entry.name, path: fullPath, directory: isDir, size, mtime };
-        }),
+      entries.map(async (entry) => {
+        const fullPath = join(dirPath, entry.name);
+        const isDir = entry.isDirectory();
+        let size = 0;
+        let mtime = 0;
+        try {
+          const s = await stat(fullPath);
+          if (!isDir) size = s.size;
+          mtime = s.mtimeMs;
+        } catch {
+          /* skip */
+        }
+        return { name: entry.name, path: fullPath, directory: isDir, size, mtime };
+      }),
     );
 
     // Directories first, then alphabetical

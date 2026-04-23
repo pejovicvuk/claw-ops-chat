@@ -88,6 +88,23 @@ export async function writeFile(path: string, content: string): Promise<void> {
   await assertOk(res, "Failed to write file");
 }
 
+/**
+ * Create a folder. With `recursive:true` (default for batch uploads), missing
+ * parent directories are created in one call and existing ones are not an
+ * error.
+ */
+export async function createFolder(
+  path: string,
+  opts: { name?: string; recursive?: boolean } = {},
+): Promise<void> {
+  const res = await authFetch(`${BASE}/api/files/mkdir`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, name: opts.name, recursive: opts.recursive === true }),
+  });
+  await assertOk(res, "Failed to create folder");
+}
+
 export interface UploadResult {
   path: string;
   /** True when an existing file at the destination was replaced. */
@@ -97,6 +114,12 @@ export interface UploadResult {
 export interface UploadOptions {
   onProgress?: (fraction: number) => void;
   signal?: AbortSignal;
+  /**
+   * Optional path (relative to `dirPath`) where the file should land. Used
+   * by folder uploads — e.g. `"src/lib/foo.ts"` drops the file into
+   * `<dirPath>/src/lib/foo.ts`, with the server creating parent dirs.
+   */
+  relativePath?: string;
 }
 
 export async function uploadFile(
@@ -113,6 +136,9 @@ export async function uploadFile(
   }
   const formData = new FormData();
   formData.append("file", file);
+  if (options?.relativePath) {
+    formData.append("relativePath", options.relativePath);
+  }
   const res = await authFetch(`${BASE}/api/files/upload?path=${encodeURIComponent(dirPath)}`, {
     method: "POST",
     body: formData,

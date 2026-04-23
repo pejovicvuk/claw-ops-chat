@@ -1,11 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dynamic from "next/dynamic";
-import { FiX, FiFolder, FiCheck, FiChevronsLeft, FiMessageSquare, FiUpload } from "react-icons/fi";
+import { FiX, FiFolder, FiChevronsLeft, FiMessageSquare, FiUpload } from "react-icons/fi";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
 import { useUrlState } from "@/lib/use-url-state";
+import { useToast } from "@/lib/use-toast";
 import { Z_INDEX } from "@/lib/z-index";
 import { uploadFile } from "@/lib/api";
 import type { ChatSession, FileEntry } from "@/lib/types";
@@ -50,7 +51,8 @@ export function ChatLayout({
 }: ChatLayoutProps) {
   const isMobile = useIsMobile();
   useVisualViewport();
-  const { params, setParam } = useUrlState();
+  const { params, setParam, setParamMulti } = useUrlState();
+  const { toast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // On mobile, opening Settings (?settings=…) should auto-close the
@@ -73,10 +75,40 @@ export function ChatLayout({
     (open: boolean) => setParam("files", open ? "1" : null),
     [setParam],
   );
-  const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
-  const [openFiles, setOpenFiles] = useState<{ key: string; file: FileEntry }[]>([]);
-  const [focusOrder, setFocusOrder] = useState<string[]>([]);
+  /**
+   * Open editor panels are URL-backed so a refresh re-opens everything that
+   * was on screen. `?open=<path>` repeats per panel in focus order (oldest
+   * first); `?active=<path>` names the one on top. Per-panel geometry lives
+   * in localStorage via `layout-store.ts` — combined, both position and set
+   * survive a reload.
+   */
+  const openPaths = useMemo(() => params.getAll("open"), [params]);
+  const activePath = params.get("active");
+
+  const openFiles = useMemo<{ key: string; file: FileEntry }[]>(
+    () =>
+      openPaths.map((p) => ({
+        key: `file:${p}`,
+        file: {
+          name: p.split("/").pop() || p,
+          path: p,
+          directory: false,
+          size: 0,
+          mtime: 0,
+        },
+      })),
+    [openPaths],
+  );
+
+  const focusOrder = useMemo<string[]>(() => {
+    const keys = openPaths.map((p) => `file:${p}`);
+    if (!activePath) return keys;
+    // Move the active path to the end (top of z-stack) without dropping the
+    // rest of the order — mirrors how `handleFileFocus` used to splice.
+    const activeKey = `file:${activePath}`;
+    return [...keys.filter((k) => k !== activeKey), activeKey].filter((k) => keys.includes(k));
+  }, [openPaths, activePath]);
 
   const fileBrowserRef = useRef<FileBrowserHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -96,16 +128,16 @@ export function ChatLayout({
     setSessionId(selectedSessionId || "new-" + Date.now());
   }, [selectedSessionId]);
 
-  const handleCopyPath = useCallback((path: string) => {
-    const atPath = `@${path}`;
-    navigator.clipboard
-      .writeText(atPath)
-      .then(() => {
-        setCopiedPath(path);
-        setTimeout(() => setCopiedPath(null), 1500);
-      })
-      .catch(() => {});
-  }, []);
+  const handleCopyPath = useCallback(
+    (path: string) => {
+      const atPath = `@${path}`;
+      navigator.clipboard
+        .writeText(atPath)
+        .then(() => toast.success("Path copied"))
+        .catch(() => toast.error("Couldn't copy path"));
+    },
+    [toast],
+  );
 
   // Viewport clamping for editor panels is now handled inside the panel
   // itself via `clampRectToViewport` — no global MutationObserver needed.
@@ -125,20 +157,38 @@ export function ChatLayout({
     [setCurrentBrowserPath, setFilesPanelOpen],
   );
 
-  const handleFileOpen = useCallback((file: FileEntry) => {
-    const key = `file:${file.path}`;
-    setOpenFiles((prev) => (prev.some((e) => e.key === key) ? prev : [...prev, { key, file }]));
-    setFocusOrder((prev) => [...prev.filter((k) => k !== key), key]);
-  }, []);
+  const handleFileOpen = useCallback(
+    (file: FileEntry) => {
+      // Mirror into URL: append path if not present, mark active.
+      const current = new URLSearchParams(window.location.search).getAll("open");
+      const next = current.includes(file.path) ? current : [...current, file.path];
+      setParamMulti("open", next);
+      setParam("active", file.path);
+    },
+    [setParam, setParamMulti],
+  );
 
-  const handleFileClose = useCallback((key: string) => {
-    setOpenFiles((prev) => prev.filter((e) => e.key !== key));
-    setFocusOrder((prev) => prev.filter((k) => k !== key));
-  }, []);
+  const handleFileClose = useCallback(
+    (key: string) => {
+      const path = key.startsWith("file:") ? key.slice("file:".length) : key;
+      const current = new URLSearchParams(window.location.search).getAll("open");
+      const next = current.filter((p) => p !== path);
+      setParamMulti("open", next);
+      const currentActive = new URLSearchParams(window.location.search).get("active");
+      if (currentActive === path) {
+        setParam("active", next.length ? next[next.length - 1] : null);
+      }
+    },
+    [setParam, setParamMulti],
+  );
 
-  const handleFileFocus = useCallback((key: string) => {
-    setFocusOrder((prev) => [...prev.filter((k) => k !== key), key]);
-  }, []);
+  const handleFileFocus = useCallback(
+    (key: string) => {
+      const path = key.startsWith("file:") ? key.slice("file:".length) : key;
+      setParam("active", path);
+    },
+    [setParam],
+  );
 
   const handleUpload = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -324,16 +374,6 @@ export function ChatLayout({
         />
 
         {fileEditors}
-
-        {copiedPath && (
-          <div
-            className="fixed left-1/2 top-20 -translate-x-1/2 flex items-center gap-1.5 rounded-full bg-green-600 px-3 py-1.5 shadow-lg"
-            style={{ zIndex: Z_INDEX.TOAST }}
-          >
-            <FiCheck size={12} className="text-white" />
-            <span className="text-[11px] font-medium text-white">Path copied</span>
-          </div>
-        )}
       </div>
     );
   }
@@ -430,13 +470,6 @@ export function ChatLayout({
                 </div>
               </div>
 
-              {copiedPath && (
-                <div className="flex items-center gap-1.5 border-b border-canvas-border bg-green-500/10 px-3 py-1.5">
-                  <FiCheck size={11} className="text-green-400" />
-                  <span className="truncate text-[10px] text-green-400">Copied: {copiedPath}</span>
-                </div>
-              )}
-
               <div className="file-panel-fill min-h-0 flex-1">
                 <ErrorBoundary label="the file browser">
                   <FileBrowser
@@ -446,15 +479,7 @@ export function ChatLayout({
                     onFileClick={handleCopyPath}
                     onFileOpen={handleFileOpen}
                     hideRunOption
-                    onCopyPath={(path) => {
-                      navigator.clipboard
-                        .writeText(`@${path}`)
-                        .then(() => {
-                          setCopiedPath(path);
-                          setTimeout(() => setCopiedPath(null), 1500);
-                        })
-                        .catch(() => {});
-                    }}
+                    onCopyPath={handleCopyPath}
                   />
                 </ErrorBoundary>
               </div>
@@ -473,16 +498,6 @@ export function ChatLayout({
       </div>
 
       {fileEditors}
-
-      {copiedPath && (
-        <div
-          className="fixed left-1/2 top-20 -translate-x-1/2 flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 shadow-lg"
-          style={{ zIndex: Z_INDEX.TOAST }}
-        >
-          <FiCheck size={12} className="text-white" />
-          <span className="text-[11px] font-medium text-white">Path copied</span>
-        </div>
-      )}
     </>
   );
 }

@@ -2,16 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { FiArrowUp, FiPaperclip, FiSquare } from "react-icons/fi";
-import { createFolder, deleteFile, uploadFile, FileApiError } from "@/lib/api";
-import { useToast } from "@/lib/use-toast";
 import { useMentions } from "@/lib/use-mentions";
 import type { ClaudeStatus } from "@/lib/types";
 import { preloadMarkdown } from "./message-bubble";
 import { AttachmentRow } from "./chat-input/attachment-row";
 import type { AttachmentPillData } from "./chat-input/attachment-pill";
-import { isImageName } from "./chat-input/attachment-pill";
 import { MentionPopover, type MentionPopoverHandle } from "./chat-input/mention-popover";
-import { FileDropzone } from "./file-browser/file-dropzone";
 
 interface ChatInputProps {
   status: ClaudeStatus;
@@ -22,6 +18,12 @@ interface ChatInputProps {
       twice still fills the composer; empty-string values are ignored so
       we don't wipe the user's in-progress draft. */
   initialText?: { text: string; seq: number };
+  /** Lifted attachment state — owned by ChatView so drops on the whole
+      chat pane feed the same list. */
+  attachments: AttachmentPillData[];
+  onAddFiles: (files: File[]) => void | Promise<void>;
+  onRemoveAttachment: (id: string) => void;
+  onClearAttachments: () => void;
 }
 
 /** Statuses where Claude is actively working and can be stopped. */
@@ -32,60 +34,23 @@ const ACTIVE_STATUSES = new Set<ClaudeStatus>([
   "awaiting_input",
 ]);
 
-// Where attachments go on disk. Lives directly under CLAUDE_CWD so Claude
-// always has it in its working directory.
-const UPLOADS_DIR = "~/uploads";
-
-/** Runtime-local attachment — mirrors `AttachmentPillData` but tracked with the upload controller. */
-interface Attachment extends AttachmentPillData {
-  controller: AbortController;
-}
-
-function genId(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
-  return `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
-}
-
-/**
- * Sanitize a filename for server-side relativePath use. Keep dots and
- * alphanumerics; replace everything else with `-`. Mirrors (loosely) the
- * `safeFilename` logic on the server but here it's purely for display-nice
- * uploaded paths. The server still re-sanitizes.
- */
-function safeName(name: string): string {
-  return name
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
-}
-
-function makeUploadName(file: File): string {
-  const ts = new Date().toISOString().replace(/[:.]/g, "-");
-  return `${ts}-${safeName(file.name) || "file"}`;
-}
-
-function errMsg(err: unknown): string {
-  if (err instanceof FileApiError) return err.message;
-  if (err instanceof Error) return err.message;
-  return "Upload failed";
-}
-
-export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProps) {
-  const { toast } = useToast();
+export function ChatInput({
+  status,
+  onSend,
+  onStop,
+  initialText,
+  attachments,
+  onAddFiles,
+  onRemoveAttachment,
+  onClearAttachments,
+}: ChatInputProps) {
   const [text, setText] = useState("");
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [caret, setCaret] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState<number | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<MentionPopoverHandle>(null);
-  /** Ensure we only try to mkdir once per session. */
-  const uploadsDirReady = useRef(false);
 
-  // @-mention state derived from the textarea value + caret position. The
-  // popover subscribes to `dirPart` via `useFileListings` so the first
-  // render reads from localStorage cache — no network flash when the file
-  // browser has been open recently.
   const mention = useMentions(text, caret);
   const popoverOpen =
     mention.open &&
@@ -100,9 +65,7 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
     !hasPendingUpload;
   const isActive = ACTIVE_STATUSES.has(status);
 
-  // Sync external pre-fills (suggestion chips) into the composer. Depend
-  // on the seq so identical text bumped by a second click still triggers
-  // a fill. Empty text is ignored so we don't wipe in-progress drafts.
+  // Sync external pre-fills (suggestion chips) into the composer.
   const initialSeq = initialText?.seq ?? 0;
   useEffect(() => {
     if (!initialText || !initialText.text) return;
@@ -113,98 +76,8 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
       el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
       el.focus();
     }
-    // initialText is captured via the seq read above; effect intentionally
-    // keyed to seq so only explicit bumps re-fire the fill.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialSeq]);
-
-  // Revoke any outstanding blob URLs on unmount so images don't leak.
-  useEffect(() => {
-    return () => {
-      for (const a of attachments) {
-        if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
-      }
-    };
-    // Intentionally empty deps — we only want the cleanup on unmount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const uploadOne = useCallback(async (file: File, existingId?: string): Promise<void> => {
-    // Ensure `~/uploads` exists (recursive + idempotent). Only try once.
-    if (!uploadsDirReady.current) {
-      try {
-        await createFolder("~", { name: "uploads", recursive: true });
-      } catch {
-        /* Directory may already exist or be writable — let the upload
-             itself surface real errors. */
-      }
-      uploadsDirReady.current = true;
-    }
-
-    const id = existingId ?? genId();
-    const uploadName = makeUploadName(file);
-    const previewUrl = isImageName(file.name) ? URL.createObjectURL(file) : undefined;
-    const controller = new AbortController();
-
-    const draft: Attachment = {
-      id,
-      name: file.name,
-      size: file.size,
-      previewUrl,
-      progress: 0,
-      controller,
-    };
-
-    setAttachments((prev) => {
-      if (existingId && prev.some((a) => a.id === existingId)) {
-        return prev.map((a) =>
-          a.id === existingId
-            ? { ...draft, previewUrl: a.previewUrl ?? previewUrl, error: undefined }
-            : a,
-        );
-      }
-      return [...prev, draft];
-    });
-
-    try {
-      await uploadFile(UPLOADS_DIR, file, {
-        relativePath: uploadName,
-        signal: controller.signal,
-        onProgress: (frac) => {
-          setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, progress: frac } : a)));
-        },
-      });
-      setAttachments((prev) =>
-        prev.map((a) =>
-          a.id === id ? { ...a, progress: 1, uploadedPath: `${UPLOADS_DIR}/${uploadName}` } : a,
-        ),
-      );
-    } catch (err) {
-      if ((err as { name?: string })?.name === "AbortError") {
-        // Aborted during upload — the ×-click handler already removed the
-        // pill from state, nothing to update here.
-        return;
-      }
-      setAttachments((prev) => prev.map((a) => (a.id === id ? { ...a, error: errMsg(err) } : a)));
-    }
-  }, []);
-
-  /** Shared entry-point for both drag-drop and the file-picker button. */
-  const handleAttach = useCallback(
-    async (files: File[]) => {
-      if (files.length === 0) return;
-      await Promise.all(files.map((f) => uploadOne(f)));
-    },
-    [uploadOne],
-  );
-
-  /** FileDropzone emits `UploadEntry[]`; drop the relativePath, we only want flat files. */
-  const handleDropzoneUpload = useCallback(
-    async (entries: { file: File; relativePath: string }[]) => {
-      await handleAttach(entries.map((e) => e.file));
-    },
-    [handleAttach],
-  );
 
   const handleFileInput = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -213,48 +86,9 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
       if (!list || list.length === 0) return;
       const files: File[] = [];
       for (let i = 0; i < list.length; i++) files.push(list[i]);
-      await handleAttach(files);
+      await onAddFiles(files);
     },
-    [handleAttach],
-  );
-
-  const handleRemove = useCallback((id: string) => {
-    setAttachments((prev) => {
-      const target = prev.find((a) => a.id === id);
-      if (target) {
-        // Kill any in-flight upload.
-        if (!target.uploadedPath && !target.error) {
-          try {
-            target.controller.abort();
-          } catch {
-            /* noop */
-          }
-        }
-        // Revoke blob URL.
-        if (target.previewUrl) URL.revokeObjectURL(target.previewUrl);
-        // Best-effort server-side cleanup for already-uploaded files.
-        if (target.uploadedPath) {
-          deleteFile(target.uploadedPath).catch(() => {
-            /* non-fatal — user can clean up in the files panel */
-          });
-        }
-      }
-      return prev.filter((a) => a.id !== id);
-    });
-  }, []);
-
-  const handleRetry = useCallback(
-    (id: string) => {
-      setAttachments((prev) => {
-        const target = prev.find((a) => a.id === id);
-        if (!target) return prev;
-        // We don't keep the raw File around — the user has to re-pick. Surface
-        // a hint; a future pass can stash the File on the Attachment.
-        toast.info("Retrying failed uploads isn't wired yet — remove and re-add the file.");
-        return prev;
-      });
-    },
-    [toast],
+    [onAddFiles],
   );
 
   const handleSend = useCallback(() => {
@@ -265,17 +99,12 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
     const final =
       refs.length > 0 ? (trimmed ? `${trimmed}\n\n${refs.join("\n")}` : refs.join("\n")) : text;
     onSend(final);
-
-    // Clear composer state. Revoke blob URLs; leave uploaded files on disk.
-    for (const a of attachments) {
-      if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
-    }
-    setAttachments([]);
+    onClearAttachments();
     setText("");
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
-  }, [canSend, text, attachments, onSend]);
+  }, [canSend, text, attachments, onSend, onClearAttachments]);
 
   /** Replace the active `@…` range with a completed token. */
   const handleAcceptMention = useCallback(
@@ -285,9 +114,6 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
       const after = text.slice(mention.rangeEnd);
       const next = `${before}${token}${after}`;
       setText(next);
-      // After accept, place caret right after the inserted token. For
-      // directories we keep the popover live on the trailing `/` — the
-      // user types more to drill deeper.
       const nextCaret = before.length + token.length;
       queueMicrotask(() => {
         const el = textareaRef.current;
@@ -308,9 +134,6 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Popover keys (arrow / enter / tab / escape) — it returns true when
-      // it consumed the event, in which case we preventDefault so the
-      // textarea doesn't also react (e.g. Enter inserting a newline).
       if (popoverOpen && popoverRef.current?.handleKeyDown(e)) {
         e.preventDefault();
         return;
@@ -340,17 +163,22 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
     fileInputRef.current?.click();
   }, []);
 
+  // Native textarea cancels external file drops by default. preventDefault
+  // on dragover + drop lets the outer dropzone handle it. We do NOT handle
+  // the drop here — just stop the browser's default so the event bubbles
+  // to the panel-level FileDropzone in ChatView.
+  const preventDefault = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+  }, []);
+
   return (
     <div
       className="shrink-0 px-3 py-2"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
     >
-      <FileDropzone
-        onUpload={handleDropzoneUpload}
-        className="mx-auto md:max-w-3xl md:focus-within:max-w-4xl"
-      >
+      <div className="mx-auto md:max-w-3xl md:focus-within:max-w-4xl">
         <div className="glass-input flex flex-col rounded-2xl px-2.5 py-1.5 transition-all duration-300 ease-out focus-within:-translate-y-1 focus-within:px-3 focus-within:py-2 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]">
-          <AttachmentRow attachments={attachments} onRemove={handleRemove} onRetry={handleRetry} />
+          <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
           <div className="flex items-end gap-1.5">
             <button
@@ -382,6 +210,8 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
               onClick={syncCaret}
               onKeyUp={syncCaret}
               onKeyDown={handleKeyDown}
+              onDragOver={preventDefault}
+              onDrop={preventDefault}
               placeholder={
                 status === "idle"
                   ? "Message Claude..."
@@ -422,12 +252,13 @@ export function ChatInput({ status, onSend, onStop, initialText }: ChatInputProp
             )}
           </div>
         </div>
-      </FileDropzone>
+      </div>
       <MentionPopover
         ref={popoverRef}
         open={popoverOpen}
         dirPart={mention.dirPart}
         prefixPart={mention.prefixPart}
+        hasSlash={mention.hasSlash}
         anchorRef={textareaRef}
         onAccept={handleAcceptMention}
         onClose={handleCloseMention}

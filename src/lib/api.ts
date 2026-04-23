@@ -72,6 +72,28 @@ export async function listFiles(path: string): Promise<FileEntry[]> {
   return res.json();
 }
 
+export interface WorkspaceIndexResponse {
+  rootResolved: string;
+  entries: Array<{ name: string; path: string; directory: boolean }>;
+  truncated: boolean;
+  elapsedMs: number;
+}
+
+/**
+ * Recursively list every file under `root`, with sensible excludes
+ * (node_modules, .git, build dirs) applied server-side. Backs the `@`
+ * autocomplete's "global" search mode. Expensive — call once, cache.
+ */
+export async function searchWorkspace(
+  root: string = "~",
+  limit: number = 20_000,
+): Promise<WorkspaceIndexResponse> {
+  const qs = `root=${encodeURIComponent(root)}&limit=${encodeURIComponent(String(limit))}`;
+  const res = await authFetch(`${BASE}/api/files/search?${qs}`);
+  await assertOk(res, "Failed to index files");
+  return res.json();
+}
+
 export async function readFile(path: string): Promise<string> {
   const res = await authFetch(`${BASE}/api/files/read?path=${encodeURIComponent(path)}`);
   await assertOk(res, "Failed to read file");

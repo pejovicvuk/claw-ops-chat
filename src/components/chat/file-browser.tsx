@@ -25,6 +25,7 @@ import {
 import { List, type RowComponentProps } from "react-window";
 import { createFolder, deleteFile, downloadFile, FileApiError, writeFile } from "@/lib/api";
 import { invalidateDir } from "@/lib/file-cache";
+import { invalidateWorkspaceIndex } from "@/lib/use-workspace-index";
 import { useExitAnimation } from "@/lib/use-exit-animation";
 import { useFileListings } from "@/lib/use-file-listings";
 import { useToast } from "@/lib/use-toast";
@@ -218,6 +219,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       });
 
       invalidateDir(currentPath);
+      invalidateWorkspaceIndex();
       reload();
       setBatch(null);
 
@@ -268,6 +270,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       try {
         await deleteFile(entry.path, entry.directory);
         invalidateDir(currentPath);
+        invalidateWorkspaceIndex();
         reload();
         setConfirm(null);
       } catch (err) {
@@ -293,6 +296,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       }
       setNewItem(null);
       invalidateDir(currentPath);
+      invalidateWorkspaceIndex();
       reload();
     },
     [currentPath, reload, newItem, toast],

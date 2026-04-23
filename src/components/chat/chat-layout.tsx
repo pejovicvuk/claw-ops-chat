@@ -373,7 +373,7 @@ export function ChatLayout({
     <>
       <div
         className="grid h-full transition-[grid-template-columns] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)]"
-        style={{ gridTemplateColumns: desktopGridCols }}
+        style={{ gridTemplateColumns: desktopGridCols, gridTemplateRows: "minmax(0, 1fr)" }}
       >
         {/* Left sidebar — grid owns the width tween; aside clips its fixed-width inner */}
         <aside className="relative flex flex-col overflow-hidden border-r border-canvas-border bg-canvas-bg">
@@ -413,8 +413,16 @@ export function ChatLayout({
           )}
         </aside>
 
-        {/* Center: Chat or Reports dashboard */}
-        <main className="flex min-w-0 flex-col">
+        {/* Center: Chat or Reports dashboard.
+            `min-h-0 overflow-hidden` is what lets the reports tree scroll:
+            grid/flex items default to `min-height: auto`, which was letting
+            long markdown reports and long live-run logs push the cell past
+            the grid's height and off the bottom of the viewport. The grid
+            itself also got `grid-template-rows: minmax(0, 1fr)` so the single
+            row can't grow past the container. ChatView masks the same bug
+            with its own inline `height:100%;overflow:hidden` but the reports
+            tree relied on the parent being bounded. */}
+        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
           {params.get("view") === "reports" ? (
             <ReportsMainPane />
           ) : (

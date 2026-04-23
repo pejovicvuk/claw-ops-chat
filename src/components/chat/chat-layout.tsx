@@ -413,14 +413,8 @@ export function ChatLayout({
           )}
         </aside>
 
-        {/* Center: Chat or Reports dashboard.
-            `min-h-0 overflow-hidden` are both required: grid cells default
-            to `min-height: auto` which lets tall content (long reports,
-            long live-run logs) push the cell past the grid's `h-full` and
-            off the bottom of the viewport, killing any downstream scroll.
-            ChatView gets away with just `overflow: hidden` on its own root;
-            the reports tree relies on this. */}
-        <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
+        {/* Center: Chat or Reports dashboard */}
+        <main className="flex min-w-0 flex-col">
           {params.get("view") === "reports" ? (
             <ReportsMainPane />
           ) : (

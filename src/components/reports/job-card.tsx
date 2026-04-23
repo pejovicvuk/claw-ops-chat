@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { FiClock, FiEdit2, FiPlay, FiTrash2 } from "react-icons/fi";
 import { humanizeCron } from "@/lib/cron-humanize";
-import { formatRelativeTime } from "@/lib/format-time";
+import { formatRelativeTime, formatTimeUntil } from "@/lib/format-time";
 import { fetchJobRuns, type JobWithMeta } from "@/lib/reports-api";
 import type { ReportRun } from "@/lib/reports/types";
 
@@ -30,6 +30,16 @@ export function JobCard({ job, onEdit, onRun, onDelete }: JobCardProps) {
 
   const schedule = humanizeCron(job.schedule);
   const next = job.nextRuns[0];
+  const visibleTimestamp = next ? new Date(next).getTime() : null;
+  // Re-render every 30s so the "Next in Xh Ym" countdown ticks down
+  // without requiring a full /api/reports/jobs refetch. Cheap — a single
+  // setInterval per card, cleared on unmount.
+  const [, forceTick] = useState(0);
+  useEffect(() => {
+    if (!visibleTimestamp) return;
+    const t = setInterval(() => forceTick((n) => n + 1), 30_000);
+    return () => clearInterval(t);
+  }, [visibleTimestamp]);
   const visibleTools = job.allowedTools.slice(0, 3);
   const extraTools = job.allowedTools.length - visibleTools.length;
 
@@ -41,11 +51,31 @@ export function JobCard({ job, onEdit, onRun, onDelete }: JobCardProps) {
             <h3 className="text-[14px] font-semibold text-canvas-fg">{job.name}</h3>
             <StatusPill running={job.running} enabled={job.enabled} />
           </div>
-          <p className="mt-1 inline-flex items-center gap-1.5 text-[12px] text-canvas-muted">
-            <FiClock size={11} />
-            <span>{schedule}</span>
-            {next && (
-              <span className="text-canvas-muted">· next: {new Date(next).toLocaleString()}</span>
+          <p className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px] text-canvas-muted">
+            <span className="inline-flex items-center gap-1.5">
+              <FiClock size={11} />
+              {schedule}
+            </span>
+            {visibleTimestamp && (
+              <>
+                <span>·</span>
+                <span
+                  style={{ color: "var(--canvas-fg)" }}
+                  title={new Date(visibleTimestamp).toLocaleString()}
+                >
+                  next {formatTimeUntil(visibleTimestamp)}
+                </span>
+                <span className="text-[10px] text-canvas-muted">
+                  (
+                  {new Date(visibleTimestamp).toLocaleString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                  )
+                </span>
+              </>
             )}
           </p>
           {lastRun && (

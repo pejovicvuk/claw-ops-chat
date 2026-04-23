@@ -1,24 +1,33 @@
-/**
- * Module-level holder for the single ReportScheduler instance.
- *
- * server.ts creates the scheduler at boot and calls `setScheduler(...)`.
- * API routes read it via `getScheduler()`. Mirrors the pattern used by
- * session-status-store: Next.js API routes and the custom server share
- * one Node process, so a module-level singleton is reachable from both.
- */
-
 import type { ReportScheduler } from "./scheduler";
 
-let instance: ReportScheduler | null = null;
+/**
+ * Process-wide holder for the single ReportScheduler instance.
+ *
+ * Pinned to `globalThis` rather than module-local state because Next.js 16
+ * standalone builds bundle API routes into a separate module graph from
+ * the custom server entry point — two separate copies of this file end up
+ * loaded, each with its own `let instance = null`. A plain module
+ * singleton is invisible across the boundary and Run Now silently returns
+ * 503 because the getter always reads the API-route copy (never set).
+ *
+ * `globalThis` is shared across both bundle copies since they're in one
+ * Node process, so the scheduler stored by server.ts boot code is
+ * reachable from the API route handlers.
+ */
+
+const KEY = "__claw_reports_scheduler_instance__";
+
+interface Global {
+  [KEY]?: ReportScheduler | null;
+}
 
 export function setScheduler(scheduler: ReportScheduler): void {
-  instance = scheduler;
-  // Loud log so a missing singleton in prod is diagnosable from the
-  // container stdout rather than requiring the user to debug a 503 with
-  // no context. Bootstrap() logs its own "N jobs loaded" once finished.
-  console.log("> Reports scheduler singleton registered");
+  (globalThis as Global)[KEY] = scheduler;
+  // Loud log so a missing singleton is diagnosable from container stdout
+  // rather than requiring the user to debug a 503 with no context.
+  console.log("> Reports scheduler singleton registered (globalThis)");
 }
 
 export function getScheduler(): ReportScheduler | null {
-  return instance;
+  return (globalThis as Global)[KEY] ?? null;
 }

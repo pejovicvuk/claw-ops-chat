@@ -1,23 +1,28 @@
-/**
- * Module-level holder for the SessionManager instance created by server.ts.
- *
- * API routes can reach it via `getSessionManager()` to drive cron runs even
- * when the scheduler singleton hasn't been populated yet. Mirrors the
- * scheduler-singleton pattern and leans on Next.js + the custom server
- * sharing one Node process / one module graph.
- */
-
 import type { CronCapableSessionManager } from "./runner";
 
-let instance: CronCapableSessionManager | null = null;
+/**
+ * Process-wide holder for the SessionManager instance created by server.ts.
+ *
+ * Pinned to `globalThis` for the same reason as scheduler-singleton:
+ * Next.js 16 standalone builds duplicate this module between the custom
+ * server entry and the bundled API routes, so a plain module-local
+ * singleton is never visible to the API routes. This was the root cause
+ * of the "Run Now" 503s — both this module AND scheduler-singleton
+ * returned null in the API-route bundle because `setSessionManager` fired
+ * in server.ts's copy of the file.
+ */
+
+const KEY = "__claw_reports_session_manager_instance__";
+
+interface Global {
+  [KEY]?: CronCapableSessionManager | null;
+}
 
 export function setSessionManager(sm: CronCapableSessionManager): void {
-  instance = sm;
-  // Loud log so a missing singleton in prod is diagnosable from the container
-  // stdout rather than requiring the user to debug a 503 with no context.
-  console.log("> Reports SessionManager singleton registered");
+  (globalThis as Global)[KEY] = sm;
+  console.log("> Reports SessionManager singleton registered (globalThis)");
 }
 
 export function getSessionManager(): CronCapableSessionManager | null {
-  return instance;
+  return (globalThis as Global)[KEY] ?? null;
 }

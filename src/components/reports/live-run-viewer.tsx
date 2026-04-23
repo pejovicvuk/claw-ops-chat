@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FiAlertCircle,
+  FiArrowDown,
   FiArrowLeft,
   FiCheckCircle,
   FiLoader,
@@ -40,7 +41,11 @@ export function LiveRunViewer({ runId, onOpenSessions, onComplete }: LiveRunView
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastTotal = useRef(0);
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const userScrolledRef = useRef(false);
+  // Whether the user is currently scrolled away from the bottom. Drives the
+  // "Jump to latest" affordance AND tells the auto-scroll effect to stay
+  // out of the user's way so they can actually read older events while new
+  // ones stream in.
+  const [awayFromBottom, setAwayFromBottom] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -106,20 +111,43 @@ export function LiveRunViewer({ runId, onOpenSessions, onComplete }: LiveRunView
     };
   }, [runId, onComplete]);
 
-  // Auto-scroll to bottom unless the user scrolled up — same "read-along"
-  // pattern the chat view uses so a live run feels natural to follow.
+  // Auto-scroll: sample the distance-from-bottom BEFORE applying new content
+  // and only snap to bottom if the user was already near it. The previous
+  // ref-flag approach was self-defeating — the programmatic scroll to
+  // bottom itself fired onScroll, which reset the flag and re-enabled
+  // auto-scroll, so every new event yanked the user back down. This
+  // version keeps the user wherever they chose to scroll.
+  const pendingScrollRef = useRef<"none" | "follow">("none");
   useEffect(() => {
-    if (userScrolledRef.current) return;
-    const el = scrollRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [state.data?.total]);
-
-  const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    userScrolledRef.current = distanceFromBottom > 80;
+    if (distanceFromBottom < 80) {
+      pendingScrollRef.current = "follow";
+      // Defer to after the DOM has painted the new rows so scrollHeight is up to date.
+      requestAnimationFrame(() => {
+        if (!scrollRef.current) return;
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        pendingScrollRef.current = "none";
+      });
+    }
+  }, [state.data?.total]);
+
+  const handleScroll = useCallback(() => {
+    // Ignore scroll events triggered by our own programmatic scroll —
+    // otherwise we'd immediately think the user is back at the bottom.
+    if (pendingScrollRef.current === "follow") return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    setAwayFromBottom(distanceFromBottom > 80);
+  }, []);
+
+  const jumpToLatest = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+    setAwayFromBottom(false);
   }, []);
 
   const handleBack = useCallback(() => setParam("report", null), [setParam]);
@@ -186,30 +214,46 @@ export function LiveRunViewer({ runId, onOpenSessions, onComplete }: LiveRunView
         )}
       </header>
 
-      <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4">
-        <div className="mx-auto max-w-3xl">
-          {state.loading && (
-            <div className="space-y-2">
-              <div className="h-5 w-1/3 animate-pulse rounded bg-canvas-surface-hover" />
-              <div className="h-4 w-full animate-pulse rounded bg-canvas-surface-hover" />
+      <div className="relative flex min-h-0 flex-1">
+        <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-4">
+          <div className="mx-auto max-w-3xl">
+            {state.loading && (
+              <div className="space-y-2">
+                <div className="h-5 w-1/3 animate-pulse rounded bg-canvas-surface-hover" />
+                <div className="h-4 w-full animate-pulse rounded bg-canvas-surface-hover" />
+              </div>
+            )}
+            {state.error && (
+              <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-[12px] text-red-900">
+                {state.error}
+              </div>
+            )}
+            {!state.loading && events.length === 0 && (
+              <div className="py-8 text-center text-[12px] text-canvas-muted">
+                Waiting for Claude to produce the first event…
+              </div>
+            )}
+            <div className="space-y-1.5">
+              {events.map((event, idx) => (
+                <TimelineRow key={idx} event={event} />
+              ))}
             </div>
-          )}
-          {state.error && (
-            <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-[12px] text-red-900">
-              {state.error}
-            </div>
-          )}
-          {!state.loading && events.length === 0 && (
-            <div className="py-8 text-center text-[12px] text-canvas-muted">
-              Waiting for Claude to produce the first event…
-            </div>
-          )}
-          <div className="space-y-1.5">
-            {events.map((event, idx) => (
-              <TimelineRow key={idx} event={event} />
-            ))}
           </div>
         </div>
+        {awayFromBottom && status === "running" && (
+          // Floating "Jump to latest" pill — appears only while the run is
+          // live AND the user has scrolled up. Lets them go read older
+          // events without the timeline yanking them to the bottom, and
+          // gives a one-tap return when they want the latest.
+          <button
+            type="button"
+            onClick={jumpToLatest}
+            className="btn-press absolute bottom-4 left-1/2 -translate-x-1/2 inline-flex items-center gap-1.5 rounded-full bg-accent px-3 py-1.5 text-[12px] font-medium text-white shadow-lg hover:opacity-90"
+          >
+            <FiArrowDown size={12} />
+            Jump to latest
+          </button>
+        )}
       </div>
     </div>
   );
@@ -267,12 +311,21 @@ function TimelineRow({ event }: { event: RunLogEvent }) {
             <span className="text-[10px] text-canvas-muted">{time}</span>
           </div>
           {body && !expandable && (
-            <div className="mt-1 whitespace-pre-wrap font-mono text-[11px] text-canvas-muted">
+            // Inline body is capped at 6 lines via line-clamp — anything
+            // bigger went the `expandable` path. This stops a single
+            // verbose tool from making a row the size of the viewport on
+            // mobile.
+            <div className="mt-1 line-clamp-6 whitespace-pre-wrap font-mono text-[11px] text-canvas-muted">
               {body}
             </div>
           )}
           {body && expandable && expanded && (
-            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words font-mono text-[11px] text-canvas-muted">
+            // Expanded tool inputs / outputs can be huge (e.g. a 50KB
+            // WebFetch response). Cap the row at 16rem with its own scroll
+            // so the outer timeline stays navigable. The user still has
+            // full access to the content, just not at the cost of losing
+            // their place in the overall run.
+            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] text-canvas-muted">
               {body}
             </pre>
           )}

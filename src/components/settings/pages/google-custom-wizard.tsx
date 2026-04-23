@@ -12,6 +12,8 @@ import {
   FiLogOut,
   FiRefreshCw,
   FiTerminal,
+  FiUpload,
+  FiX,
 } from "react-icons/fi";
 import { authFetch } from "@/lib/auth";
 import { GoogleSetupTerminal } from "@/components/settings/google-setup-terminal";
@@ -19,25 +21,74 @@ import { GoogleSetupTerminal } from "@/components/settings/google-setup-terminal
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
 type ServerPlatform = "win32" | "linux" | "darwin" | string;
+type ClientType = "installed" | "web" | null;
 
 interface Status {
   uvxInstalled: boolean;
   uvBinaryFound?: boolean;
   credentialsConfigured: boolean;
   connected: boolean;
+  clientType?: ClientType;
+  accountEmail?: string | null;
   platform?: ServerPlatform;
   powershell?: string | null;
   downloader?: "curl" | "wget" | null;
 }
 
-function platformLabel(p: ServerPlatform | undefined): string {
-  if (p === "win32") return "Windows";
-  if (p === "linux") return "Linux";
-  if (p === "darwin") return "macOS";
-  return "this server";
+type UiMode =
+  | "loading"
+  | "setup"
+  | "device-flow" // Desktop-client path: code + polling
+  | "authorizing" // Web-client legacy redirect path
+  | "connected"
+  | "error";
+
+interface DeviceStartResponse {
+  deviceCode: string;
+  userCode: string;
+  verificationUrl: string;
+  verificationUrlComplete: string;
+  expiresIn: number;
+  interval: number;
 }
 
-type UiMode = "loading" | "setup" | "authorizing" | "connected" | "error";
+/**
+ * Try to parse a pasted credentials.json into clientId + clientSecret +
+ * client type. Accepts both Google OAuth shapes:
+ *   { "installed": { client_id, client_secret, ... } }  → Desktop
+ *   { "web":       { client_id, client_secret, ... } }  → Web
+ * Returns null if the JSON is invalid or doesn't match either shape — the
+ * UI surfaces a specific error in that case.
+ */
+function parseCredentialsJson(raw: string): {
+  clientId: string;
+  clientSecret: string;
+  clientType: "installed" | "web";
+} | null {
+  try {
+    const parsed = JSON.parse(raw) as {
+      installed?: { client_id?: string; client_secret?: string };
+      web?: { client_id?: string; client_secret?: string };
+    };
+    if (parsed.installed?.client_id && parsed.installed.client_secret) {
+      return {
+        clientId: parsed.installed.client_id,
+        clientSecret: parsed.installed.client_secret,
+        clientType: "installed",
+      };
+    }
+    if (parsed.web?.client_id && parsed.web.client_secret) {
+      return {
+        clientId: parsed.web.client_id,
+        clientSecret: parsed.web.client_secret,
+        clientType: "web",
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * "Use a different Google account" wizard.
@@ -48,11 +99,30 @@ export function GoogleCustomWizard() {
   const [mode, setMode] = useState<UiMode>("loading");
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  // Client-parsed credentials.json — read from an uploaded file. Stored as
+  // a string so it lands on the server exactly the way the credentials
+  // endpoint expects (the { json } POST body).
+  const [jsonPaste, setJsonPaste] = useState("");
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [detectedType, setDetectedType] = useState<"installed" | "web" | null>(null);
+  const [jsonError, setJsonError] = useState<string | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
   const [savingCreds, setSavingCreds] = useState(false);
   const [credentialsError, setCredentialsError] = useState<string | null>(null);
 
-  // Auth stream state
+  // Device-flow state (Desktop clients)
+  const [device, setDevice] = useState<DeviceStartResponse | null>(null);
+  const [devicePolling, setDevicePolling] = useState(false);
+  const [deviceError, setDeviceError] = useState<string | null>(null);
+  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [codeCopied, setCodeCopied] = useState(false);
+  const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollIntervalRef = useRef<number>(5);
+  const pollExpiryRef = useRef<number>(0);
+  const [nowTick, setNowTick] = useState(0);
+
+  // Legacy web-redirect SSE state (kept for Web clients)
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [authorizedEmail, setAuthorizedEmail] = useState<string | null>(null);
   const [logs, setLogs] = useState<string[]>([]);
@@ -67,12 +137,20 @@ export function GoogleCustomWizard() {
   const [setupBooting, setSetupBooting] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
 
+  // Server-side web-redirect flow state.
+  const [webFlowPending, setWebFlowPending] = useState(false);
+  const [webFlowError, setWebFlowError] = useState<string | null>(null);
+  const [showLegacyWebOptions, setShowLegacyWebOptions] = useState(false);
+  const webFlowPollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const webFlowExpiryRef = useRef<number>(0);
+
   const refreshStatus = useCallback(async () => {
     try {
       const res = await authFetch(`${BASE}/api/google-custom/status`);
       if (!res.ok) throw new Error("status");
       const data = (await res.json()) as Status;
       setStatus(data);
+      if (data.accountEmail) setSignedInEmail(data.accountEmail);
       if (data.connected) setMode("connected");
       else setMode("setup");
     } catch {
@@ -85,29 +163,214 @@ export function GoogleCustomWizard() {
     void refreshStatus();
   }, [refreshStatus]);
 
+  // Parse the credentials.json contents in the browser so the user sees
+  // the detected client type before they even hit Save. The same string
+  // lands on the server via the { json } POST body — the server repeats
+  // the parse for validation.
+  const handleParsedJson = useCallback((raw: string) => {
+    setJsonPaste(raw);
+    setJsonError(null);
+    if (!raw.trim()) {
+      setDetectedType(null);
+      return;
+    }
+    const parsed = parseCredentialsJson(raw);
+    if (!parsed) {
+      setDetectedType(null);
+      setJsonError(
+        "Couldn't find client_id / client_secret in that JSON. Expected either an " +
+          '"installed" (Desktop) or "web" (Web application) block.',
+      );
+      return;
+    }
+    setDetectedType(parsed.clientType);
+    // Auto-fill the two manual fields so the user can inspect / edit if
+    // needed, and so the Save button enables without extra tabbing.
+    setClientId(parsed.clientId);
+    setClientSecret(parsed.clientSecret);
+  }, []);
+
+  // File-upload entrypoint: read the picked file as text, then reuse the
+  // same validation path as the manual fields.
+  const onJsonFilePicked = useCallback(
+    (file: File | null | undefined) => {
+      if (!file) return;
+      setUploadedFileName(file.name);
+      setJsonError(null);
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = typeof reader.result === "string" ? reader.result : "";
+        handleParsedJson(text);
+      };
+      reader.onerror = () => {
+        setJsonError("Could not read that file.");
+        setDetectedType(null);
+      };
+      reader.readAsText(file);
+    },
+    [handleParsedJson],
+  );
+
+  const clearUploadedJson = useCallback(() => {
+    setUploadedFileName(null);
+    setJsonPaste("");
+    setDetectedType(null);
+    setJsonError(null);
+    setClientId("");
+    setClientSecret("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }, []);
+
   const saveCredentials = useCallback(async () => {
-    if (!clientId.trim() || !clientSecret.trim() || savingCreds) return;
+    const usingJson = jsonPaste.trim().length > 0;
+    if (!usingJson && (!clientId.trim() || !clientSecret.trim())) return;
+    if (savingCreds) return;
+
     setSavingCreds(true);
     setCredentialsError(null);
     try {
+      const payload = usingJson
+        ? { json: jsonPaste }
+        : { clientId: clientId.trim(), clientSecret: clientSecret.trim() };
       const res = await authFetch(`${BASE}/api/google-custom/credentials`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId: clientId.trim(), clientSecret: clientSecret.trim() }),
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(body.error || "Failed to save credentials");
       }
-      // Clear the secret field after save so it isn't lingering in the DOM.
+      // Clear the parsed JSON + secret so nothing lingers in the DOM after
+      // save. Filename is cleared too so the user sees a fresh state if
+      // they come back to edit.
+      setJsonPaste("");
+      setUploadedFileName(null);
       setClientSecret("");
+      setDetectedType(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
       await refreshStatus();
     } catch (err) {
       setCredentialsError(err instanceof Error ? err.message : "Failed to save credentials");
     } finally {
       setSavingCreds(false);
     }
-  }, [clientId, clientSecret, savingCreds, refreshStatus]);
+  }, [clientId, clientSecret, jsonPaste, savingCreds, refreshStatus]);
+
+  // ─────────── Device Flow (Desktop clients) ───────────
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearTimeout(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+    setDevicePolling(false);
+  }, []);
+
+  const pollOnce = useCallback(
+    async (deviceCode: string) => {
+      if (Date.now() > pollExpiryRef.current) {
+        setDeviceError("The sign-in code expired. Click Sign in again to get a new one.");
+        stopPolling();
+        return;
+      }
+      try {
+        const res = await authFetch(`${BASE}/api/google-custom/device-poll`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ deviceCode }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          status?: string;
+          email?: string;
+          error?: string;
+        };
+        if (data.status === "success") {
+          setSignedInEmail(data.email ?? null);
+          stopPolling();
+          setDevice(null);
+          await refreshStatus();
+          return;
+        }
+        if (data.status === "slow_down") {
+          pollIntervalRef.current = Math.min(pollIntervalRef.current * 2, 30);
+        } else if (data.status === "pending") {
+          // keep polling at current interval
+        } else if (data.status === "error") {
+          setDeviceError(data.error || "Sign-in failed");
+          stopPolling();
+          return;
+        } else if (!res.ok) {
+          setDeviceError(data.error || `HTTP ${res.status}`);
+          stopPolling();
+          return;
+        }
+        pollTimerRef.current = setTimeout(
+          () => void pollOnce(deviceCode),
+          pollIntervalRef.current * 1000,
+        );
+      } catch (err) {
+        setDeviceError(err instanceof Error ? err.message : "Network error while polling");
+        stopPolling();
+      }
+    },
+    [refreshStatus, stopPolling],
+  );
+
+  const startDeviceFlow = useCallback(async () => {
+    setMode("device-flow");
+    setDevice(null);
+    setDeviceError(null);
+    setSignedInEmail(null);
+    setDevicePolling(true);
+    try {
+      const res = await authFetch(`${BASE}/api/google-custom/device-start`, {
+        method: "POST",
+      });
+      const data = (await res.json().catch(() => ({}))) as
+        | (DeviceStartResponse & { error?: undefined })
+        | { error: string };
+      if (!res.ok || "error" in data) {
+        throw new Error(("error" in data && data.error) || `HTTP ${res.status}`);
+      }
+      setDevice(data);
+      pollIntervalRef.current = data.interval || 5;
+      pollExpiryRef.current = Date.now() + (data.expiresIn || 1800) * 1000;
+      pollTimerRef.current = setTimeout(
+        () => void pollOnce(data.deviceCode),
+        pollIntervalRef.current * 1000,
+      );
+    } catch (err) {
+      setDeviceError(err instanceof Error ? err.message : "Failed to start sign-in");
+      setDevicePolling(false);
+    }
+  }, [pollOnce]);
+
+  // Tick the "expires in N:NN" label once per second while polling.
+  useEffect(() => {
+    if (!devicePolling) return;
+    const id = setInterval(() => setNowTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [devicePolling]);
+
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+    };
+  }, []);
+
+  const copyUserCode = useCallback(async () => {
+    if (!device) return;
+    try {
+      await navigator.clipboard.writeText(device.userCode);
+      setCodeCopied(true);
+      setTimeout(() => setCodeCopied(false), 1500);
+    } catch {
+      /* ignore */
+    }
+  }, [device]);
+
+  // ─────────── Legacy Web-redirect flow (Web clients only) ───────────
 
   const startAuthorize = useCallback(async () => {
     setMode("authorizing");
@@ -167,13 +430,29 @@ export function GoogleCustomWizard() {
     } catch {
       /* best-effort */
     }
+    stopPolling();
+    // stopWebFlowPolling is declared below via useCallback; it's safe to
+    // call here because disconnect itself only fires from user clicks long
+    // after the component body ran.
+    if (webFlowPollTimerRef.current) {
+      clearTimeout(webFlowPollTimerRef.current);
+      webFlowPollTimerRef.current = null;
+    }
+    setWebFlowPending(false);
+    setWebFlowError(null);
     setClientId("");
     setClientSecret("");
+    setJsonPaste("");
+    setUploadedFileName(null);
+    setDetectedType(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
     setAuthUrl(null);
     setAuthorizedEmail(null);
+    setSignedInEmail(null);
+    setDevice(null);
     setLogs([]);
     await refreshStatus();
-  }, [refreshStatus]);
+  }, [refreshStatus, stopPolling]);
 
   const copyUrl = useCallback(async () => {
     if (!authUrl) return;
@@ -186,11 +465,8 @@ export function GoogleCustomWizard() {
     }
   }, [authUrl]);
 
-  // Interactive-terminal setup path. Unlike the SSE authorize flow (which
-  // hangs because workspace-mcp only emits the OAuth URL on the first MCP
-  // tool call), this path spawns workspace-mcp in a real PTY the user can
-  // see and interact with. The server writes a helper script with all the
-  // right env vars + the public redirect URI, and we run it here.
+  // Interactive-terminal setup path (Web-client redirect flow — kept as
+  // a fallback for users who already had it working).
   const openSetupTerminal = useCallback(async () => {
     if (setupBooting) return;
     setSetupBooting(true);
@@ -218,7 +494,69 @@ export function GoogleCustomWizard() {
     void refreshStatus();
   }, [refreshStatus]);
 
-  // ───────────── Rendering ─────────────
+  // ─────────── Server-side Web-redirect flow (preferred for Web clients) ───────────
+  // No terminal, no workspace-mcp OAuth proxy, no nginx trick. We build the
+  // Google auth URL, open it in a new tab, and poll /status to notice when
+  // the callback finishes on the server side.
+
+  const stopWebFlowPolling = useCallback(() => {
+    if (webFlowPollTimerRef.current) {
+      clearTimeout(webFlowPollTimerRef.current);
+      webFlowPollTimerRef.current = null;
+    }
+    setWebFlowPending(false);
+  }, []);
+
+  const pollWebFlow = useCallback(async () => {
+    if (Date.now() > webFlowExpiryRef.current) {
+      setWebFlowError("Sign-in timed out. Click Sign in with Google again to retry.");
+      stopWebFlowPolling();
+      return;
+    }
+    try {
+      const res = await authFetch(`${BASE}/api/google-custom/status`);
+      const data = (await res.json().catch(() => ({}))) as Status;
+      if (data.connected && data.accountEmail) {
+        setSignedInEmail(data.accountEmail);
+        setStatus(data);
+        setMode("connected");
+        stopWebFlowPolling();
+        return;
+      }
+      webFlowPollTimerRef.current = setTimeout(() => void pollWebFlow(), 2000);
+    } catch {
+      webFlowPollTimerRef.current = setTimeout(() => void pollWebFlow(), 3000);
+    }
+  }, [stopWebFlowPolling]);
+
+  const startWebRedirectFlow = useCallback(async () => {
+    setWebFlowError(null);
+    try {
+      const res = await authFetch(`${BASE}/api/google-custom/web-authorize-start`, {
+        method: "POST",
+      });
+      const data = (await res.json().catch(() => ({}))) as { authUrl?: string; error?: string };
+      if (!res.ok || !data.authUrl) {
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      // Browsers sometimes block window.open calls not tied to a click; this
+      // handler is synchronous inside the button onClick, so this is fine.
+      window.open(data.authUrl, "_blank", "noopener,noreferrer");
+      setWebFlowPending(true);
+      webFlowExpiryRef.current = Date.now() + 10 * 60 * 1000;
+      webFlowPollTimerRef.current = setTimeout(() => void pollWebFlow(), 2000);
+    } catch (err) {
+      setWebFlowError(err instanceof Error ? err.message : "Failed to start sign-in");
+    }
+  }, [pollWebFlow]);
+
+  useEffect(() => {
+    return () => {
+      if (webFlowPollTimerRef.current) clearTimeout(webFlowPollTimerRef.current);
+    };
+  }, []);
+
+  // ───────────────────── Rendering ─────────────────────
 
   if (mode === "loading" || !status) {
     return (
@@ -239,7 +577,16 @@ export function GoogleCustomWizard() {
             </span>
           </div>
           <p className="text-[12px] text-canvas-muted">
-            Claude Code will use this connection for Gmail, Drive, Calendar, Docs, and Sheets.
+            {status.accountEmail ? (
+              <>
+                Signed in as <span className="font-mono text-canvas-fg">{status.accountEmail}</span>
+                . Claude Code will use this connection for Gmail, Drive, Calendar, Docs, and Sheets.
+              </>
+            ) : (
+              <>
+                Claude Code will use this connection for Gmail, Drive, Calendar, Docs, and Sheets.
+              </>
+            )}{" "}
             Restart the dev server after any change for it to take effect.
           </p>
         </div>
@@ -247,7 +594,7 @@ export function GoogleCustomWizard() {
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={startAuthorize}
+            onClick={status.clientType === "installed" ? startDeviceFlow : startAuthorize}
             className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[12px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
           >
             <FiRefreshCw size={11} />
@@ -260,6 +607,115 @@ export function GoogleCustomWizard() {
           >
             <FiLogOut size={11} />
             Disconnect
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (mode === "device-flow") {
+    const msLeft = Math.max(0, pollExpiryRef.current - Date.now());
+    const minutes = Math.floor(msLeft / 60000);
+    const seconds = Math.floor((msLeft % 60000) / 1000);
+    const timeLabel = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+    // nowTick is referenced so React re-renders every second while polling;
+    // the `msLeft` computation above relies on Date.now() which doesn't
+    // itself trigger a render.
+    void nowTick;
+
+    return (
+      <div className="space-y-4">
+        <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
+          <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-canvas-muted">
+            Sign in with Google
+          </p>
+
+          {signedInEmail ? (
+            <div className="flex items-center gap-2 rounded-lg bg-green-500/10 px-3 py-2 text-[12px] text-green-600">
+              <FiCheck size={12} />
+              Signed in as <span className="font-mono">{signedInEmail}</span>
+            </div>
+          ) : device ? (
+            <>
+              <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
+                Enter this code at{" "}
+                <a
+                  href={device.verificationUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-accent underline"
+                >
+                  {device.verificationUrl.replace(/^https?:\/\//, "")}
+                </a>
+                , or just click the sign-in button below — it opens a link that already includes the
+                code.
+              </p>
+
+              <div className="mb-3 flex items-center gap-2 rounded-lg bg-canvas-bg px-3 py-3">
+                <code className="flex-1 text-center font-mono text-[20px] font-semibold tracking-[0.3em] text-canvas-fg">
+                  {device.userCode}
+                </code>
+                <button
+                  type="button"
+                  onClick={copyUserCode}
+                  className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                >
+                  {codeCopied ? <FiCheck size={11} /> : <FiCopy size={11} />}
+                  {codeCopied ? "Copied" : "Copy"}
+                </button>
+              </div>
+
+              <a
+                href={device.verificationUrlComplete}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90"
+              >
+                <FiExternalLink size={12} />
+                Open Google to sign in
+              </a>
+
+              <div className="mt-3 flex items-center gap-2 text-[11px] text-canvas-muted">
+                <FiLoader size={11} className="animate-spin" />
+                Waiting for you to approve… (expires in {timeLabel})
+              </div>
+            </>
+          ) : (
+            <div className="flex items-center gap-2 text-[12px] text-canvas-muted">
+              <FiLoader size={12} className="animate-spin" />
+              Getting a code from Google…
+            </div>
+          )}
+
+          {deviceError && (
+            <p className="mt-3 flex items-start gap-1 text-[11px] text-red-500">
+              <FiAlertTriangle size={10} className="mt-[2px] shrink-0" />
+              {deviceError}
+            </p>
+          )}
+        </div>
+
+        <div className="flex justify-end gap-2">
+          {deviceError && (
+            <button
+              type="button"
+              onClick={startDeviceFlow}
+              className="rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white hover:opacity-90"
+            >
+              Try again
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => {
+              stopPolling();
+              setDevice(null);
+              setDeviceError(null);
+              setMode("setup");
+            }}
+            className="rounded-lg px-3 py-2 text-[12px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+          >
+            Cancel
           </button>
         </div>
       </div>
@@ -357,6 +813,14 @@ export function GoogleCustomWizard() {
   }
 
   // mode === "setup"
+  const savedType = status.clientType ?? null;
+  const effectiveType: ClientType = detectedType ?? savedType;
+  const canSave =
+    status.uvxInstalled &&
+    !savingCreds &&
+    (jsonPaste.trim().length > 0 || (clientId.trim().length > 0 && clientSecret.trim().length > 0));
+  const canSignIn = status.credentialsConfigured && !savingCreds;
+
   return (
     <div className="space-y-4">
       <p className="text-[11px] text-canvas-muted">
@@ -464,63 +928,161 @@ export function GoogleCustomWizard() {
               >
                 Credentials
               </a>{" "}
-              → Create Credentials → OAuth client ID →{" "}
-              <span className="font-medium text-canvas-fg">Desktop app</span>.
+              → Create Credentials → OAuth client ID → pick{" "}
+              <span className="font-medium text-canvas-fg">Web application</span>.
             </li>
-            <li>Copy the Client ID and Client Secret into the fields below.</li>
+            <li>
+              Under <span className="font-medium text-canvas-fg">Authorized redirect URIs</span>,
+              add this exact URL:
+              <code className="mt-1 block overflow-x-auto rounded bg-canvas-bg px-2 py-1 text-[10px] text-canvas-fg">
+                https://&lt;your-host&gt;/chat/api/google-custom/oauth-callback
+              </code>
+              Replace <code>&lt;your-host&gt;</code> with the domain you access this app on (e.g.{" "}
+              <code>vukasin-claude.viksi.ai</code>).
+            </li>
+            <li>
+              Click <span className="font-medium text-canvas-fg">Download JSON</span> on the client
+              row and upload the file below. Then use the &quot;Run Setup in Terminal&quot; button
+              in Step 3 to finish sign-in.
+            </li>
+            <li className="text-canvas-muted/80">
+              <span className="font-medium">Why not Desktop app or TVs and Limited Input?</span>{" "}
+              Desktop clients can&apos;t register a public https redirect, and Google&apos;s device
+              flow (TVs / Limited Input) only allows identity, YouTube, and file-scoped Drive — no
+              Gmail, no Calendar, no Docs/Sheets. Web application is the only type that works for
+              full Workspace access on a remote host.
+            </li>
           </ol>
         )}
 
-        <div className="space-y-2">
-          <div>
-            <label className="mb-1 block text-[11px] text-canvas-muted" htmlFor="gc-client-id">
-              Client ID
-            </label>
-            <input
-              id="gc-client-id"
-              type="text"
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              placeholder="1234567890-abc.apps.googleusercontent.com"
+        {/* credentials.json upload (primary) */}
+        <div className="mb-3">
+          <label className="mb-1 block text-[11px] text-canvas-muted">
+            Upload <code className="text-canvas-fg">credentials.json</code>
+          </label>
+          {/* Hidden file input — click is proxied from the visible button.
+              Parsing, detection, and field auto-fill happen in
+              onJsonFilePicked. The file contents never leave the browser
+              except as part of the eventual Save POST body. */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="hidden"
+            onChange={(e) => onJsonFilePicked(e.target.files?.[0])}
+          />
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
               disabled={!status.uvxInstalled}
-              className="w-full rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none disabled:opacity-50"
-            />
+              className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] font-medium text-canvas-fg transition-colors hover:bg-canvas-surface-hover disabled:opacity-50"
+            >
+              <FiUpload size={12} />
+              {uploadedFileName ? "Replace file" : "Choose credentials.json"}
+            </button>
+            {uploadedFileName && (
+              <>
+                <span className="inline-flex items-center gap-1 rounded-md bg-canvas-surface-hover px-2 py-1 font-mono text-[11px] text-canvas-fg">
+                  {uploadedFileName}
+                </span>
+                <button
+                  type="button"
+                  onClick={clearUploadedJson}
+                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                  title="Clear uploaded file"
+                >
+                  <FiX size={11} />
+                  Clear
+                </button>
+              </>
+            )}
           </div>
-          <div>
-            <label className="mb-1 block text-[11px] text-canvas-muted" htmlFor="gc-client-secret">
-              Client Secret{" "}
-              {status.credentialsConfigured && (
-                <span className="ml-1 text-[10px] text-green-500">(configured)</span>
-              )}
-            </label>
-            <input
-              id="gc-client-secret"
-              type="password"
-              value={clientSecret}
-              onChange={(e) => setClientSecret(e.target.value)}
-              placeholder={
-                status.credentialsConfigured ? "•••• leave blank to keep existing" : "GOCSPX-..."
-              }
-              disabled={!status.uvxInstalled}
-              className="w-full rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none disabled:opacity-50"
-            />
+          <div className="mt-1.5 flex items-center gap-2 text-[11px]">
+            {detectedType === "installed" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2 py-0.5 text-green-600">
+                <FiCheck size={10} />
+                Desktop client detected — device flow will be used
+              </span>
+            )}
+            {detectedType === "web" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-blue-600">
+                <FiCheck size={10} />
+                Web client detected — redirect flow will be used
+              </span>
+            )}
+            {jsonError && (
+              <span className="inline-flex items-start gap-1 text-red-500">
+                <FiAlertTriangle size={10} className="mt-[2px] shrink-0" />
+                {jsonError}
+              </span>
+            )}
           </div>
-          {credentialsError && <p className="text-[11px] text-red-500">{credentialsError}</p>}
-          <button
-            type="button"
-            onClick={saveCredentials}
-            disabled={
-              !status.uvxInstalled || savingCreds || !clientId.trim() || !clientSecret.trim()
-            }
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
-          >
-            <FiKey size={12} />
-            {savingCreds ? "Saving..." : "Save credentials"}
-          </button>
         </div>
+
+        {/* Manual fallback fields */}
+        <details className="mb-3">
+          <summary className="cursor-pointer text-[11px] text-canvas-muted hover:text-canvas-fg">
+            Enter Client ID / Secret manually instead
+          </summary>
+          <div className="mt-2 space-y-2">
+            <div>
+              <label className="mb-1 block text-[11px] text-canvas-muted" htmlFor="gc-client-id">
+                Client ID
+              </label>
+              <input
+                id="gc-client-id"
+                type="text"
+                value={clientId}
+                onChange={(e) => setClientId(e.target.value)}
+                placeholder="1234567890-abc.apps.googleusercontent.com"
+                disabled={!status.uvxInstalled}
+                className="w-full rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none disabled:opacity-50"
+              />
+            </div>
+            <div>
+              <label
+                className="mb-1 block text-[11px] text-canvas-muted"
+                htmlFor="gc-client-secret"
+              >
+                Client Secret{" "}
+                {status.credentialsConfigured && (
+                  <span className="ml-1 text-[10px] text-green-500">(configured)</span>
+                )}
+              </label>
+              <input
+                id="gc-client-secret"
+                type="password"
+                value={clientSecret}
+                onChange={(e) => setClientSecret(e.target.value)}
+                placeholder={
+                  status.credentialsConfigured ? "•••• leave blank to keep existing" : "GOCSPX-..."
+                }
+                disabled={!status.uvxInstalled}
+                className="w-full rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none disabled:opacity-50"
+              />
+            </div>
+          </div>
+        </details>
+
+        {credentialsError && <p className="mb-2 text-[11px] text-red-500">{credentialsError}</p>}
+
+        <button
+          type="button"
+          onClick={saveCredentials}
+          disabled={!canSave}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+        >
+          <FiKey size={12} />
+          {savingCreds
+            ? "Saving..."
+            : status.credentialsConfigured
+              ? "Update credentials"
+              : "Save credentials"}
+        </button>
       </div>
 
-      {/* Step 3: Authorize */}
+      {/* Step 3: Sign in */}
       <div
         className={`rounded-xl border border-canvas-border bg-canvas-surface p-4 ${
           !status.credentialsConfigured ? "opacity-50" : ""
@@ -529,44 +1091,105 @@ export function GoogleCustomWizard() {
         <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-canvas-muted">
           Step 3 — Sign in with Google
         </p>
-        <p className="mb-3 text-[11px] text-canvas-muted">
-          Pick the Google account you want to use in the account picker. You&apos;ll see an
-          &quot;unverified app&quot; warning — click{" "}
-          <span className="font-medium">Advanced → Go to …</span> to continue. It&apos;s safe since
-          you own the OAuth app.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={openSetupTerminal}
-            disabled={!status.credentialsConfigured || setupBooting}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
-          >
-            <FiTerminal size={12} />
-            {setupBooting ? "Preparing…" : "Run Setup in Terminal"}
-          </button>
-          <button
-            type="button"
-            onClick={startAuthorize}
-            disabled={!status.credentialsConfigured}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[12px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
-            title="Legacy SSE flow — use the terminal path above if this hangs"
-          >
-            <FiExternalLink size={12} />
-            Classic sign-in
-          </button>
-        </div>
+
+        {effectiveType === "installed" ? (
+          <>
+            <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
+              We&apos;ll use Google&apos;s device flow — no redirect URL needed. You&apos;ll get a
+              code to enter on any device.{" "}
+              <span className="font-medium text-canvas-fg">
+                Your OAuth client must be registered as &quot;TVs and Limited Input devices&quot;
+              </span>{" "}
+              — Google rejects Desktop-app clients here with &quot;Invalid client type&quot;. Both
+              types produce identical JSON, so paste-time detection can&apos;t tell them apart.
+            </p>
+            <button
+              type="button"
+              onClick={startDeviceFlow}
+              disabled={!canSignIn}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+            >
+              <FiExternalLink size={12} />
+              Sign in with Google
+            </button>
+          </>
+        ) : (
+          <>
+            <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
+              We&apos;ll open Google&apos;s sign-in page in a new tab. Pick the account, approve the
+              scopes, and you&apos;ll see a confirmation page you can close. This panel will
+              auto-update.
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={startWebRedirectFlow}
+                disabled={!canSignIn || webFlowPending}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+              >
+                <FiExternalLink size={12} />
+                {webFlowPending ? "Waiting for Google…" : "Sign in with Google"}
+              </button>
+              {webFlowPending && (
+                <span className="inline-flex items-center gap-1.5 text-[11px] text-canvas-muted">
+                  <FiLoader size={11} className="animate-spin" />
+                  Open the new tab, sign in, then come back here.
+                </span>
+              )}
+            </div>
+            {webFlowError && (
+              <p className="mt-2 flex items-start gap-1 text-[11px] text-red-500">
+                <FiAlertTriangle size={10} className="mt-[2px] shrink-0" />
+                {webFlowError}
+              </p>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowLegacyWebOptions((v) => !v)}
+              className="mt-3 text-[11px] text-canvas-muted hover:text-canvas-fg"
+            >
+              {showLegacyWebOptions ? "Hide" : "Show"} legacy sign-in paths
+            </button>
+            {showLegacyWebOptions && (
+              <div className="mt-2 space-y-2 rounded-lg border border-canvas-border bg-canvas-bg/40 p-3">
+                <p className="text-[10px] leading-relaxed text-canvas-muted">
+                  The new <span className="font-medium">Sign in with Google</span> button above
+                  handles the full OAuth handshake on the server — no terminal, no nginx tricks.
+                  These fallbacks exist only for legacy deployments that haven&apos;t picked up the
+                  latest server build.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={openSetupTerminal}
+                    disabled={!canSignIn || setupBooting}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+                  >
+                    <FiTerminal size={11} />
+                    {setupBooting ? "Preparing…" : "Run Setup in Terminal"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={startAuthorize}
+                    disabled={!canSignIn}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+                    title="Legacy SSE flow"
+                  >
+                    <FiExternalLink size={11} />
+                    Classic sign-in
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
         {setupError && (
           <p className="mt-2 flex items-center gap-1 text-[11px] text-red-500">
             <FiAlertTriangle size={10} />
             {setupError}
           </p>
         )}
-        <p className="mt-2 text-[10px] text-canvas-muted">
-          The terminal path runs <code>uvx workspace-mcp</code> in a live PTY inside the container
-          and proxies Google&apos;s OAuth callback back through the chat&apos;s public URL — use it
-          when the classic sign-in hangs on a remote deployment.
-        </p>
       </div>
 
       {authorizedEmail && (
@@ -608,45 +1231,37 @@ function PrereqInstaller({ status, onInstalled }: PrereqInstallerProps) {
   let blockReason: string | null = null;
   if (isWindows && status.powershell === null) {
     blockReason =
-      "No PowerShell found on this server. Install PowerShell 7 (pwsh) or run the install command manually.";
+      "PowerShell wasn't found on the server. Install uv manually: " +
+      "irm https://astral.sh/uv/install.ps1 | iex";
   } else if (isUnix && status.downloader === null) {
-    blockReason = "Neither curl nor wget is installed. Install one of them and try again.";
-  } else if (!isWindows && !isUnix) {
-    blockReason = `Unsupported platform: ${serverPlatform ?? "unknown"}.`;
+    blockReason =
+      "Neither curl nor wget is installed on the server. " + "Install one of them, then refresh.";
   }
 
-  const unixCmd =
-    status.downloader === "wget"
-      ? "wget -qO- https://astral.sh/uv/install.sh | sh"
-      : "curl -LsSf https://astral.sh/uv/install.sh | sh";
-
-  const startInstall = useCallback(async () => {
+  const runInstall = useCallback(async () => {
+    if (installing || blockReason) return;
     setInstalling(true);
     setLogs([]);
     setError(null);
     setDone(false);
 
-    abortRef.current?.abort();
-    const ac = new AbortController();
-    abortRef.current = ac;
+    const controller = new AbortController();
+    abortRef.current = controller;
 
     try {
       const res = await authFetch(`${BASE}/api/prereqs/install-uv`, {
         method: "POST",
-        signal: ac.signal,
+        signal: controller.signal,
       });
-      if (!res.ok || !res.body) {
-        const body = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(body.error || "Failed to start installer");
-      }
+      if (!res.ok || !res.body) throw new Error("Failed to start install");
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
 
       while (true) {
-        const { done: streamDone, value } = await reader.read();
-        if (streamDone) break;
+        const { done, value } = await reader.read();
+        if (done) break;
         buffer += decoder.decode(value, { stream: true });
         const blocks = buffer.split("\n\n");
         buffer = blocks.pop() || "";
@@ -656,9 +1271,7 @@ function PrereqInstaller({ status, onInstalled }: PrereqInstallerProps) {
           try {
             const evt = JSON.parse(line.slice(5).trim()) as Record<string, unknown>;
             if (evt.type === "log") {
-              setLogs((prev) => [...prev, evt.line as string].slice(-200));
-            } else if (evt.type === "status") {
-              setLogs((prev) => [...prev, `> ${evt.message as string}`].slice(-200));
+              setLogs((prev) => [...prev, evt.line as string].slice(-100));
             } else if (evt.type === "done") {
               if (evt.success) {
                 setDone(true);
@@ -669,17 +1282,16 @@ function PrereqInstaller({ status, onInstalled }: PrereqInstallerProps) {
               return;
             }
           } catch {
-            /* malformed event */
+            /* malformed */
           }
         }
       }
     } catch (err) {
-      if ((err as Error).name === "AbortError") return;
       setError(err instanceof Error ? err.message : "Install error");
     } finally {
       setInstalling(false);
     }
-  }, [onInstalled]);
+  }, [installing, blockReason, onInstalled]);
 
   const cancel = useCallback(async () => {
     abortRef.current?.abort();
@@ -688,153 +1300,53 @@ function PrereqInstaller({ status, onInstalled }: PrereqInstallerProps) {
     } catch {
       /* best-effort */
     }
-    setInstalling(false);
   }, []);
+
+  if (done) {
+    return (
+      <div className="text-[12px] text-green-500">
+        <FiCheck size={13} className="-mt-0.5 mr-1 inline" />
+        uvx installed — ready to continue.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">
-      <div className="flex items-center gap-2 text-[12px] text-orange-500">
-        <FiAlertTriangle size={13} />
-        <code className="text-[11px]">uvx</code> is not installed
-      </div>
-      <p className="text-[11px] text-canvas-muted">
-        Detected server OS: <span className="text-canvas-fg">{platformLabel(serverPlatform)}</span>
-        {isWindows && status.powershell && (
-          <>
-            {" "}
-            · PowerShell: <code className="text-canvas-fg">{status.powershell}</code>
-          </>
-        )}
-        {isUnix && status.downloader && (
-          <>
-            {" "}
-            · Downloader: <code className="text-canvas-fg">{status.downloader}</code>
-          </>
-        )}
-        . Click Install to run the official installer — it places{" "}
-        <code className="text-[11px]">uv</code> in your home directory (no sudo needed).
+      <p className="text-[12px] text-canvas-muted">
+        <code className="text-[11px]">uvx</code> isn&apos;t on this server yet. Install it now:
       </p>
-
-      {/* "uv installed but not yet on PATH" hint */}
-      {status.uvBinaryFound && !status.uvxInstalled && (
-        <div className="flex items-start gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-2 text-[11px] text-canvas-fg">
-          <FiAlertTriangle size={11} className="mt-0.5 shrink-0 text-yellow-500" />
-          <span>
-            <code className="text-[11px]">uv</code> is installed but not on this server&apos;s PATH.
-            Click <span className="font-medium">Check again</span> — if that doesn&apos;t pick it
-            up, restart the app.
-          </span>
-        </div>
-      )}
-
-      {/* OS-labeled command references */}
-      <div
-        className={`flex items-start gap-2 rounded-lg px-3 py-2 ${
-          isUnix ? "bg-accent/10 ring-1 ring-accent/30" : "bg-canvas-bg"
-        }`}
-      >
-        <FiTerminal size={11} className="mt-0.5 shrink-0 text-canvas-muted" />
-        <div className="min-w-0 flex-1">
-          <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-canvas-muted">
-            Linux / macOS
-          </p>
-          <code className="block select-all break-all text-[11px] text-canvas-muted">
-            {unixCmd}
-          </code>
-        </div>
-      </div>
-      <div
-        className={`flex items-start gap-2 rounded-lg px-3 py-2 ${
-          isWindows ? "bg-accent/10 ring-1 ring-accent/30" : "bg-canvas-bg"
-        }`}
-      >
-        <FiTerminal size={11} className="mt-0.5 shrink-0 text-canvas-muted" />
-        <div className="min-w-0 flex-1">
-          <p className="mb-0.5 text-[10px] font-semibold uppercase tracking-wide text-canvas-muted">
-            Windows
-          </p>
-          <code className="block select-all break-all text-[11px] text-canvas-muted">
-            powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;irm
-            https://astral.sh/uv/install.ps1 | iex&quot;
-          </code>
-        </div>
-      </div>
-
-      {/* Blocker (PowerShell/curl missing) */}
       {blockReason && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 p-2 text-[11px] text-red-500">
-          <FiAlertTriangle size={11} className="mt-0.5 shrink-0" />
-          <span>{blockReason}</span>
-        </div>
+        <p className="rounded-md bg-yellow-500/10 px-2 py-1.5 text-[11px] text-yellow-600">
+          {blockReason}
+        </p>
       )}
-
-      {/* Action row */}
-      <div className="flex flex-wrap gap-2 pt-1">
-        {installing ? (
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={runInstall}
+          disabled={installing || !!blockReason}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+        >
+          <FiDownload size={12} />
+          {installing ? "Installing..." : "Install uv"}
+        </button>
+        {installing && (
           <button
             type="button"
             onClick={cancel}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-1.5 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[12px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
           >
             Cancel
           </button>
-        ) : (
-          <button
-            type="button"
-            onClick={startInstall}
-            disabled={!serverPlatform || !!blockReason}
-            title={blockReason ?? undefined}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <FiDownload size={11} />
-            Install uv on {platformLabel(serverPlatform)}
-          </button>
         )}
-        <button
-          type="button"
-          onClick={() => void onInstalled()}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-1.5 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
-        >
-          <FiRefreshCw size={10} />
-          Check again
-        </button>
       </div>
-
-      {installing && (
-        <div className="flex items-center gap-2 text-[11px] text-canvas-muted">
-          <FiLoader size={11} className="animate-spin" />
-          Installing… this can take a minute.
-        </div>
-      )}
-
-      {done && (
-        <div className="flex items-center gap-2 text-[11px] text-green-500">
-          <FiCheck size={11} />
-          uv installed. If it still shows missing, open a new shell so the updated PATH is picked
-          up, then click Check again.
-        </div>
-      )}
-
-      {error && (
-        <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/5 p-2 text-[11px] text-red-500">
-          <FiAlertTriangle size={11} className="mt-0.5 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
       {logs.length > 0 && (
-        <details
-          className="rounded-lg border border-canvas-border bg-canvas-bg p-2 text-[11px] text-canvas-muted"
-          open={installing}
-        >
-          <summary className="cursor-pointer select-none px-1 py-0.5">
-            Installer output ({logs.length})
-          </summary>
-          <pre className="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap px-1 font-mono text-[10px] leading-relaxed">
-            {logs.join("\n")}
-          </pre>
-        </details>
+        <pre className="max-h-40 overflow-y-auto rounded-md bg-canvas-bg p-2 font-mono text-[10px] leading-relaxed text-canvas-muted">
+          {logs.join("\n")}
+        </pre>
       )}
+      {error && <p className="text-[11px] text-red-500">{error}</p>}
     </div>
   );
 }

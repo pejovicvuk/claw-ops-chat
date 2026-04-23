@@ -105,7 +105,7 @@ export const MessageBubble = memo(function MessageBubble({
     return (
       <div className="flex justify-end px-4 py-1.5">
         <div
-          className="max-w-[85%] rounded-2xl rounded-br-md px-3.5 py-2.5"
+          className="max-w-[min(75%,1060px)] rounded-2xl rounded-br-md px-3.5 py-2.5"
           style={{ backgroundColor: "var(--user-bubble)" }}
         >
           <p

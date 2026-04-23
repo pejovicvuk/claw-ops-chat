@@ -18,6 +18,8 @@ interface SidebarProps {
   onRefreshSessions: () => void;
   sessionsLoading: boolean;
   runningSessionIds?: Set<string>;
+  /** Forwarded to SessionList — enables the Delete context-menu item. */
+  onDeleteSession?: (sessionId: string) => Promise<void>;
 }
 
 /**
@@ -37,6 +39,7 @@ export function Sidebar({
   onRefreshSessions,
   sessionsLoading,
   runningSessionIds,
+  onDeleteSession,
 }: SidebarProps) {
   const { params, setParam } = useUrlState();
   const mode: SidebarMode = params.get("sidebar") === "reports" ? "reports" : "chats";
@@ -110,6 +113,7 @@ export function Sidebar({
             onNewChat={onNewChat}
             onRefresh={onRefreshSessions}
             runningSessionIds={runningSessionIds}
+            onDeleteSession={onDeleteSession}
             hideHeader
             hideFooter
           />

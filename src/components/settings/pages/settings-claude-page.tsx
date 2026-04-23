@@ -59,6 +59,15 @@ export function SettingsClaudePage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // After submit-code succeeds we enter a "verifying" phase: the CLI is
+  // off talking to Anthropic's token endpoint and we're waiting for the
+  // /login SSE stream to emit `done`. A stuck submit is what originally
+  // made this feature feel broken — gating with this flag lets us show
+  // a spinner + live log and bail out via a 25s timeout instead of
+  // spinning forever.
+  const [verifying, setVerifying] = useState(false);
+  const [verifyTimedOut, setVerifyTimedOut] = useState(false);
+  const verifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
 
@@ -97,8 +106,12 @@ export function SettingsClaudePage() {
   useEffect(() => {
     void refreshStatus();
     return () => {
-      // Abort any live SSE stream on unmount.
+      // Abort any live SSE stream + pending verify timer on unmount.
       abortRef.current?.abort();
+      if (verifyTimerRef.current) {
+        clearTimeout(verifyTimerRef.current);
+        verifyTimerRef.current = null;
+      }
     };
   }, [refreshStatus]);
 
@@ -228,6 +241,14 @@ export function SettingsClaudePage() {
               } else if (type === "log") {
                 setLogs((prev) => [...prev, evt.line as string].slice(-50));
               } else if (type === "done") {
+                // The verify-timeout loses its race the moment `done`
+                // arrives, so cancel it before state transitions.
+                if (verifyTimerRef.current) {
+                  clearTimeout(verifyTimerRef.current);
+                  verifyTimerRef.current = null;
+                }
+                setVerifying(false);
+                setVerifyTimedOut(false);
                 if (evt.success) {
                   // Credentials saved — refresh status.
                   await refreshStatus();
@@ -255,6 +276,7 @@ export function SettingsClaudePage() {
   const submitCode = useCallback(async () => {
     if (!code.trim() || submitting) return;
     setSubmitting(true);
+    setVerifyTimedOut(false);
     try {
       const res = await authFetch(`${BASE}/api/claude-auth/submit-code`, {
         method: "POST",
@@ -263,10 +285,35 @@ export function SettingsClaudePage() {
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string };
+        // 410 = login process already died (10-min timer, crash, etc.).
+        // Route the user back to a fresh Start flow rather than the
+        // generic error screen — they just need to click "Sign in"
+        // again, not debug an error message.
+        if (res.status === 410) {
+          setLoginUrl(null);
+          setCode("");
+          setLogs([]);
+          setVerifying(false);
+          setErrorMsg(null);
+          setUi("disconnected");
+          return;
+        }
         setErrorMsg(body.error || "Failed to submit code");
         setUi("error");
+        return;
       }
-      // On success, the SSE stream will emit `done` and refresh status.
+      // Success: server accepted the code and wrote it to the CLI's
+      // stdin. The CLI is now verifying against Anthropic — we stay on
+      // this screen with a spinner until /login's SSE emits `done`.
+      setVerifying(true);
+      // 25s safety net: if `done` never arrives (SSE closed, CLI hung,
+      // CLI re-prompted for a code we didn't catch) surface a retry
+      // UI instead of an infinite spinner.
+      if (verifyTimerRef.current) clearTimeout(verifyTimerRef.current);
+      verifyTimerRef.current = setTimeout(() => {
+        setVerifyTimedOut(true);
+        setVerifying(false);
+      }, 25_000);
     } catch (err) {
       setErrorMsg((err as Error).message || "Failed to submit code");
       setUi("error");
@@ -277,6 +324,10 @@ export function SettingsClaudePage() {
 
   const cancelLogin = useCallback(async () => {
     abortRef.current?.abort();
+    if (verifyTimerRef.current) {
+      clearTimeout(verifyTimerRef.current);
+      verifyTimerRef.current = null;
+    }
     try {
       await authFetch(`${BASE}/api/claude-auth/cancel`, { method: "POST" });
     } catch {
@@ -285,6 +336,8 @@ export function SettingsClaudePage() {
     setLoginUrl(null);
     setCode("");
     setLogs([]);
+    setVerifying(false);
+    setVerifyTimedOut(false);
     setUi("disconnected");
   }, []);
 
@@ -506,37 +559,88 @@ export function SettingsClaudePage() {
           <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-canvas-muted">
             Step 2 of 2 — Paste your code
           </p>
-          <div className="flex items-center gap-2">
-            <input
-              type="text"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void submitCode();
-              }}
-              placeholder="xxx-xxx-xxx"
-              className="min-w-0 flex-1 rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none"
-            />
-            <button
-              type="button"
-              onClick={submitCode}
-              disabled={!code.trim() || submitting}
-              className="rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
-            >
-              {submitting ? "..." : "Submit"}
-            </button>
-          </div>
-          <p className="mt-2 text-[11px] text-canvas-muted">
-            After authorizing, copy the code shown in your browser.
-          </p>
+
+          {verifying ? (
+            <div className="flex items-center gap-2 rounded-lg bg-canvas-bg px-3 py-2 text-[12px] text-canvas-muted">
+              <FiLoader size={12} className="shrink-0 animate-spin text-accent" />
+              <span>Exchanging code with Anthropic…</span>
+            </div>
+          ) : verifyTimedOut ? (
+            <div className="space-y-2">
+              <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-300">
+                <FiAlertTriangle size={12} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-medium">Didn&apos;t hear back from Claude.</p>
+                  <p className="mt-0.5 text-[11px] opacity-90">
+                    The code may have been rejected or the sign-in session timed out. Check the log
+                    below, then try again or cancel and start over.
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVerifyTimedOut(false);
+                    setCode("");
+                  }}
+                  className="rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white hover:opacity-90"
+                >
+                  Retry — paste code again
+                </button>
+                <button
+                  type="button"
+                  onClick={cancelLogin}
+                  className="rounded-lg px-3 py-2 text-[12px] font-medium text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                >
+                  Start over
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void submitCode();
+                  }}
+                  placeholder="xxx-xxx-xxx"
+                  className="min-w-0 flex-1 rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={submitCode}
+                  disabled={!code.trim() || submitting}
+                  className="rounded-lg bg-accent px-3 py-2 text-[12px] font-medium text-white transition-colors hover:opacity-90 disabled:opacity-40"
+                >
+                  {submitting ? "..." : "Submit"}
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] text-canvas-muted">
+                After authorizing, copy the code shown in your browser.
+              </p>
+            </>
+          )}
         </div>
 
-        {/* Live log (collapsed) */}
-        {logs.length > 0 && (
-          <details className="rounded-xl border border-canvas-border bg-canvas-bg p-2 text-[11px] text-canvas-muted">
-            <summary className="cursor-pointer select-none px-1 py-1">Show log</summary>
+        {/* Live log — open by default once any log lines exist OR the
+            verify spinner is showing, so the user can see exactly what
+            the CLI is doing. That was the missing feedback loop: the
+            stream was already emitting `log` events, they just lived
+            inside a collapsed details summary. */}
+        {(logs.length > 0 || verifying) && (
+          <details
+            className="rounded-xl border border-canvas-border bg-canvas-bg p-2 text-[11px] text-canvas-muted"
+            open={verifying || verifyTimedOut}
+          >
+            <summary className="cursor-pointer select-none px-1 py-1">
+              Log {logs.length > 0 ? `(${logs.length})` : ""}
+            </summary>
             <pre className="mt-2 max-h-40 overflow-y-auto whitespace-pre-wrap px-1 font-mono text-[10px] leading-relaxed">
-              {logs.join("\n")}
+              {logs.length > 0 ? logs.join("\n") : "(waiting for output)"}
             </pre>
           </details>
         )}

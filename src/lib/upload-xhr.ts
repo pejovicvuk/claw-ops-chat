@@ -9,6 +9,13 @@ export interface UploadOptions {
   onProgress?: (fraction: number) => void;
   /** Abort signal to cancel mid-upload. */
   signal?: AbortSignal;
+  /**
+   * Optional path (relative to `dirPath`) where the file should land. Used by
+   * folder uploads — e.g. `"src/lib/foo.ts"` drops the file into
+   * `<dirPath>/src/lib/foo.ts`, creating the parent dirs server-side. When
+   * omitted the file lands directly under `dirPath` using its sanitized name.
+   */
+  relativePath?: string;
 }
 
 export interface UploadResponse {
@@ -90,6 +97,9 @@ export function uploadFileXhr(
 
     const formData = new FormData();
     formData.append("file", file);
+    if (options.relativePath) {
+      formData.append("relativePath", options.relativePath);
+    }
     xhr.send(formData);
   });
 }

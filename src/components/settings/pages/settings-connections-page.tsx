@@ -54,6 +54,14 @@ export function SettingsConnectionsPage() {
   const [jiraStatus, setJiraStatus] = useState<ConnectionStatus>("unknown");
   const [notionStatus, setNotionStatus] = useState<ConnectionStatus>("unknown");
   const [trelloStatus, setTrelloStatus] = useState<ConnectionStatus>("unknown");
+  /**
+   * Custom Google Workspace state — null while the initial fetch is in
+   * flight. `/api/mcp-status` (which populates `mcpServers` above) only
+   * reports Anthropic-hosted connectors and never surfaces our
+   * `google-workspace-custom` MCP entry, so we poll the custom path
+   * separately and OR the two signals into `googleStatus` below.
+   */
+  const [customGoogleConnected, setCustomGoogleConnected] = useState<boolean | null>(null);
   const { setParam } = useUrlState();
 
   // Claude Code auth status.
@@ -187,7 +195,44 @@ export function SettingsConnectionsPage() {
     };
   }, []);
 
-  const googleStatus = aggregateStatus(mcpServers, GOOGLE_IDS);
+  // Custom Google Workspace — same status endpoint the Google sub-page
+  // uses. Also re-fetch on window focus so the row flips to Connected the
+  // moment the user closes the OAuth consent tab and returns, without
+  // requiring a manual refresh. Mirrors the focus pattern on
+  // settings-google-page.tsx:99.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      authFetch(`${BASE}/api/google-custom/status`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then((data: { connected?: boolean } | null) => {
+          if (cancelled) return;
+          setCustomGoogleConnected(data?.connected ?? false);
+        });
+    };
+    load();
+    window.addEventListener("focus", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", load);
+    };
+  }, []);
+
+  // Google Workspace on this list covers both paths — the hosted
+  // Anthropic connectors (via `/api/mcp-status`) and our custom
+  // workspace-mcp path (via `/api/google-custom/status`). Either one
+  // being connected is enough to flip the row to Connected, because
+  // functionally they both give Claude Gmail/Drive/Calendar access.
+  // Preserve "unknown" while BOTH probes are still pending so the row
+  // doesn't flash "Not connected" on initial page load.
+  const hostedGoogle = aggregateStatus(mcpServers, GOOGLE_IDS);
+  const googleStatus: ConnectionStatus =
+    hostedGoogle === "connected" || customGoogleConnected
+      ? "connected"
+      : mcpServers !== null || customGoogleConnected !== null
+        ? "disconnected"
+        : "unknown";
   const microsoftStatus = singleStatus(mcpServers, "microsoft-365");
   const slackStatus = singleStatus(mcpServers, "slack");
 

@@ -15,9 +15,9 @@ const { query } = sdk as typeof import("@anthropic-ai/claude-agent-sdk");
 import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
-import { loadCredentialsSync as loadBitbucketCredentials } from "./src/lib/bitbucket-custom-config";
 import { loadCredentialsSync as loadJiraCredentials } from "./src/lib/jira-custom-config";
 import { loadCredentialsSync as loadTrelloCredentials } from "./src/lib/trello-custom-config";
+import { augmentPathWithLocalBin } from "./src/lib/platform-detect";
 import { existsSync, readdirSync, statSync } from "fs";
 import {
   setSessionStatus,
@@ -106,16 +106,39 @@ const ALLOWED_ORIGINS = new Set(
  */
 const RESPONSE_TIMEOUT_MS = parseInt(process.env.RESPONSE_TIMEOUT_MS || "86400000", 10);
 
-/* Load MCP servers from ~/.claude.json */
-let mcpServers: Record<string, unknown> | undefined;
+/**
+ * Re-read MCP servers from ~/.claude.json fresh on every turn. The file is
+ * mutated at runtime by the settings flows (Google, Bitbucket, Notion,
+ * Trello, etc. all call registerMcpServer / unregisterMcpServer), and if
+ * we cached the list at process startup any MCP registered after boot —
+ * the common case for a user wiring up their first Google connection —
+ * would stay invisible until the container restarted.
+ *
+ * Read is synchronous for simplicity; the file is tiny and lives on the
+ * container's local disk. handleUserMessage is already a long-running async
+ * function, one extra sync readFileSync per turn is noise.
+ */
+function loadMcpServers(): Record<string, unknown> | undefined {
+  try {
+    const claudeJson = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf-8"));
+    if (claudeJson.mcpServers && Object.keys(claudeJson.mcpServers).length > 0) {
+      return claudeJson.mcpServers;
+    }
+  } catch {
+    /* No ~/.claude.json or invalid — return undefined, SDK runs without MCP. */
+  }
+  return undefined;
+}
+
+/* One-shot log of whatever was registered when the server booted — purely
+   for operator visibility; the actual value used per-turn is re-read below. */
 try {
-  const claudeJson = JSON.parse(readFileSync(join(homedir(), ".claude.json"), "utf-8"));
-  if (claudeJson.mcpServers && Object.keys(claudeJson.mcpServers).length > 0) {
-    mcpServers = claudeJson.mcpServers;
-    console.log(`> Loaded MCP servers: ${Object.keys(mcpServers!).join(", ")}`);
+  const initial = loadMcpServers();
+  if (initial) {
+    console.log(`> Loaded MCP servers: ${Object.keys(initial).join(", ")}`);
   }
 } catch {
-  // No ~/.claude.json or invalid — continue without MCP
+  /* ignore */
 }
 
 /** Heartbeat interval in ms (default: 30 seconds). */
@@ -167,6 +190,14 @@ interface ChatSession {
    * to AbortController. Null when no turn is in flight.
    */
   currentQuery: { interrupt?: () => Promise<void> } | null;
+  /**
+   * Set to true when the `stop` client message aborts the current turn.
+   * The for-await loop's catch block checks this flag and skips the
+   * usual "error" broadcast — the user explicitly asked us to stop, so
+   * surfacing the resulting AbortError as a failure would be noise on
+   * top of the clean "Stopped by user" result we already sent.
+   */
+  userAborted: boolean;
   /** Original cwd for resume (the cwd where this session was first created). */
   sessionCwd: string | null;
   /**
@@ -288,6 +319,7 @@ class SessionManager {
         lastActivity: Date.now(),
         abortController: null,
         currentQuery: null,
+        userAborted: false,
         sessionCwd: null,
         status: "idle",
         lastUserMessage: "",
@@ -363,6 +395,7 @@ class SessionManager {
       lastActivity: persisted.lastActivity || Date.now(),
       abortController: null,
       currentQuery: null,
+      userAborted: false,
       sessionCwd: persisted.sessionCwd ?? null,
       // Status is always reset to "idle" on boot — whatever was in
       // flight is gone. The wasInterrupted flag is what tells the
@@ -620,10 +653,16 @@ class SessionManager {
 
     if (type === "stop") {
       if (session.isProcessing) {
-        // Drain any pending approval/question/plan requests first — without
-        // this, the SDK stays blocked inside canUseTool waiting for a
-        // response that will never come and .interrupt() can't take
-        // effect. Deny-resolve each one with an interrupt marker.
+        // Flag this as a user-initiated stop so the catch block in
+        // handleUserMessage doesn't surface the resulting AbortError as
+        // a red error bubble — we're already broadcasting a clean
+        // "Stopped by user" result below.
+        session.userAborted = true;
+
+        // Drain any pending approval/question/plan requests first — the
+        // SDK is blocked inside canUseTool waiting for a response that
+        // will never come, and the abort won't take effect until
+        // canUseTool resolves. Deny-resolve each with an interrupt marker.
         for (const [id, resolve] of session.pendingRequests) {
           resolve({
             allow: false,
@@ -635,17 +674,21 @@ class SessionManager {
         }
         session.pendingRequests.clear();
 
-        // Prefer the SDK's graceful interrupt — it emits a proper `result`
-        // message with an interrupt subtype so the for-await loop tears
-        // down cleanly. Fall back to AbortController for older SDK builds
-        // that don't expose .interrupt().
+        // AbortController is what actually kills the Claude CLI child
+        // process — we pass `signal: abortController.signal` into
+        // child_process.spawn in spawnClaude, and Node sends SIGTERM on
+        // abort. Always call this first, unconditionally.
+        session.abortController?.abort();
+
+        // Best-effort graceful SDK interrupt. Only has effect in
+        // streaming-input mode (we use single-message mode with `prompt:
+        // string`), where it's a no-op. Harmless either way; we already
+        // aborted.
         const q = session.currentQuery;
         if (q?.interrupt) {
           q.interrupt().catch(() => {
-            session.abortController?.abort();
+            /* ignore — the abort above is what matters */
           });
-        } else {
-          session.abortController?.abort();
         }
 
         this.broadcast(session, { type: "result", text: "Stopped by user", isError: false });
@@ -700,6 +743,21 @@ class SessionManager {
       // which the UI renders as a collapsible Thinking block. Opt-out
       // with CLAUDE_THINKING=off if the extra tokens cost matter.
       ...(process.env.CLAUDE_THINKING !== "off" ? { thinking: { type: "adaptive" } } : {}),
+      // Pass the mode through to the SDK. Without this, the SDK never
+      // exposes the ExitPlanMode tool to Claude when the user chose
+      // plan mode — Claude couldn't call it even when asked, and just
+      // wrote a prose "plan" into the chat. Also enables SDK-level
+      // gating for acceptEdits / bypassPermissions.
+      ...(session.permissionMode === "plan"
+        ? { permissionMode: "plan" as const }
+        : session.permissionMode === "acceptEdits"
+          ? { permissionMode: "acceptEdits" as const }
+          : session.permissionMode === "bypassPermissions"
+            ? {
+                permissionMode: "bypassPermissions" as const,
+                allowDangerouslySkipPermissions: true,
+              }
+            : {}),
       canUseTool: async (toolName: string, input: Record<string, unknown>) => {
         // Autonomous cron runs take a short-circuit path: decideCronTool
         // enforces the per-job allowlist, bash-prefix filter, and turn
@@ -820,7 +878,13 @@ class SessionManager {
         return { behavior: "deny", message: response.message || "User denied this action" };
       },
       ...(session.effort ? { effort: session.effort } : {}),
-      ...(mcpServers ? { mcpServers } : {}),
+      ...(() => {
+        // Fresh read per-turn so MCP servers the user just wired up in
+        // Settings (Google, Bitbucket, Notion, etc.) land on their very
+        // next message instead of after a container restart.
+        const current = loadMcpServers();
+        return current ? { mcpServers: current } : {};
+      })(),
       // Tell Claude which permission mode it's in via systemPrompt. Without
       // this, the server's canUseTool silently denies Bash/Edit in plan
       // mode but Claude doesn't *know* it's in plan mode, so it can go
@@ -851,30 +915,31 @@ class SessionManager {
               },
             }
           : {}),
-      // If the user saved Bitbucket / Jira creds in Settings, inject the
-      // matching env vars so any skill (e.g. /opt/skills/bitbucket/) or
-      // MCP server that expects them can pick them up. Loaded fresh from
-      // disk per-query so rotated tokens take effect without restarting
-      // the container. Returns undefined when nothing is configured so
-      // we don't pass an empty env object to the SDK.
+      // Always seed the SDK's env with the parent process's full env
+      // (so PATH / HOME / locale / NODE_OPTIONS / all the usual chain
+      // reach through to the Claude CLI subprocess and the MCP servers
+      // it spawns), plus ~/.local/bin prepended to PATH so uvx is
+      // findable even when it was installed *after* the chat server
+      // started. Previously this block returned `undefined` (or an
+      // object with only Atlassian/Trello creds and no PATH) — when
+      // that was forwarded to the SDK, the spawned Claude CLI inherited
+      // either the parent's env or the bare creds object; if the latter,
+      // it lost PATH and `uvx workspace-mcp` failed silently, which is
+      // exactly why Gmail tools never appeared after signing in to
+      // Google via our custom flow.
       env: (() => {
-        const bb = loadBitbucketCredentials();
+        const base = augmentPathWithLocalBin();
+        const out: NodeJS.ProcessEnv = { ...base };
+        // Bitbucket creds no longer live here — they ride along with the
+        // `bitbucket` MCP server's own env block in ~/.claude.json (see
+        // src/lib/bitbucket-custom-config.ts#registerMcpServer).
         const jira = loadJiraCredentials();
         const trello = loadTrelloCredentials();
-        if (!bb && !jira && !trello) return undefined;
-        const out: Record<string, string> = {};
-        if (bb) {
-          out.ATLASSIAN_EMAIL = bb.email;
-          out.BITBUCKET_API_TOKEN = bb.apiToken;
-          out.BITBUCKET_WORKSPACE = bb.workspace;
-        }
         if (jira) {
           out.JIRA_URL = `https://${jira.domain}`;
           out.JIRA_EMAIL = jira.email;
           out.JIRA_API_TOKEN = jira.apiToken;
-          // If Bitbucket wasn't set, still expose ATLASSIAN_EMAIL so
-          // skills that key off it (without caring which product) work.
-          if (!bb) out.ATLASSIAN_EMAIL = jira.email;
+          out.ATLASSIAN_EMAIL = jira.email;
         }
         if (trello) {
           out.TRELLO_API_KEY = trello.apiKey;
@@ -1149,108 +1214,120 @@ class SessionManager {
         }
       }
     } catch (err) {
-      const rawMessage0 = err instanceof Error ? err.message : "Unknown error";
-      // Resume-not-found surfaces here when the SDK throws DURING the
-      // for-await loop (rather than yielding a result message with
-      // is_error=true). Recover by wiping claudeSessionId and rerunning
-      // handleUserMessage — the user sees one spinner cycle, not a
-      // cryptic "No conversation found" error bubble.
-      if (
-        rawMessage0.toLowerCase().includes("no conversation found") ||
-        /returned an error result/i.test(rawMessage0)
-      ) {
-        session.claudeSessionId = null;
-        delete (queryParams.options as Record<string, unknown>).resume;
-        session.isProcessing = false;
-        session.abortController = null;
-        session.currentQuery = null;
-        this.setStatus(session, "idle");
-        this.handleUserMessage(session, text);
-        return;
-      }
-
-      session.accumulatedText = "";
-      const rawMessage = rawMessage0;
-      const errnoErr = err as NodeJS.ErrnoException;
-      // Dump the full error to the container log so operators have
-      // errno/code/syscall/path/stack. This app runs in a single-user
-      // trusted context — hiding paths behind 'Internal server error'
-      // bought us nothing except days of debugging last time.
-      console.error(`[session=${session.id}] Query error:`, {
-        message: rawMessage,
-        errno: errnoErr.errno,
-        code: errnoErr.code,
-        syscall: errnoErr.syscall,
-        path: errnoErr.path,
-        stack: errnoErr.stack,
-      });
-
-      // Treat ENOENT / EACCES / executable-not-found as "setup required"
-      // so the UI can nudge the user towards reinstalling instead of
-      // showing a generic error.
-      const lowered = rawMessage.toLowerCase();
-      const setupRequired =
-        errnoErr.code === "ENOENT" ||
-        errnoErr.code === "EACCES" ||
-        lowered.includes("executable not found") ||
-        lowered.includes("native binary not found") ||
-        lowered.includes("no such file");
-
-      // Detect Anthropic / Claude-Code auth failures specifically. The
-      // SDK surfaces these as a plain Error whose message contains the
-      // JSON body from api.anthropic.com — something like:
-      //   API Error: 401 {"type":"error","error":{
-      //       "type":"authentication_error",
-      //       "message":"Invalid authentication credentials"}}
-      // When we see that shape, emit a dedicated auth-required event so
-      // the UI can pop the "sign in to Claude" flow instead of showing
-      // the raw 401 blob as a generic error bubble.
-      const authError =
-        lowered.includes("authentication_error") ||
-        lowered.includes("invalid authentication credentials") ||
-        /\b401\b/.test(rawMessage) ||
-        lowered.includes("unauthorized");
-
-      const stderrTail =
-        typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
-          ? (errnoErr as unknown as { stderr: string }).stderr
-              .trim()
-              .split(/\r?\n/)
-              .slice(-10)
-              .join("\n")
-          : undefined;
-
-      if (authError) {
-        this.broadcast(session, {
-          type: "auth_required",
-          provider: "claude",
-          message:
-            "Claude rejected the stored credentials (HTTP 401). Your OAuth " +
-            "token has probably expired — sign in again to keep chatting.",
-          hint: "Run `claude auth login` in the container terminal, or click below.",
-        });
-      } else if (setupRequired) {
-        this.broadcast(session, {
-          type: "setup_required",
-          message:
-            "Claude SDK could not be started. The bundled sdk.mjs may be missing or unreachable. " +
-            `Raw error: ${rawMessage}` +
-            (errnoErr.path ? ` (path=${errnoErr.path})` : ""),
-          ...(stderrTail ? { stderrTail } : {}),
-        });
+      // User asked us to stop — the resulting AbortError / killed-child
+      // error is expected, not a failure. Swallow the whole error path;
+      // the stop handler already broadcast a clean "Stopped by user"
+      // result and flipped the session to idle.
+      if (session.userAborted) {
+        // Fall through to the post-catch cleanup at the bottom of this
+        // method, which resets isProcessing / abortController /
+        // currentQuery and processes the next queued message (if any).
       } else {
-        this.broadcast(session, {
-          type: "error",
+        const rawMessage0 = err instanceof Error ? err.message : "Unknown error";
+        // Resume-not-found surfaces here when the SDK throws DURING the
+        // for-await loop (rather than yielding a result message with
+        // is_error=true). Recover by wiping claudeSessionId and rerunning
+        // handleUserMessage — the user sees one spinner cycle, not a
+        // cryptic "No conversation found" error bubble.
+        if (
+          rawMessage0.toLowerCase().includes("no conversation found") ||
+          /returned an error result/i.test(rawMessage0)
+        ) {
+          session.claudeSessionId = null;
+          delete (queryParams.options as Record<string, unknown>).resume;
+          session.isProcessing = false;
+          session.abortController = null;
+          session.currentQuery = null;
+          this.setStatus(session, "idle");
+          this.handleUserMessage(session, text);
+          return;
+        }
+
+        session.accumulatedText = "";
+        const rawMessage = rawMessage0;
+        const errnoErr = err as NodeJS.ErrnoException;
+        // Dump the full error to the container log so operators have
+        // errno/code/syscall/path/stack. This app runs in a single-user
+        // trusted context — hiding paths behind 'Internal server error'
+        // bought us nothing except days of debugging last time.
+        console.error(`[session=${session.id}] Query error:`, {
           message: rawMessage,
-          ...(errnoErr.code ? { errorCode: errnoErr.code } : {}),
-          ...(stderrTail ? { stderrTail } : {}),
+          errno: errnoErr.errno,
+          code: errnoErr.code,
+          syscall: errnoErr.syscall,
+          path: errnoErr.path,
+          stack: errnoErr.stack,
         });
-      }
+
+        // Treat ENOENT / EACCES / executable-not-found as "setup required"
+        // so the UI can nudge the user towards reinstalling instead of
+        // showing a generic error.
+        const lowered = rawMessage.toLowerCase();
+        const setupRequired =
+          errnoErr.code === "ENOENT" ||
+          errnoErr.code === "EACCES" ||
+          lowered.includes("executable not found") ||
+          lowered.includes("native binary not found") ||
+          lowered.includes("no such file");
+
+        // Detect Anthropic / Claude-Code auth failures specifically. The
+        // SDK surfaces these as a plain Error whose message contains the
+        // JSON body from api.anthropic.com — something like:
+        //   API Error: 401 {"type":"error","error":{
+        //       "type":"authentication_error",
+        //       "message":"Invalid authentication credentials"}}
+        // When we see that shape, emit a dedicated auth-required event so
+        // the UI can pop the "sign in to Claude" flow instead of showing
+        // the raw 401 blob as a generic error bubble.
+        const authError =
+          lowered.includes("authentication_error") ||
+          lowered.includes("invalid authentication credentials") ||
+          /\b401\b/.test(rawMessage) ||
+          lowered.includes("unauthorized");
+
+        const stderrTail =
+          typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
+            ? (errnoErr as unknown as { stderr: string }).stderr
+                .trim()
+                .split(/\r?\n/)
+                .slice(-10)
+                .join("\n")
+            : undefined;
+
+        if (authError) {
+          this.broadcast(session, {
+            type: "auth_required",
+            provider: "claude",
+            message:
+              "Claude rejected the stored credentials (HTTP 401). Your OAuth " +
+              "token has probably expired — sign in again to keep chatting.",
+            hint: "Run `claude auth login` in the container terminal, or click below.",
+          });
+        } else if (setupRequired) {
+          this.broadcast(session, {
+            type: "setup_required",
+            message:
+              "Claude SDK could not be started. The bundled sdk.mjs may be missing or unreachable. " +
+              `Raw error: ${rawMessage}` +
+              (errnoErr.path ? ` (path=${errnoErr.path})` : ""),
+            ...(stderrTail ? { stderrTail } : {}),
+          });
+        } else {
+          this.broadcast(session, {
+            type: "error",
+            message: rawMessage,
+            ...(errnoErr.code ? { errorCode: errnoErr.code } : {}),
+            ...(stderrTail ? { stderrTail } : {}),
+          });
+        }
+      } // end `else` — non-userAborted error path
     }
 
     session.isProcessing = false;
     session.abortController = null;
     session.currentQuery = null;
+    // Reset the one-shot abort flag so the next turn starts fresh.
+    session.userAborted = false;
     // Turn is done — flip the dot off. If a queued message starts next,
     // handleUserMessage() will flip it straight back to "thinking".
     this.setStatus(session, "idle");

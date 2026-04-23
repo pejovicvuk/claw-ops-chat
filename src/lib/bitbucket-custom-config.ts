@@ -2,19 +2,32 @@ import { existsSync, readFileSync } from "fs";
 import { mkdir, readFile, writeFile, chmod, unlink } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
+import {
+  registerMcpServer as registerServer,
+  unregisterMcpServer as unregisterServer,
+  isMcpServerRegistered as isServerRegistered,
+} from "./mcp-register";
 
 /**
- * Stores Bitbucket Cloud credentials so the existing read-only skill at
- * /opt/skills/bitbucket/bitbucket-cli.sh can authenticate. Unlike GitHub
- * or Google, no MCP server — the skill is a plain bash wrapper invoked
- * directly by Claude. Credentials are injected as env vars when the chat
- * app spawns the Claude Agent SDK subprocess (see server.ts).
+ * Stores Bitbucket Cloud credentials and registers the in-repo Bitbucket
+ * MCP wrapper (src/bitbucket-mcp.ts → /app/bitbucket-mcp.js) in
+ * ~/.claude.json, so the Claude Agent SDK spawns it on demand and Claude
+ * sees bitbucket_* tools — same pattern as GitHub / Notion / Google.
+ *
+ * The MCP wrapper shells out to /opt/skills/bitbucket/bitbucket-cli.sh
+ * (docker-compose mount) using the env vars we embed in the registration.
  *
  * Credentials file: ~/.claude/custom-bitbucket/credentials.json (mode 0600)
+ * MCP server ID:    "bitbucket"
  */
+
+export const MCP_SERVER_ID = "bitbucket";
 
 const CREDENTIALS_DIR = join(homedir(), ".claude", "custom-bitbucket");
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, "credentials.json");
+
+const MCP_SCRIPT = process.env.BITBUCKET_MCP_SCRIPT ?? "/app/bitbucket-mcp.js";
+const CLI_PATH = process.env.BITBUCKET_CLI ?? "/opt/skills/bitbucket/bitbucket-cli.sh";
 
 export interface BitbucketCredentials {
   email: string;
@@ -31,7 +44,7 @@ export async function saveCredentials(creds: BitbucketCredentials): Promise<void
   try {
     await chmod(CREDENTIALS_FILE, 0o600);
   } catch {
-    /* ignore */
+    /* ignore — non-POSIX or already correct */
   }
 }
 
@@ -49,9 +62,10 @@ export async function loadCredentials(): Promise<BitbucketCredentials | null> {
 }
 
 /**
- * Sync variant used inside the query hot-path in server.ts. We re-read the
- * file on every query so rotated tokens take effect without a container
- * restart, and so disconnecting instantly stops env injection.
+ * Synchronous load for the hot path inside server.ts's chat-turn env
+ * builder. Mirrors the jira/trello pattern — we can't await inside the
+ * env-computation closure without restructuring handleUserMessage, and
+ * the file is small + local-disk so a sync read is imperceptible.
  */
 export function loadCredentialsSync(): BitbucketCredentials | null {
   if (!existsSync(CREDENTIALS_FILE)) return null;
@@ -70,4 +84,31 @@ export async function deleteCredentials(): Promise<void> {
   if (existsSync(CREDENTIALS_FILE)) {
     await unlink(CREDENTIALS_FILE).catch(() => {});
   }
+}
+
+/**
+ * Register the Bitbucket MCP server in ~/.claude.json. The env block is
+ * what the wrapper (and, transitively, bitbucket-cli.sh) reads — the chat
+ * server itself no longer injects BITBUCKET_* vars into the SDK child.
+ */
+export async function registerMcpServer(creds: BitbucketCredentials): Promise<void> {
+  await registerServer(MCP_SERVER_ID, {
+    type: "stdio",
+    command: "node",
+    args: [MCP_SCRIPT],
+    env: {
+      ATLASSIAN_EMAIL: creds.email,
+      BITBUCKET_API_TOKEN: creds.apiToken,
+      BITBUCKET_WORKSPACE: creds.workspace,
+      BITBUCKET_CLI: CLI_PATH,
+    },
+  });
+}
+
+export async function unregisterMcpServer(): Promise<void> {
+  await unregisterServer(MCP_SERVER_ID);
+}
+
+export async function isMcpServerRegistered(): Promise<boolean> {
+  return isServerRegistered(MCP_SERVER_ID);
 }

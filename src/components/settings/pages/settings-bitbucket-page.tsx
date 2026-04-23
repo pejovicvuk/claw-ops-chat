@@ -16,6 +16,7 @@ const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
 interface Status {
   saved: boolean;
+  registered: boolean;
   email: string | null;
   workspace: string | null;
   displayName: string | null;
@@ -27,9 +28,9 @@ type Mode = "loading" | "setup" | "connected";
  * Bitbucket integration settings page. No OAuth — user pastes email +
  * API token + workspace slug, we validate with basic-auth against
  * api.bitbucket.org/2.0/user, store at
- * ~/.claude/custom-bitbucket/credentials.json, and server.ts injects
- * the three env vars into the Claude Agent SDK child process so the
- * read-only bash skill at /opt/skills/bitbucket/ picks them up.
+ * ~/.claude/custom-bitbucket/credentials.json, and register the
+ * in-repo Bitbucket MCP wrapper in ~/.claude.json so the Claude Agent
+ * SDK advertises bitbucket_* tools on the next turn.
  */
 export function SettingsBitbucketPage() {
   const [status, setStatus] = useState<Status | null>(null);
@@ -47,11 +48,17 @@ export function SettingsBitbucketPage() {
       if (!res.ok) throw new Error("status");
       const data = (await res.json()) as Status;
       setStatus(data);
-      setMode(data.saved ? "connected" : "setup");
+      setMode(data.saved && data.registered ? "connected" : "setup");
       if (data.email) setEmail(data.email);
       if (data.workspace) setWorkspace(data.workspace);
     } catch {
-      setStatus({ saved: false, email: null, workspace: null, displayName: null });
+      setStatus({
+        saved: false,
+        registered: false,
+        email: null,
+        workspace: null,
+        displayName: null,
+      });
       setMode("setup");
     }
   }, []);
@@ -117,10 +124,9 @@ export function SettingsBitbucketPage() {
           </div>
           <p className="text-[12px] text-canvas-muted">
             {status.displayName ? `Signed in as ${status.displayName}.` : "Token validated."}{" "}
-            Workspace:{" "}
-            <code className="rounded bg-canvas-bg px-1 py-0.5">{status.workspace}</code>. Claude can
-            now read repos, branches, and PRs via the{" "}
-            <code className="rounded bg-canvas-bg px-1 py-0.5">bitbucket</code> skill.
+            Workspace: <code className="rounded bg-canvas-bg px-1 py-0.5">{status.workspace}</code>.
+            Claude can now read repos, branches, and PRs via the{" "}
+            <code className="rounded bg-canvas-bg px-1 py-0.5">bitbucket</code> MCP server.
           </p>
         </div>
 
@@ -151,7 +157,9 @@ export function SettingsBitbucketPage() {
       <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
         <div className="mb-2 flex items-center gap-2">
           <FiGitBranch size={14} className="text-canvas-fg" />
-          <span className="text-[13px] font-medium text-canvas-fg">Connect a Bitbucket Cloud account</span>
+          <span className="text-[13px] font-medium text-canvas-fg">
+            Connect a Bitbucket Cloud account
+          </span>
         </div>
         <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
           Create an API token at{" "}
@@ -226,7 +234,10 @@ export function SettingsBitbucketPage() {
             />
             <p className="mt-1 text-[10px] text-canvas-muted">
               The last segment of your Bitbucket URL:{" "}
-              <code className="rounded bg-canvas-bg px-1 py-0.5">bitbucket.org/&lt;workspace&gt;</code>.
+              <code className="rounded bg-canvas-bg px-1 py-0.5">
+                bitbucket.org/&lt;workspace&gt;
+              </code>
+              .
             </p>
           </div>
 
@@ -260,10 +271,9 @@ export function SettingsBitbucketPage() {
 
       <p className="text-[10px] text-canvas-muted">
         Credentials are stored locally in the container at{" "}
-        <code>~/.claude/custom-bitbucket/credentials.json</code> (mode 0600) and injected as
-        <code> ATLASSIAN_EMAIL</code>, <code>BITBUCKET_API_TOKEN</code>, and
-        <code> BITBUCKET_WORKSPACE</code> into the Claude Agent SDK subprocess on every query
-        — that's how the skill under <code>/opt/skills/bitbucket/</code> sees them.
+        <code>~/.claude/custom-bitbucket/credentials.json</code> (mode 0600). Saving also registers
+        a <code>bitbucket</code> MCP server in <code>~/.claude.json</code> — the Claude Agent SDK
+        spawns it on demand and exposes <code>bitbucket_*</code> tools to Claude.
       </p>
     </div>
   );

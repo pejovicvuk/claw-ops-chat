@@ -27,26 +27,27 @@ handles HTTP (Next.js) and WebSocket (Claude streaming) on a single port.
 
 ### Key Files
 
-| File                         | Purpose                                                         |
-| ---------------------------- | --------------------------------------------------------------- |
-| `server.ts`                  | HTTP + WebSocket server, Claude Agent SDK integration           |
-| `src/app/page.tsx`           | Main chat page (client component, protected by AuthGuard)       |
-| `src/app/layout.tsx`         | Root layout, CSP headers, PWA manifest                          |
-| `src/app/login/page.tsx`     | Login page                                                      |
-| `src/app/api/`               | Next.js API routes (auth, sessions, files, health)              |
-| `src/components/chat/`       | Chat UI: layout, view, input, messages, file browser            |
-| `src/components/auth/`       | AuthGuard route protection                                      |
-| `src/lib/auth-server.ts`     | HMAC-signed session cookies, extractSession(), unauthorized()   |
-| `src/lib/safe-path.ts`       | Path traversal prevention (safePath(), safeFilename())          |
-| `src/lib/use-claude-chat.ts` | WebSocket hook for Claude streaming                             |
-| `src/lib/api.ts`             | Client-side local API helpers                                   |
-| `src/lib/api-backend.ts`     | Spring backend API client                                       |
-| `src/lib/apiClient.ts`       | JWT token management, auto-refresh                              |
-| `src/lib/types.ts`           | Shared TypeScript interfaces                                    |
-| `next.config.ts`             | basePath=/chat, standalone output, CSP headers                  |
-| `Dockerfile`                 | Multi-stage build (deps -> builder -> runner on node:24-alpine) |
-| `docker-compose.yml`         | Production deployment with volume mounts                        |
-| `skills/bitbucket/`          | MCP Bitbucket read-only skill                                   |
+| File                         | Purpose                                                           |
+| ---------------------------- | ----------------------------------------------------------------- |
+| `server.ts`                  | HTTP + WebSocket server, Claude Agent SDK integration             |
+| `src/app/page.tsx`           | Main chat page (client component, protected by AuthGuard)         |
+| `src/app/layout.tsx`         | Root layout, CSP headers, PWA manifest                            |
+| `src/app/login/page.tsx`     | Login page                                                        |
+| `src/app/api/`               | Next.js API routes (auth, sessions, files, health)                |
+| `src/components/chat/`       | Chat UI: layout, view, input, messages, file browser              |
+| `src/components/auth/`       | AuthGuard route protection                                        |
+| `src/lib/auth-server.ts`     | HMAC-signed session cookies, extractSession(), unauthorized()     |
+| `src/lib/safe-path.ts`       | Path traversal prevention (safePath(), safeFilename())            |
+| `src/lib/use-claude-chat.ts` | WebSocket hook for Claude streaming                               |
+| `src/lib/api.ts`             | Client-side local API helpers                                     |
+| `src/lib/api-backend.ts`     | Spring backend API client                                         |
+| `src/lib/apiClient.ts`       | JWT token management, auto-refresh                                |
+| `src/lib/types.ts`           | Shared TypeScript interfaces                                      |
+| `next.config.ts`             | basePath=/chat, standalone output, CSP headers                    |
+| `Dockerfile`                 | Multi-stage build (deps -> builder -> runner on node:24-alpine)   |
+| `docker-compose.yml`         | Production deployment with volume mounts                          |
+| `skills/bitbucket/`          | Read-only Bitbucket CLI; driven by the `bitbucket-mcp.ts` wrapper |
+| `bitbucket-mcp.ts`           | Stdio MCP server that exposes `bitbucket_*` tools to Claude       |
 
 ### URL Structure
 

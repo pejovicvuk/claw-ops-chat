@@ -1,6 +1,11 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { getAllSessionStatuses } from "@/lib/session-status-store";
 
+// Status is strictly in-memory per-request — must never be snapshotted
+// at build time or served from the router cache.
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 /**
  * GET /chat/api/sessions/status
  *

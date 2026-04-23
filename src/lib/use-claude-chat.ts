@@ -291,6 +291,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         const resolvedId = evt.id as string;
         if (resolvedId) {
           resolvedPermissionsRef.current.add(resolvedId);
+          // eslint-disable-next-line react-hooks/immutability -- persistResolved is a useCallback declared later in the file; the closure only runs at event time (long after render), so the TDZ warning is a false positive here.
           persistResolved();
           setMessages((prev) =>
             prev.map((m) => {

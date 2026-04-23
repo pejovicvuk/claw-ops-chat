@@ -9,6 +9,7 @@ import { homedir } from "os";
  *
  * Credentials file: ~/.claude/custom-google-workspace/credentials.json (mode 0600)
  * MCP server ID:    "google-workspace-custom"
+ * workspace-mcp tokens: WORKSPACE_MCP_CREDENTIALS_DIR/<sanitized-email>.json
  */
 
 export const MCP_SERVER_ID = "google-workspace-custom";
@@ -17,9 +18,31 @@ const CREDENTIALS_DIR = join(homedir(), ".claude", "custom-google-workspace");
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, "credentials.json");
 const CLAUDE_JSON = join(homedir(), ".claude.json");
 
-interface Credentials {
+/**
+ * Directory where we store workspace-mcp's per-user token files. This path is
+ * passed to workspace-mcp via the WORKSPACE_MCP_CREDENTIALS_DIR env var, so
+ * our device-flow result and workspace-mcp's own reader see the same location.
+ */
+export const WORKSPACE_MCP_CREDS_DIR = join(
+  homedir(),
+  ".claude",
+  "custom-google-workspace",
+  "tokens",
+);
+
+export type GoogleClientType = "installed" | "web";
+
+export interface Credentials {
   clientId: string;
   clientSecret: string;
+  /**
+   * Shape of the Google OAuth client. "installed" = Desktop app (uses device
+   * flow); "web" = Web application (uses redirect flow). Defaults to "web"
+   * when loading a credentials file written before this field existed.
+   */
+  clientType?: GoogleClientType;
+  /** Email of the Google account currently signed in via device flow. */
+  accountEmail?: string;
 }
 
 /** Save OAuth credentials to the local credentials file (mode 0600). */
@@ -41,6 +64,9 @@ export async function loadCredentials(): Promise<Credentials | null> {
     const raw = await readFile(CREDENTIALS_FILE, "utf-8");
     const parsed = JSON.parse(raw) as Credentials;
     if (!parsed.clientId || !parsed.clientSecret) return null;
+    // Default to "web" for files written before clientType existed — that's
+    // what the redirect-based flow assumed.
+    if (!parsed.clientType) parsed.clientType = "web";
     return parsed;
   } catch {
     return null;
@@ -76,17 +102,27 @@ async function writeClaudeJson(data: ClaudeJson): Promise<void> {
   await writeFile(CLAUDE_JSON, JSON.stringify(data, null, 2), "utf-8");
 }
 
-/** Add or overwrite the custom Google Workspace MCP entry in ~/.claude.json. */
+/**
+ * Add or overwrite the custom Google Workspace MCP entry in ~/.claude.json.
+ *
+ * Always sets WORKSPACE_MCP_CREDENTIALS_DIR so workspace-mcp's single-user
+ * credential-store reader points at the tokens we wrote via device flow.
+ * `--single-user` tells workspace-mcp to pick the first credential file in
+ * that dir without requiring session routing — which is exactly our
+ * server-side, one-user setup.
+ */
 export async function registerMcpServer(creds: Credentials): Promise<void> {
   const data = await readClaudeJson();
   const servers = (data.mcpServers as Record<string, unknown>) || {};
   servers[MCP_SERVER_ID] = {
     type: "stdio",
     command: "uvx",
-    args: ["workspace-mcp", "--tool-tier", "core"],
+    args: ["workspace-mcp", "--single-user", "--tool-tier", "core"],
     env: {
       GOOGLE_OAUTH_CLIENT_ID: creds.clientId,
       GOOGLE_OAUTH_CLIENT_SECRET: creds.clientSecret,
+      WORKSPACE_MCP_CREDENTIALS_DIR: WORKSPACE_MCP_CREDS_DIR,
+      ...(creds.accountEmail ? { USER_GOOGLE_EMAIL: creds.accountEmail } : {}),
     },
   };
   data.mcpServers = servers;

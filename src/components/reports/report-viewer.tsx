@@ -140,7 +140,7 @@ export function ReportViewer({ runId, onOpenSessions }: ReportViewerProps) {
         </div>
       </header>
 
-      <div className="flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-4 py-6">
           {state.loading && (
             <div className="space-y-2">

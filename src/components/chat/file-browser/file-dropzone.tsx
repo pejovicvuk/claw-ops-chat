@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiDownload, FiWifiOff } from "react-icons/fi";
+import { FiDownload, FiUploadCloud, FiWifiOff } from "react-icons/fi";
 import type { UploadEntry } from "@/lib/batch-upload";
 
 interface FileDropzoneProps {
@@ -10,6 +10,30 @@ interface FileDropzoneProps {
   children: React.ReactNode;
   /** Pass through className to the outer wrapper. */
   className?: string;
+  /**
+   * `"inline"` (default) — overlay fills the wrapper, used for in-panel
+   * dropzones like the files browser and the composer box.
+   *
+   * `"panel"` — larger overlay sized for a whole pane (chat-view's center
+   * column). Bigger icon + more descriptive copy, meant to be visible
+   * across ~500 px of empty space.
+   */
+  size?: "inline" | "panel";
+  /**
+   * When set, this dropzone stays idle while another dropzone higher in
+   * the tree is active. Prevents duplicate overlays when a child and
+   * parent both wrap the drop region.
+   *
+   * The host owns the flag and toggles it via a shared DragGroup ref or
+   * state; `FileDropzone` itself doesn't care how — it just honors
+   * `suppressed`.
+   */
+  suppressed?: boolean;
+  /**
+   * Fires on dragenter (first real enter) and dragleave (final exit).
+   * Used by parent dropzones to know when to suppress themselves.
+   */
+  onDragStateChange?: (active: boolean) => void;
 }
 
 type DragState = "idle" | "accepting";
@@ -30,7 +54,6 @@ interface FileSystemDirectoryReaderLike {
   readEntries: (cb: (entries: FileSystemEntryLike[]) => void, err?: (e: unknown) => void) => void;
 }
 
-/** Promise wrapper around the callback-style `FileSystemFileEntry.file`. */
 function entryToFile(entry: FileSystemEntryLike): Promise<File | null> {
   return new Promise((resolve) => {
     if (!entry.file) return resolve(null);
@@ -41,11 +64,6 @@ function entryToFile(entry: FileSystemEntryLike): Promise<File | null> {
   });
 }
 
-/**
- * Drain a directory reader. `readEntries` returns at most 100 entries per
- * call — the empty-result sentinel means "done" — so we loop until we see
- * one.
- */
 function readAllEntries(reader: FileSystemDirectoryReaderLike): Promise<FileSystemEntryLike[]> {
   return new Promise((resolve) => {
     const out: FileSystemEntryLike[] = [];
@@ -63,11 +81,6 @@ function readAllEntries(reader: FileSystemDirectoryReaderLike): Promise<FileSyst
   });
 }
 
-/**
- * Recursively flatten a `FileSystemEntry` into a list of `{file, relativePath}`
- * entries suitable for `uploadBatch`. The root entry's name becomes the first
- * path segment so the original folder shape is preserved on the server.
- */
 async function walkEntry(entry: FileSystemEntryLike, prefix: string): Promise<UploadEntry[]> {
   const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
   if (entry.isFile) {
@@ -100,11 +113,18 @@ function payloadIsFileDrag(dt: DataTransfer): boolean {
 // Component
 // ──────────────────────────────────────────────────────────────────
 
-export function FileDropzone({ onUpload, disabled, children, className }: FileDropzoneProps) {
+export function FileDropzone({
+  onUpload,
+  disabled,
+  children,
+  className,
+  size = "inline",
+  suppressed,
+  onDragStateChange,
+}: FileDropzoneProps) {
   const [drag, setDrag] = useState<DragState>("idle");
   const [online, setOnline] = useState(typeof navigator === "undefined" ? true : navigator.onLine);
-  const dragCounter = useRef(0);
-  const rafId = useRef<number | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const on = () => setOnline(true);
@@ -117,81 +137,70 @@ export function FileDropzone({ onUpload, disabled, children, className }: FileDr
     };
   }, []);
 
+  // Notify host when our drag state transitions. Debounced on the falling
+  // edge via rAF to paper over the parent→child hover flicker without the
+  // old enter/leave counter.
+  const prevActiveRef = useRef(false);
   useEffect(() => {
-    return () => {
-      if (rafId.current !== null) cancelAnimationFrame(rafId.current);
-    };
-  }, []);
-
-  /**
-   * Coalesce dragover's 60×/s firing into one state update per frame.
-   * Folders are now accepted — the only reject path left is "not a file
-   * drag at all" (text, HTML, URLs, etc.), which we treat as idle.
-   */
-  const reconcile = useCallback((dt: DataTransfer) => {
-    if (rafId.current !== null) return;
-    rafId.current = requestAnimationFrame(() => {
-      rafId.current = null;
-      const next: DragState = payloadIsFileDrag(dt) ? "accepting" : "idle";
-      setDrag((prev) => (prev === next ? prev : next));
-    });
-  }, []);
+    const active = drag === "accepting";
+    if (active !== prevActiveRef.current) {
+      prevActiveRef.current = active;
+      onDragStateChange?.(active);
+    }
+  }, [drag, onDragStateChange]);
 
   const onDragEnter = useCallback(
     (e: React.DragEvent) => {
-      if (disabled) return;
+      if (disabled || suppressed) return;
+      if (!payloadIsFileDrag(e.dataTransfer)) return;
       e.preventDefault();
-      dragCounter.current += 1;
-      reconcile(e.dataTransfer);
+      setDrag("accepting");
     },
-    [disabled, reconcile],
-  );
-
-  const onDragLeave = useCallback(
-    (e: React.DragEvent) => {
-      if (disabled) return;
-      e.preventDefault();
-      dragCounter.current -= 1;
-      if (dragCounter.current <= 0) {
-        dragCounter.current = 0;
-        if (rafId.current !== null) {
-          cancelAnimationFrame(rafId.current);
-          rafId.current = null;
-        }
-        setDrag("idle");
-      }
-    },
-    [disabled],
+    [disabled, suppressed],
   );
 
   const onDragOver = useCallback(
     (e: React.DragEvent) => {
-      if (disabled) return;
+      if (disabled || suppressed) return;
+      if (!payloadIsFileDrag(e.dataTransfer)) return;
       e.preventDefault();
-      reconcile(e.dataTransfer);
+      // Always keep `drag` active while the cursor is anywhere inside.
+      // The previous version coalesced via rAF; with the relatedTarget
+      // check below we no longer need that — dragover just preventDefaults
+      // so the browser keeps forwarding events.
+      setDrag((prev) => (prev === "accepting" ? prev : "accepting"));
       e.dataTransfer.dropEffect = online ? "copy" : "none";
     },
-    [disabled, online, reconcile],
+    [disabled, suppressed, online],
+  );
+
+  /**
+   * `relatedTarget` is the element the cursor is entering. When it's still
+   * inside our wrapper, the cursor only moved between children — keep
+   * `drag` active. When it's outside (or null, which means "left the
+   * window entirely"), flip to idle. This is the standard pattern used by
+   * react-dropzone and every production file dropzone.
+   */
+  const onDragLeave = useCallback(
+    (e: React.DragEvent) => {
+      if (disabled || suppressed) return;
+      const wrapper = wrapperRef.current;
+      const next = e.relatedTarget as Node | null;
+      if (wrapper && next && wrapper.contains(next)) return;
+      setDrag("idle");
+    },
+    [disabled, suppressed],
   );
 
   const onDrop = useCallback(
     async (e: React.DragEvent) => {
+      if (disabled || suppressed) return;
       e.preventDefault();
-      dragCounter.current = 0;
-      if (rafId.current !== null) {
-        cancelAnimationFrame(rafId.current);
-        rafId.current = null;
-      }
       const wasAccepting = drag === "accepting";
       setDrag("idle");
-      if (disabled || !wasAccepting || !online) return;
+      if (!wasAccepting || !online) return;
 
       const entries: UploadEntry[] = [];
-
-      // Prefer `webkitGetAsEntry` — it's the only way to detect dropped
-      // folders and walk into them. Fall back to the flat `files` list if
-      // the browser doesn't support the entry API (Safari versions, some
-      // mobile browsers).
       const items = e.dataTransfer.items;
       if (items && items.length > 0) {
         const roots: FileSystemEntryLike[] = [];
@@ -211,7 +220,6 @@ export function FileDropzone({ onUpload, disabled, children, className }: FileDr
           if (entry) {
             roots.push(entry);
           } else {
-            // No entry API — fall back to the DataTransferItem's file.
             const f = item.getAsFile();
             if (f) entries.push({ file: f, relativePath: f.name });
           }
@@ -221,49 +229,69 @@ export function FileDropzone({ onUpload, disabled, children, className }: FileDr
           for (const u of walked) entries.push(u);
         }
       } else {
-        // Legacy `files` list path (no entry API at all).
         for (let i = 0; i < e.dataTransfer.files.length; i++) {
           const f = e.dataTransfer.files[i];
           entries.push({ file: f, relativePath: f.name });
         }
       }
-
       if (entries.length === 0) return;
       await onUpload(entries);
     },
-    [drag, disabled, onUpload, online],
+    [drag, disabled, suppressed, onUpload, online],
   );
+
+  const showOverlay = drag === "accepting" && !suppressed;
+  const isPanel = size === "panel";
 
   return (
     <div
+      ref={wrapperRef}
       className={`relative ${className ?? ""}`}
       onDragEnter={onDragEnter}
-      onDragLeave={onDragLeave}
       onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
       onDrop={onDrop}
     >
       {children}
-      {drag !== "idle" && (
+      {showOverlay && (
         <div
-          className={`pointer-events-none absolute inset-0 z-20 flex items-center justify-center rounded-md border-2 border-dashed backdrop-blur-sm ${
-            !online ? "border-canvas-muted bg-canvas-bg/80" : "border-accent bg-accent/25"
-          }`}
+          className={`pointer-events-none absolute inset-0 z-30 flex items-center justify-center border-2 border-dashed backdrop-blur-sm ${
+            isPanel ? "rounded-none" : "rounded-xl"
+          } ${!online ? "border-canvas-muted bg-canvas-bg/85" : "border-accent bg-accent/20"}`}
           aria-live="polite"
         >
-          <div className="flex flex-col items-center gap-3 text-center">
+          <div className={`flex flex-col items-center text-center ${isPanel ? "gap-4" : "gap-3"}`}>
             {!online ? (
               <>
-                <FiWifiOff size={32} className="text-canvas-muted" />
-                <p className="text-[14px] font-semibold text-canvas-fg">You&apos;re offline</p>
+                <FiWifiOff size={isPanel ? 48 : 32} className="text-canvas-muted" />
+                <p
+                  className={`font-semibold text-canvas-fg ${
+                    isPanel ? "text-[18px]" : "text-[14px]"
+                  }`}
+                >
+                  You&apos;re offline
+                </p>
                 <p className="text-[11px] text-canvas-muted">
                   Files can&apos;t be uploaded right now.
                 </p>
               </>
             ) : (
               <>
-                <FiDownload size={36} className="text-accent" />
-                <p className="text-[15px] font-semibold text-canvas-fg">Drop to upload</p>
-                <p className="text-[11px] text-canvas-muted">Files or folders</p>
+                {isPanel ? (
+                  <FiUploadCloud size={56} className="text-accent" />
+                ) : (
+                  <FiDownload size={36} className="text-accent" />
+                )}
+                <p
+                  className={`font-semibold text-canvas-fg ${
+                    isPanel ? "text-[20px]" : "text-[15px]"
+                  }`}
+                >
+                  {isPanel ? "Drop to attach to message" : "Drop to upload"}
+                </p>
+                <p className={`text-canvas-muted ${isPanel ? "text-[12px]" : "text-[11px]"}`}>
+                  Files or folders
+                </p>
               </>
             )}
           </div>

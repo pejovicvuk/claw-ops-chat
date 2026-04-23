@@ -32,6 +32,8 @@ export interface MentionState {
   /** Absolute character offsets of the `@` and the caret. */
   rangeStart: number;
   rangeEnd: number;
+  /** True when the query has any `/` — toggles global vs scoped search. */
+  hasSlash: boolean;
 }
 
 const CLOSED: MentionState = {
@@ -40,6 +42,7 @@ const CLOSED: MentionState = {
   prefixPart: "",
   rangeStart: 0,
   rangeEnd: 0,
+  hasSlash: false,
 };
 
 /**
@@ -93,7 +96,14 @@ function computeState(value: string, caret: number): MentionState {
     dirPart = normalizeDir(query.slice(0, lastSlash));
     prefixPart = query.slice(lastSlash + 1);
   }
-  return { open: true, dirPart, prefixPart, rangeStart: at, rangeEnd: caret };
+  return {
+    open: true,
+    dirPart,
+    prefixPart,
+    rangeStart: at,
+    rangeEnd: caret,
+    hasSlash: lastSlash !== -1,
+  };
 }
 
 /**

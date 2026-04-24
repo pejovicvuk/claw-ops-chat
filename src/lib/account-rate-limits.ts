@@ -98,38 +98,57 @@ function toMillis(t: unknown): number | null {
  * Merge a single `rate_limit_event` payload into the cache and flush to
  * disk. Never throws — I/O errors are swallowed so a write failure can't
  * kill an in-flight turn. Returns the updated cache.
+ *
+ * MERGE semantics: fields that aren't present in the new event are
+ * preserved from the existing window. Without this, a probe that only
+ * carries `status` + `resetsAt` would wipe `utilization` that an
+ * earlier SDK event had populated, and the HUD would drop back to a
+ * status-only badge even though we do know the percentage.
  */
 export async function applyRateLimitEvent(
   rateLimitInfo: Record<string, unknown>,
 ): Promise<RateLimitsCache> {
   const type = typeof rateLimitInfo.rateLimitType === "string" ? rateLimitInfo.rateLimitType : null;
   if (!type) return await loadRateLimits();
-  const statusRaw = typeof rateLimitInfo.status === "string" ? rateLimitInfo.status : "allowed";
-  const status: RateLimitWindow["status"] =
-    statusRaw === "rejected"
+
+  const statusRaw = typeof rateLimitInfo.status === "string" ? rateLimitInfo.status : null;
+  const incomingStatus: RateLimitWindow["status"] | undefined = !statusRaw
+    ? undefined
+    : statusRaw === "rejected"
       ? "rejected"
       : statusRaw === "allowed_warning"
         ? "allowed_warning"
         : "allowed";
 
-  const utilization =
+  const incomingUtilization =
     typeof rateLimitInfo.utilization === "number" && Number.isFinite(rateLimitInfo.utilization)
       ? rateLimitInfo.utilization
       : undefined;
-  const resetsAt = toMillis(rateLimitInfo.resetsAt);
+  const incomingResetsAt = toMillis(rateLimitInfo.resetsAt);
+  const incomingOverage =
+    typeof rateLimitInfo.isUsingOverage === "boolean" ? rateLimitInfo.isUsingOverage : undefined;
 
   const current = await loadRateLimits();
-  const window: RateLimitWindow = {
-    status,
-    ...(utilization !== undefined ? { utilization } : {}),
-    resetsAt,
-    ...(typeof rateLimitInfo.isUsingOverage === "boolean"
-      ? { isUsingOverage: rateLimitInfo.isUsingOverage }
-      : {}),
+  const prev = current.windows[type];
+
+  // Merge: new value wins if provided, otherwise keep the old one.
+  const merged: RateLimitWindow = {
+    status: incomingStatus ?? prev?.status ?? "allowed",
+    ...(incomingUtilization !== undefined
+      ? { utilization: incomingUtilization }
+      : prev?.utilization !== undefined
+        ? { utilization: prev.utilization }
+        : {}),
+    resetsAt: incomingResetsAt ?? prev?.resetsAt ?? null,
+    ...(incomingOverage !== undefined
+      ? { isUsingOverage: incomingOverage }
+      : typeof prev?.isUsingOverage === "boolean"
+        ? { isUsingOverage: prev.isUsingOverage }
+        : {}),
   };
   const next: RateLimitsCache = {
     updatedAt: Date.now(),
-    windows: { ...current.windows, [type]: window },
+    windows: { ...current.windows, [type]: merged },
   };
   inMemory = next;
   try {

@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { deleteCredentials, unregisterMcpServer } from "@/lib/google-custom-config";
 import { deleteWorkspaceMcpCredentials } from "@/lib/google-workspace-mcp-tokens";
 
@@ -8,7 +9,7 @@ import { deleteWorkspaceMcpCredentials } from "@/lib/google-workspace-mcp-tokens
  * OAuth client credentials, and wipes any workspace-mcp credential files
  * we wrote for the device flow.
  */
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   if (!extractSession(request)) return unauthorized();
 
   try {
@@ -23,3 +24,8 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export const POST = withAudit(
+  { route: "/api/google-custom/disconnect", label: "Google disconnect" },
+  postHandler,
+);

@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import {
   deleteCredentials,
   registerMcpServer,
@@ -15,7 +16,7 @@ import {
  * invalid / expired tokens fail fast instead of silently landing in
  * claude.json.
  */
-export async function POST(request: Request): Promise<Response> {
+async function postHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
   let body: { email?: unknown; apiToken?: unknown; workspace?: unknown };
@@ -84,9 +85,18 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json({ ok: true, displayName });
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function deleteHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   await deleteCredentials();
   await unregisterMcpServer();
   return Response.json({ ok: true });
 }
+
+export const POST = withAudit(
+  { route: "/api/bitbucket-custom/credentials", label: "Bitbucket credentials" },
+  postHandler,
+);
+export const DELETE = withAudit(
+  { route: "/api/bitbucket-custom/credentials", label: "Bitbucket credentials" },
+  deleteHandler,
+);

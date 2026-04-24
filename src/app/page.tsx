@@ -12,6 +12,8 @@ import type { ChatSession } from "@/lib/types";
 import { ChatLayout } from "@/components/chat/chat-layout";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { SettingsOverlay } from "@/components/settings/settings-overlay";
+import { LightboxProvider } from "@/lib/use-lightbox";
+import { Lightbox } from "@/components/chat/previews/lightbox";
 import { useUrlState } from "@/lib/use-url-state";
 
 const STORAGE_KEY = "claw-chat-session:v1";
@@ -141,19 +143,22 @@ export default function ChatPage() {
 
   return (
     <AuthGuard>
-      <div className="flex h-dvh flex-col overflow-hidden bg-canvas-bg text-canvas-fg">
-        <ChatLayout
-          sessions={sessions}
-          selectedSessionId={selectedSessionId}
-          onSelectSession={handleSelectSession}
-          onNewChat={handleNewChat}
-          onRefreshSessions={loadSessions}
-          sessionsLoading={sessionsLoading}
-          onSessionCreated={handleSessionCreated}
-          onDeleteSession={handleDeleteSession}
-        />
-        <SettingsOverlay />
-      </div>
+      <LightboxProvider>
+        <div className="flex h-dvh flex-col overflow-hidden bg-canvas-bg text-canvas-fg">
+          <ChatLayout
+            sessions={sessions}
+            selectedSessionId={selectedSessionId}
+            onSelectSession={handleSelectSession}
+            onNewChat={handleNewChat}
+            onRefreshSessions={loadSessions}
+            sessionsLoading={sessionsLoading}
+            onSessionCreated={handleSessionCreated}
+            onDeleteSession={handleDeleteSession}
+          />
+          <SettingsOverlay />
+          <Lightbox />
+        </div>
+      </LightboxProvider>
     </AuthGuard>
   );
 }

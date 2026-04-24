@@ -3,6 +3,9 @@
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ReactNode } from "react";
+import { ImagePreview } from "./previews/image-preview";
+import { LinkPreview } from "./previews/link-preview";
+import { SyntaxCode } from "./previews/syntax-code";
 
 // Module-level: stable reference required so react-markdown keeps its per-component cache.
 const markdownComponents = {
@@ -10,13 +13,10 @@ const markdownComponents = {
     <p className="my-1 text-[14px] leading-relaxed text-canvas-fg">{children}</p>
   ),
   code: ({ className, children }: { className?: string; children?: ReactNode }) => {
-    const isBlock = className?.includes("language-");
-    if (isBlock) {
-      return (
-        <code className="block overflow-x-auto rounded bg-canvas-bg p-3 font-mono text-[12px] leading-relaxed text-canvas-fg">
-          {children}
-        </code>
-      );
+    const match = /language-(\w+)/.exec(className ?? "");
+    if (match) {
+      const code = String(children).replace(/\n$/, "");
+      return <SyntaxCode language={match[1]} code={code} />;
     }
     return (
       <code className="rounded bg-canvas-surface-hover px-1.5 py-0.5 font-mono text-[12px] text-canvas-fg">
@@ -24,11 +24,7 @@ const markdownComponents = {
       </code>
     );
   },
-  pre: ({ children }: { children?: ReactNode }) => (
-    <pre className="my-2 overflow-x-auto rounded-md bg-canvas-bg border border-canvas-border">
-      {children}
-    </pre>
-  ),
+  pre: ({ children }: { children?: ReactNode }) => <>{children}</>,
   strong: ({ children }: { children?: ReactNode }) => (
     <strong className="font-bold text-canvas-fg">{children}</strong>
   ),
@@ -39,11 +35,14 @@ const markdownComponents = {
     <ol className="my-1.5 ml-4 list-decimal text-[14px] text-canvas-fg">{children}</ol>
   ),
   li: ({ children }: { children?: ReactNode }) => <li className="my-0.5">{children}</li>,
-  a: ({ href, children }: { href?: string; children?: ReactNode }) => (
-    <a href={href} className="text-accent underline" target="_blank" rel="noopener noreferrer">
-      {children}
-    </a>
-  ),
+  a: ({ href, children }: { href?: string; children?: ReactNode }) => {
+    if (!href) return <>{children}</>;
+    return <LinkPreview href={href}>{children}</LinkPreview>;
+  },
+  img: ({ src, alt }: { src?: string | Blob; alt?: string }) => {
+    if (!src || typeof src !== "string") return null;
+    return <ImagePreview src={src} alt={alt} />;
+  },
   table: ({ children }: { children?: ReactNode }) => (
     <div className="my-2 overflow-x-auto rounded-md border border-canvas-border">
       <table className="w-full text-[12px] text-canvas-fg">{children}</table>

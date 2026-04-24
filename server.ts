@@ -39,6 +39,8 @@ import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
 import { ensureAuditTree } from "./src/lib/audit/paths";
 import { purgeOldAuditFiles } from "./src/lib/audit/retention";
+import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
+import { purgeOldImages } from "./src/lib/proxy/image-cache";
 import { logWsUpgrade } from "./src/lib/audit/api-wrap";
 import cron from "node-cron";
 
@@ -1969,6 +1971,29 @@ setSessionManager(sessionManager);
     console.log(`> Audit log ready at /root/.audit (30-day retention)`);
   } catch (err) {
     console.warn(`!! Could not initialize audit log: ${(err as Error).message}`);
+  }
+})();
+
+// Preview proxy caches (unfurl metadata + external images). Boot-time sweep
+// + recurring 12h trim so /root/.cache doesn't grow without bound.
+(async () => {
+  try {
+    await Promise.all([purgeOldUnfurls(), purgeOldImages()]);
+    cron.schedule(
+      "30 */12 * * *",
+      () => {
+        purgeOldUnfurls().catch((err) => {
+          console.warn(`[preview] unfurl cache purge failed: ${(err as Error).message}`);
+        });
+        purgeOldImages().catch((err) => {
+          console.warn(`[preview] image cache purge failed: ${(err as Error).message}`);
+        });
+      },
+      { timezone: "UTC" },
+    );
+    console.log(`> Preview caches ready at /root/.cache (unfurl 24h, images 7d)`);
+  } catch (err) {
+    console.warn(`!! Could not initialize preview caches: ${(err as Error).message}`);
   }
 })();
 

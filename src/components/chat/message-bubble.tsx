@@ -11,6 +11,11 @@ import {
   FiX,
 } from "react-icons/fi";
 import type { ChatMessage } from "@/lib/types";
+import { detectFilePaths } from "@/lib/detect-file-paths";
+import { isImageExt } from "@/lib/mime";
+import { ImagePreview } from "./previews/image-preview";
+import { LinkPreview } from "./previews/link-preview";
+import { FilePathPill } from "./previews/file-path-pill";
 
 // Lazy: react-markdown + remark-gfm (~33kb gz) are deferred out of the main
 // chunk. `preloadMarkdown` warms the chunk as soon as the user submits.
@@ -70,6 +75,8 @@ function hasBoxDrawing(text: string): boolean {
 interface MessageBubbleProps {
   message: ChatMessage;
   isLatestToolUse?: boolean;
+  /** The matching tool_use message (by toolCallId) — only set when message.type === "tool_result". */
+  siblingToolUse?: ChatMessage;
   onPermissionRespond?: (
     id: string,
     allow: boolean,
@@ -87,6 +94,7 @@ interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({
   message,
   isLatestToolUse,
+  siblingToolUse,
   onPermissionRespond,
   onQuestionRespond,
   onPlanRespond,
@@ -129,7 +137,7 @@ export const MessageBubble = memo(function MessageBubble({
   /* Tool results — show all results, collapsed by default. Errors open
      expanded so the user sees failures immediately. */
   if (message.type === "tool_result") {
-    return <ToolResultBlock message={message} />;
+    return <ToolResultBlock message={message} siblingToolUse={siblingToolUse} />;
   }
   if (message.type === "thinking") return <ThinkingBlock message={message} />;
   if (message.type === "permission_request")
@@ -254,13 +262,24 @@ function ToolUseIndicator({ message, isLive }: { message: ChatMessage; isLive?: 
   );
 }
 
-function ToolResultBlock({ message }: { message: ChatMessage }) {
-  const isError = message.isError ?? false;
-  // Errors expand by default so the user sees the failure immediately.
-  // Success output stays collapsed — click to inspect.
-  const [collapsed, setCollapsed] = useState(!isError);
+interface ToolResultBlockProps {
+  message: ChatMessage;
+  siblingToolUse?: ChatMessage;
+}
 
-  if (!isError && !message.content.trim()) return null;
+function parseToolInput(raw?: string): Record<string, unknown> {
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function ToolResultBlock({ message, siblingToolUse }: ToolResultBlockProps) {
+  const isError = message.isError ?? false;
+  const toolName = siblingToolUse?.toolName;
+  const toolInput = parseToolInput(siblingToolUse?.toolInput);
 
   if (isError) {
     return (
@@ -275,7 +294,160 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
     );
   }
 
-  const lineCount = message.content.split("\n").length;
+  if (!message.content.trim()) return null;
+
+  // ── Per-tool specialisation ────────────────────────────────────────
+
+  // Read on an image path: the SDK returns "[Read raw base64 elided]"
+  // or similar, which is useless text; replace with inline preview.
+  if (
+    toolName === "Read" &&
+    typeof toolInput.file_path === "string" &&
+    isImageExt(toolInput.file_path)
+  ) {
+    return <ReadImageResult path={toolInput.file_path as string} rawContent={message.content} />;
+  }
+
+  // Write / Edit: surface the output file path as a pill at the top.
+  if ((toolName === "Write" || toolName === "Edit") && typeof toolInput.file_path === "string") {
+    return <WriteEditResult path={toolInput.file_path} content={message.content} />;
+  }
+
+  // WebFetch: show an unfurl card for the fetched URL, collapsed body below.
+  if (toolName === "WebFetch" && typeof toolInput.url === "string") {
+    return <WebFetchResult url={toolInput.url} content={message.content} />;
+  }
+
+  // WebSearch: parse the search result text into individual links with unfurl cards.
+  if (toolName === "WebSearch") {
+    return <WebSearchResult content={message.content} />;
+  }
+
+  // Bash / Grep / Glob / generic — detect file paths inline.
+  return <GenericToolResult content={message.content} />;
+}
+
+function ReadImageResult({ path, rawContent }: { path: string; rawContent: string }) {
+  const [showRaw, setShowRaw] = useState(false);
+  return (
+    <div className="px-4 py-0.5">
+      <ImagePreview src={path} alt={path} large />
+      <button
+        type="button"
+        onClick={() => setShowRaw((v) => !v)}
+        className="flex items-center gap-1 px-1 py-0.5 text-[10px] text-canvas-muted/50 hover:text-canvas-muted"
+      >
+        {showRaw ? <FiChevronDown size={9} /> : <FiChevronRight size={9} />}
+        <span>raw read output</span>
+      </button>
+      {showRaw && (
+        <pre className="ml-2 mt-0.5 max-h-[180px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
+          {rawContent.slice(0, 2000)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function WriteEditResult({ path, content }: { path: string; content: string }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const lineCount = content.split("\n").length;
+  return (
+    <div className="px-4 py-0.5">
+      <div className="mb-1 flex items-center gap-2">
+        <FilePathPill path={path} />
+      </div>
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex items-center gap-1 px-1 py-0.5 text-[10px] text-canvas-muted/50 hover:text-canvas-muted"
+      >
+        {collapsed ? <FiChevronRight size={9} /> : <FiChevronDown size={9} />}
+        <span>
+          output ({lineCount} {lineCount === 1 ? "line" : "lines"})
+        </span>
+      </button>
+      {!collapsed && (
+        <pre className="ml-2 max-h-[240px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
+          {content.slice(0, 4000)}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+function WebFetchResult({ url, content }: { url: string; content: string }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const lineCount = content.split("\n").length;
+  return (
+    <div className="px-4 py-0.5">
+      <LinkPreview href={url} cardOnly>
+        {url}
+      </LinkPreview>
+      <button
+        type="button"
+        onClick={() => setCollapsed((c) => !c)}
+        className="flex items-center gap-1 px-1 py-0.5 text-[10px] text-canvas-muted/50 hover:text-canvas-muted"
+      >
+        {collapsed ? <FiChevronRight size={9} /> : <FiChevronDown size={9} />}
+        <span>
+          fetched content ({lineCount} {lineCount === 1 ? "line" : "lines"})
+        </span>
+      </button>
+      {!collapsed && (
+        <pre className="ml-2 max-h-[240px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
+          {content.slice(0, 4000)}
+          {content.length > 4000 && (
+            <span className="mt-1 block text-[9px] italic opacity-60">
+              … {content.length - 4000} more chars truncated
+            </span>
+          )}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+const URL_RE = /(https?:\/\/[^\s<>"']+)/g;
+
+function WebSearchResult({ content }: { content: string }) {
+  const urls = useMemo(() => {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const m of content.matchAll(URL_RE)) {
+      let url = m[0];
+      // Trim trailing punctuation from URL captures.
+      while (/[.,;:!?)\]]$/.test(url) && url.length > 12) url = url.slice(0, -1);
+      if (!seen.has(url)) {
+        seen.add(url);
+        out.push(url);
+      }
+    }
+    return out.slice(0, 8);
+  }, [content]);
+
+  if (urls.length === 0) {
+    return <GenericToolResult content={content} />;
+  }
+  return (
+    <div className="px-4 py-0.5">
+      <div className="space-y-1">
+        {urls.map((url) => (
+          <LinkPreview key={url} href={url} cardOnly>
+            {url}
+          </LinkPreview>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function GenericToolResult({ content }: { content: string }) {
+  const [collapsed, setCollapsed] = useState(true);
+  const lineCount = content.split("\n").length;
+  const segments = useMemo(() => detectFilePaths(content.slice(0, 4000)), [content]);
+  const hasPaths = segments.some((s) => s.kind === "path");
+
   return (
     <div className="px-4 py-0">
       <button
@@ -289,14 +461,26 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
         </span>
       </button>
       {!collapsed && (
-        <pre className="ml-2 max-h-[240px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
-          {message.content.slice(0, 4000)}
-          {message.content.length > 4000 && (
+        <div className="ml-2 max-h-[240px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
+          {hasPaths ? (
+            <div className="whitespace-pre-wrap">
+              {segments.map((seg, i) =>
+                seg.kind === "path" ? (
+                  <FilePathPill key={`p-${i}`} path={seg.path} />
+                ) : (
+                  <span key={`t-${i}`}>{seg.text}</span>
+                ),
+              )}
+            </div>
+          ) : (
+            <pre className="whitespace-pre-wrap">{content.slice(0, 4000)}</pre>
+          )}
+          {content.length > 4000 && (
             <span className="mt-1 block text-[9px] italic opacity-60">
-              … {message.content.length - 4000} more chars truncated
+              … {content.length - 4000} more chars truncated
             </span>
           )}
-        </pre>
+        </div>
       )}
     </div>
   );

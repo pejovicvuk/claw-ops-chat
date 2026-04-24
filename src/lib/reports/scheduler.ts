@@ -4,6 +4,7 @@ import { executeRun, type CronCapableSessionManager } from "./runner";
 import { reconcileCrashedRuns } from "./run-store";
 import { ensureReportsTree } from "./paths";
 import type { ReportJob, ReportRun, RunTrigger } from "./types";
+import { getAuditWriter, type AuditWriter } from "@/lib/audit/writer";
 
 /**
  * Singleton scheduler. Manages node-cron tasks + per-job in-flight
@@ -36,7 +37,14 @@ export class ReportScheduler {
   private queues = new Map<string, Array<() => Promise<void>>>();
   private jobs = new Map<string, ReportJob>();
 
-  constructor(private readonly sessionManager: CronCapableSessionManager) {}
+  private readonly audit: AuditWriter;
+
+  constructor(
+    private readonly sessionManager: CronCapableSessionManager,
+    audit: AuditWriter = getAuditWriter(),
+  ) {
+    this.audit = audit;
+  }
 
   async bootstrap(): Promise<void> {
     await ensureReportsTree();
@@ -61,6 +69,17 @@ export class ReportScheduler {
       console.warn(`[reports] ${job.slug}: invalid cron expression ${job.schedule}`);
       return;
     }
+    this.audit
+      .cron({
+        type: "job_registered",
+        severity: "info",
+        actor: "system",
+        subject: `Registered cron job ${job.slug} (${job.schedule})`,
+        durationMs: null,
+        slug: job.slug,
+        details: { schedule: job.schedule, timezone: job.timezone ?? "UTC", name: job.name },
+      })
+      .catch(() => {});
     const task = cron.schedule(
       job.schedule,
       () => {
@@ -109,6 +128,17 @@ export class ReportScheduler {
         /* node-cron occasionally throws on double-stop */
       }
       this.tasks.delete(slug);
+      this.audit
+        .cron({
+          type: "job_unregistered",
+          severity: "info",
+          actor: "system",
+          subject: `Unregistered cron job ${slug}`,
+          durationMs: null,
+          slug,
+          details: {},
+        })
+        .catch(() => {});
     }
   }
 
@@ -121,14 +151,49 @@ export class ReportScheduler {
 
   /** Handle a cron tick, honoring the job's concurrency policy. */
   private async tick(job: ReportJob): Promise<void> {
+    this.audit
+      .cron({
+        type: "tick",
+        severity: "info",
+        actor: "system",
+        subject: `Cron tick ${job.slug}`,
+        durationMs: null,
+        slug: job.slug,
+        details: {},
+      })
+      .catch(() => {});
     const active = this.inflight.get(job.slug);
     if (active) {
       switch (job.concurrency) {
         case "skip":
           console.log(`[reports] ${job.slug}: skip tick (still running ${active.runId})`);
+          this.audit
+            .cron({
+              type: "tick_skipped",
+              severity: "warn",
+              actor: "system",
+              subject: `Cron tick skipped for ${job.slug} (still running)`,
+              durationMs: null,
+              slug: job.slug,
+              runId: active.runId,
+              details: {},
+            })
+            .catch(() => {});
           return;
         case "cancel-previous":
           if (active.abort) active.abort();
+          this.audit
+            .cron({
+              type: "tick_cancelled_previous",
+              severity: "warn",
+              actor: "system",
+              subject: `Cron tick cancelled previous run for ${job.slug}`,
+              durationMs: null,
+              slug: job.slug,
+              runId: active.runId,
+              details: {},
+            })
+            .catch(() => {});
           break;
         case "queue": {
           const queue = this.queues.get(job.slug) ?? [];
@@ -136,6 +201,18 @@ export class ReportScheduler {
             await this.executeNow(job, "cron", Date.now());
           });
           this.queues.set(job.slug, queue);
+          this.audit
+            .cron({
+              type: "tick_queued",
+              severity: "info",
+              actor: "system",
+              subject: `Cron tick queued for ${job.slug}`,
+              durationMs: null,
+              slug: job.slug,
+              runId: active.runId,
+              details: { queueDepth: queue.length },
+            })
+            .catch(() => {});
           return;
         }
       }
@@ -155,10 +232,23 @@ export class ReportScheduler {
     trigger: RunTrigger,
     cronTickAt: number | null,
   ): Promise<ReportRun> {
+    const startedAt = Date.now();
+    this.audit
+      .cron({
+        type: "run_start",
+        severity: "info",
+        actor: trigger === "manual" ? "user" : "system",
+        subject: `Run started: ${job.slug} (${trigger})`,
+        durationMs: null,
+        slug: job.slug,
+        status: "running",
+        details: { trigger, cronTickAt },
+      })
+      .catch(() => {});
     const run = await (async (): Promise<ReportRun> => {
       this.inflight.set(job.slug, {
         runId: `${job.slug}-pending`,
-        startedAt: Date.now(),
+        startedAt,
       });
       try {
         return await executeRun({
@@ -166,6 +256,7 @@ export class ReportScheduler {
           trigger,
           cronTickAt,
           sessionManager: this.sessionManager,
+          audit: this.audit,
         });
       } finally {
         this.inflight.delete(job.slug);
@@ -180,6 +271,27 @@ export class ReportScheduler {
         }
       }
     })();
+    this.audit
+      .cron({
+        type: "run_complete",
+        severity: run.status === "success" ? "info" : "error",
+        actor: trigger === "manual" ? "user" : "system",
+        subject: `Run ${run.status}: ${job.slug}`,
+        durationMs: Date.now() - startedAt,
+        slug: job.slug,
+        runId: run.runId,
+        status: run.status,
+        tokenUsage: run.tokenUsage,
+        turnsUsed: run.turnsUsed,
+        details: {
+          trigger,
+          toolCallsCount: run.toolCallsCount,
+          permissionDenials: run.permissionDenials,
+          reportPath: run.reportPath,
+          errorMessage: run.errorMessage,
+        },
+      })
+      .catch(() => {});
     return run;
   }
 

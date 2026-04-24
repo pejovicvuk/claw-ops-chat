@@ -5,6 +5,7 @@ import { assemblePrompt } from "./prompt-assembler";
 import { makeRunId, upsertIndexEntry, writeRunSidecar } from "./run-store";
 import { runLogPath, jobRunsDir } from "./paths";
 import type { ReportJob, ReportRun, RunTrigger } from "./types";
+import type { AuditWriter } from "@/lib/audit/writer";
 
 /**
  * Interface the runner needs from the SessionManager. Declared as a
@@ -53,8 +54,9 @@ export async function executeRun(args: {
   trigger: RunTrigger;
   cronTickAt: number | null;
   sessionManager: CronCapableSessionManager;
+  audit?: AuditWriter;
 }): Promise<ReportRun> {
-  const { job, trigger, cronTickAt, sessionManager } = args;
+  const { job, trigger, cronTickAt, sessionManager, audit } = args;
   const now = new Date();
   const runId = makeRunId(job.slug, now);
   const { prompt, outputPath } = assemblePrompt({ job, runId, now });
@@ -103,6 +105,41 @@ export async function executeRun(args: {
   const onEvent = (event: Record<string, unknown>) => {
     if (event.type === "tool_use_start" || event.type === "tool_use_complete") {
       toolCallsCount += 1;
+    }
+    // Tee semantic events into the cross-cutting audit log. The per-run
+    // .log.jsonl below is the forensic layer; this is the UI layer.
+    if (audit) {
+      if (event.type === "tool_use_start") {
+        const toolName = typeof event.name === "string" ? event.name : undefined;
+        audit
+          .cron({
+            type: "tool_use",
+            severity: "info",
+            actor: "system",
+            subject: `Cron tool ${toolName ?? "unknown"}: ${job.slug}`,
+            durationMs: null,
+            slug: job.slug,
+            runId,
+            toolName,
+            details: {},
+          })
+          .catch(() => {});
+      } else if (event.type === "permission_denied") {
+        const toolName = typeof event.tool === "string" ? event.tool : undefined;
+        audit
+          .cron({
+            type: "permission_denied",
+            severity: "warn",
+            actor: "system",
+            subject: `Cron permission denied ${toolName ?? "unknown"}: ${job.slug}`,
+            durationMs: null,
+            slug: job.slug,
+            runId,
+            toolName,
+            details: {},
+          })
+          .catch(() => {});
+      }
     }
     // Fire-and-forget JSONL append; errors are logged elsewhere.
     appendFile(logPath, `${JSON.stringify({ ...event, at: Date.now() })}\n`).catch(() => {});

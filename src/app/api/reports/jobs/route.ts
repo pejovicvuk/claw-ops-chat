@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { listJobs, readJob, writeJob } from "@/lib/reports/job-store";
 import { parseJobMarkdown } from "@/lib/reports/job-parser";
 import { validateJob } from "@/lib/reports/job-validator";
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
   return Response.json({ jobs: out });
 }
 
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   if (!extractSession(request)) return unauthorized();
   let body: unknown;
   try {
@@ -73,3 +74,8 @@ export async function POST(request: Request) {
 
   return Response.json({ job }, { status: 201 });
 }
+
+export const POST = withAudit(
+  { route: "/api/reports/jobs", label: "Create report job" },
+  postHandler,
+);

@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { readJob } from "@/lib/reports/job-store";
 import { executeRun } from "@/lib/reports/runner";
 import { getScheduler } from "@/lib/reports/scheduler-singleton";
@@ -22,7 +23,7 @@ type Params = { params: Promise<{ slug: string }> };
  *      long as the custom server has booted far enough to register the
  *      SessionManager.
  */
-export async function POST(request: Request, ctx: Params) {
+async function postHandler(request: Request, ctx: Params) {
   if (!extractSession(request)) return unauthorized();
   const { slug } = await ctx.params;
   if (!SLUG_RE.test(slug)) {
@@ -71,3 +72,8 @@ export async function POST(request: Request, ctx: Params) {
   }).catch((err) => console.error(`[reports] direct run ${slug} failed`, err));
   return Response.json({ ok: true, slug, via: "direct" }, { status: 202 });
 }
+
+export const POST = withAudit(
+  { route: "/api/reports/jobs/[slug]/run", label: "Manual run report job" },
+  postHandler,
+);

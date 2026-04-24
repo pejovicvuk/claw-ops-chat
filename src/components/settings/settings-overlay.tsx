@@ -19,6 +19,7 @@ import { SettingsJiraPage } from "./pages/settings-jira-page";
 import { SettingsNotionPage } from "./pages/settings-notion-page";
 import { SettingsTrelloPage } from "./pages/settings-trello-page";
 import { SettingsTerminalPage } from "./pages/settings-terminal-page";
+import { SettingsAuditPage } from "./pages/settings-audit-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -35,7 +36,8 @@ type PageKey =
   | "connections/jira"
   | "connections/notion"
   | "connections/trello"
-  | "terminal";
+  | "terminal"
+  | "audit";
 
 interface PageInfo {
   /** Display title in the overlay header. */
@@ -60,6 +62,7 @@ const PAGES: Record<PageKey, PageInfo> = {
   "connections/notion": { title: "Notion", parent: "connections" },
   "connections/trello": { title: "Trello", parent: "connections" },
   terminal: { title: "Terminal", parent: "main", wide: true },
+  audit: { title: "Audit Log", parent: "main", wide: true },
 };
 
 /**
@@ -181,6 +184,7 @@ export function SettingsOverlay() {
           {page === "connections/notion" && <SettingsNotionPage />}
           {page === "connections/trello" && <SettingsTrelloPage />}
           {page === "terminal" && <SettingsTerminalPage />}
+          {page === "audit" && <SettingsAuditPage />}
         </div>
 
         {/* Footer — only on main page */}

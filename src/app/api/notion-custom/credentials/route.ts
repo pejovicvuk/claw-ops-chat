@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import {
   NOTION_API_VERSION,
   deleteCredentials,
@@ -14,7 +15,7 @@ import {
  * not-yet-shared integrations fail fast instead of silently landing in
  * claude.json.
  */
-export async function POST(request: Request): Promise<Response> {
+async function postHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
   let body: { token?: unknown };
@@ -56,7 +57,10 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json({ error: "Notion rejected this token (401)." }, { status: 400 });
     }
     if (!probe.ok) {
-      return Response.json({ error: `Notion /users/me returned ${probe.status}.` }, { status: 400 });
+      return Response.json(
+        { error: `Notion /users/me returned ${probe.status}.` },
+        { status: 400 },
+      );
     }
     const data = (await probe.json()) as {
       name?: string;
@@ -87,9 +91,18 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json({ ok: true, workspaceName, botName });
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function deleteHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   await deleteCredentials();
   await unregisterMcpServer();
   return Response.json({ ok: true });
 }
+
+export const POST = withAudit(
+  { route: "/api/notion-custom/credentials", label: "Notion credentials" },
+  postHandler,
+);
+export const DELETE = withAudit(
+  { route: "/api/notion-custom/credentials", label: "Notion credentials" },
+  deleteHandler,
+);

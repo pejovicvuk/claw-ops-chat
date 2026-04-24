@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import {
   deleteCredentials,
   registerMcpServer,
@@ -12,7 +13,7 @@ import {
  * Linear GraphQL API with the key first so invalid keys fail fast
  * instead of silently landing in claude.json.
  */
-export async function POST(request: Request): Promise<Response> {
+async function postHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
   let body: { apiKey?: unknown };
@@ -53,10 +54,7 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json({ error: "Linear rejected this key." }, { status: 400 });
     }
     if (!probe.ok) {
-      return Response.json(
-        { error: `Linear returned ${probe.status}.` },
-        { status: 400 },
-      );
+      return Response.json({ error: `Linear returned ${probe.status}.` }, { status: 400 });
     }
     const data = (await probe.json()) as {
       data?: { viewer?: { email?: string; name?: string } };
@@ -90,9 +88,18 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json({ ok: true, email, name });
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function deleteHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   await deleteCredentials();
   await unregisterMcpServer();
   return Response.json({ ok: true });
 }
+
+export const POST = withAudit(
+  { route: "/api/linear-custom/credentials", label: "Linear credentials" },
+  postHandler,
+);
+export const DELETE = withAudit(
+  { route: "/api/linear-custom/credentials", label: "Linear credentials" },
+  deleteHandler,
+);

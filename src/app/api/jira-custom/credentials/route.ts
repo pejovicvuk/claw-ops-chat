@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import {
   deleteCredentials,
   normaliseDomain,
@@ -12,7 +13,7 @@ import {
  * disk. No MCP server is registered — server.ts injects the three env
  * vars on every query so a skill or MCP can read them.
  */
-export async function POST(request: Request): Promise<Response> {
+async function postHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
   let body: { domain?: unknown; email?: unknown; apiToken?: unknown };
@@ -26,8 +27,7 @@ export async function POST(request: Request): Promise<Response> {
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const domain =
-    typeof body.domain === "string" ? normaliseDomain(body.domain) : "";
+  const domain = typeof body.domain === "string" ? normaliseDomain(body.domain) : "";
   const email = typeof body.email === "string" ? body.email.trim() : "";
   const apiToken = typeof body.apiToken === "string" ? body.apiToken.trim() : "";
 
@@ -89,8 +89,17 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json({ ok: true, displayName, domain });
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function deleteHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   await deleteCredentials();
   return Response.json({ ok: true });
 }
+
+export const POST = withAudit(
+  { route: "/api/jira-custom/credentials", label: "Jira credentials" },
+  postHandler,
+);
+export const DELETE = withAudit(
+  { route: "/api/jira-custom/credentials", label: "Jira credentials" },
+  deleteHandler,
+);

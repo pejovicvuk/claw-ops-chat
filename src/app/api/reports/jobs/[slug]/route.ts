@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { archiveJob, deleteJob, readJob, writeJob } from "@/lib/reports/job-store";
 import { parseJobMarkdown, serializeJobMarkdown } from "@/lib/reports/job-parser";
 import { validateJob } from "@/lib/reports/job-validator";
@@ -25,7 +26,7 @@ export async function GET(request: Request, ctx: Params) {
   });
 }
 
-export async function PUT(request: Request, ctx: Params) {
+async function putHandler(request: Request, ctx: Params) {
   if (!extractSession(request)) return unauthorized();
   const slug = await resolveSlug(ctx);
   if (!slug) return Response.json({ error: "Invalid slug" }, { status: 400 });
@@ -62,7 +63,7 @@ export async function PUT(request: Request, ctx: Params) {
   }
 }
 
-export async function DELETE(request: Request, ctx: Params) {
+async function deleteHandler(request: Request, ctx: Params) {
   if (!extractSession(request)) return unauthorized();
   const slug = await resolveSlug(ctx);
   if (!slug) return Response.json({ error: "Invalid slug" }, { status: 400 });
@@ -77,3 +78,12 @@ export async function DELETE(request: Request, ctx: Params) {
   }
   return Response.json({ ok: true, archived: archive });
 }
+
+export const PUT = withAudit(
+  { route: "/api/reports/jobs/[slug]", label: "Update report job" },
+  putHandler,
+);
+export const DELETE = withAudit(
+  { route: "/api/reports/jobs/[slug]", label: "Delete report job" },
+  deleteHandler,
+);

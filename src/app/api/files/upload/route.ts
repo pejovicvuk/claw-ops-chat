@@ -1,6 +1,7 @@
 import { access, writeFile, mkdir } from "fs/promises";
 import { join, dirname } from "path";
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { safePath, safeFilename, SafePathError } from "@/lib/safe-path";
 
 /**
@@ -15,7 +16,7 @@ const MAX_UPLOAD_SIZE = (() => {
   return resolved * 1024 * 1024;
 })();
 
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   if (!extractSession(request)) return unauthorized();
 
   const url = new URL(request.url);
@@ -120,3 +121,11 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export const POST = withAudit(
+  {
+    route: "/api/files/upload",
+    subjectFrom: (req) => new URL(req.url).searchParams.get("path"),
+  },
+  postHandler,
+);

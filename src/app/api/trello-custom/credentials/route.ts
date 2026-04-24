@@ -1,4 +1,5 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import {
   deleteCredentials,
   saveCredentials,
@@ -12,7 +13,7 @@ import {
  * server is registered — server.ts injects TRELLO_API_KEY / TRELLO_TOKEN
  * env vars on every query so a skill or MCP can read them.
  */
-export async function POST(request: Request): Promise<Response> {
+async function postHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
   let body: { apiKey?: unknown; apiToken?: unknown };
@@ -26,10 +27,7 @@ export async function POST(request: Request): Promise<Response> {
   const apiToken = typeof body.apiToken === "string" ? body.apiToken.trim() : "";
 
   if (!apiKey || !apiToken) {
-    return Response.json(
-      { error: "apiKey and apiToken are both required" },
-      { status: 400 },
-    );
+    return Response.json({ error: "apiKey and apiToken are both required" }, { status: 400 });
   }
 
   // Trello keys are 32-char hex; tokens are 64-char hex. Reject anything
@@ -60,7 +58,10 @@ export async function POST(request: Request): Promise<Response> {
       return Response.json({ error: "Trello rejected this key/token pair." }, { status: 400 });
     }
     if (!probe.ok) {
-      return Response.json({ error: `Trello /members/me returned ${probe.status}.` }, { status: 400 });
+      return Response.json(
+        { error: `Trello /members/me returned ${probe.status}.` },
+        { status: 400 },
+      );
     }
     const data = (await probe.json()) as { username?: string; fullName?: string };
     username = data.username ?? null;
@@ -87,8 +88,17 @@ export async function POST(request: Request): Promise<Response> {
   return Response.json({ ok: true, username, fullName });
 }
 
-export async function DELETE(request: Request): Promise<Response> {
+async function deleteHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   await deleteCredentials();
   return Response.json({ ok: true });
 }
+
+export const POST = withAudit(
+  { route: "/api/trello-custom/credentials", label: "Trello credentials" },
+  postHandler,
+);
+export const DELETE = withAudit(
+  { route: "/api/trello-custom/credentials", label: "Trello credentials" },
+  deleteHandler,
+);

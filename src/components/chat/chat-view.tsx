@@ -18,24 +18,26 @@ import { fetchSessionMessages } from "@/lib/api";
 import type { UploadEntry } from "@/lib/batch-upload";
 import { StatusIndicator } from "./status-indicator";
 import { ContextIndicator } from "./context-indicator";
+import { HudIndicator } from "./hud-indicator";
+import { HudPopup } from "./hud-popup";
 import { MessageBubble } from "./message-bubble";
 import { ChatInput } from "./chat-input";
 import { SetupGuard } from "./setup-guard";
 import { EmptyState } from "./empty-state";
 import { FileDropzone } from "./file-browser/file-dropzone";
 
-const MODE_STORAGE_KEY = "claw-chat-mode:v1";
-
 const MODE_LABELS: Record<string, string> = {
   default: "Default",
   acceptEdits: "Accept Edits",
   plan: "Plan Mode",
+  auto: "Auto",
 };
 
 const MODE_OPTIONS = [
   { value: "default", label: "Default", description: "Ask before edits and commands" },
   { value: "acceptEdits", label: "Accept Edits", description: "Auto-approve file edits" },
   { value: "plan", label: "Plan Mode", description: "Plan only, no changes" },
+  { value: "auto", label: "Auto", description: "Model classifier decides (SDK)" },
 ];
 
 const EFFORT_OPTIONS = [
@@ -121,6 +123,8 @@ export function ChatView({
     authRequired,
     clearAuthRequired,
     contextUsage,
+    permissionMode,
+    sessionStartedAt,
     respondPermission,
     respondQuestion,
     respondPlan,
@@ -171,10 +175,6 @@ export function ChatView({
   const historyIdsRef = useRef<string[]>([]);
   const capturedHistoryRef = useRef(false);
   const [loadingHistory, setLoadingHistory] = useState(!!resumeSessionId);
-  const [permissionMode, setMode] = useState<string>(() => {
-    if (typeof window === "undefined") return "default";
-    return localStorage.getItem(MODE_STORAGE_KEY) || "default";
-  });
   const [effortLevel, setEffortLevel] = useState<string | null>(null);
   const [showModeMenu, setShowModeMenu] = useState(false);
   // Pre-fills the composer from empty-state suggestion chips. The seq
@@ -184,7 +184,7 @@ export function ChatView({
   const handleSuggestionClick = useCallback((text: string) => {
     setDraft((prev) => ({ text, seq: prev.seq + 1 }));
   }, []);
-  const [openPopup, setOpenPopup] = useState<"status" | "context" | null>(null);
+  const [openPopup, setOpenPopup] = useState<"status" | "context" | "hud" | null>(null);
   const popupRef = useRef<HTMLDivElement>(null);
   // Funny "thinking" verb — rerolled each time status enters `thinking`
   // from another state so every turn shows a fresh gerund. Lazy init picks
@@ -216,12 +216,6 @@ export function ChatView({
     return () => document.removeEventListener("mousedown", handleClick);
   }, [openPopup]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem(MODE_STORAGE_KEY, permissionMode);
-    } catch {}
-  }, [permissionMode]);
-
   /* Notify parent when SDK creates a new session (so page can update selected session) */
   useEffect(() => {
     if (claudeSessionId && claudeSessionId !== notifiedSessionRef.current) {
@@ -230,6 +224,9 @@ export function ChatView({
     }
   }, [claudeSessionId, onSessionCreated]);
 
+  // On the first `idle` after reconnect, push our remembered per-session
+  // mode to the server so a container restart doesn't land the session in
+  // "default" when the toolbar still shows Plan or Auto.
   useEffect(() => {
     if (status === "idle" && !bridgeSyncedRef.current) {
       bridgeSyncedRef.current = true;
@@ -251,13 +248,12 @@ export function ChatView({
     function onKey(e: KeyboardEvent) {
       if (isTypingTarget(e.target)) return;
 
-      // Shift+Tab → cycle default → plan → acceptEdits → default
+      // Shift+Tab → cycle default → plan → acceptEdits → auto → default
       if (e.key === "Tab" && e.shiftKey) {
         e.preventDefault();
-        const order = ["default", "plan", "acceptEdits"] as const;
+        const order = ["default", "plan", "acceptEdits", "auto"] as const;
         const idx = order.indexOf(permissionMode as (typeof order)[number]);
         const next = order[(idx + 1) % order.length] ?? "default";
-        setMode(next);
         setPermissionMode(next);
         setInfoMessages((prev) => [
           ...prev,
@@ -376,6 +372,10 @@ export function ChatView({
                 isOpen={openPopup === "context"}
                 onClick={() => setOpenPopup((p) => (p === "context" ? null : "context"))}
               />
+              <HudIndicator
+                isOpen={openPopup === "hud"}
+                onClick={() => setOpenPopup((p) => (p === "hud" ? null : "hud"))}
+              />
 
               {openPopup === "status" && (
                 <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[140px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl">
@@ -420,6 +420,16 @@ export function ChatView({
                     </>
                   )}
                 </div>
+              )}
+
+              {openPopup === "hud" && (
+                <HudPopup
+                  status={status}
+                  activeTool={activeTool}
+                  contextUsage={contextUsage}
+                  messages={messages}
+                  sessionStartedAt={sessionStartedAt}
+                />
               )}
             </div>
           </div>
@@ -519,6 +529,10 @@ export function ChatView({
                   isOpen={openPopup === "context"}
                   onClick={() => setOpenPopup((p) => (p === "context" ? null : "context"))}
                 />
+                <HudIndicator
+                  isOpen={openPopup === "hud"}
+                  onClick={() => setOpenPopup((p) => (p === "hud" ? null : "hud"))}
+                />
 
                 {openPopup === "status" && (
                   <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[140px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl">
@@ -565,6 +579,16 @@ export function ChatView({
                     )}
                   </div>
                 )}
+
+                {openPopup === "hud" && (
+                  <HudPopup
+                    status={status}
+                    activeTool={activeTool}
+                    contextUsage={contextUsage}
+                    messages={messages}
+                    sessionStartedAt={sessionStartedAt}
+                  />
+                )}
               </div>
             </div>
           )}
@@ -586,7 +610,6 @@ export function ChatView({
                         },
                       ]);
                     }
-                    setMode(opt.value);
                     setPermissionMode(opt.value);
                     setShowModeMenu(false);
                   }}

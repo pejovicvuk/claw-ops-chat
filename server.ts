@@ -705,9 +705,26 @@ class SessionManager {
     }
 
     if (type === "set_mode") {
-      session.permissionMode = (msg.mode as string) || "default";
+      this.setSessionMode(session, (msg.mode as string) || "default", "client");
       return;
     }
+  }
+
+  /**
+   * Update a session's permission mode and broadcast the change to every
+   * connected client so the toolbar stays in sync. Called both when the
+   * client explicitly sends `set_mode` (for multi-tab sync) and when the
+   * server changes mode on its own (ExitPlanMode approval — otherwise the
+   * UI stays stuck on "Plan Mode" even though the agent is acting in
+   * accept-edits).
+   */
+  private setSessionMode(
+    session: ChatSession,
+    mode: string,
+    reason: "client" | "plan_approved",
+  ): void {
+    session.permissionMode = mode;
+    this.broadcast(session, { type: "mode_changed", mode, reason });
   }
 
   private async handleUserMessage(session: ChatSession, text: string) {
@@ -776,7 +793,9 @@ class SessionManager {
                 permissionMode: "bypassPermissions" as const,
                 allowDangerouslySkipPermissions: true,
               }
-            : {}),
+            : session.permissionMode === "auto"
+              ? { permissionMode: "auto" as const }
+              : {}),
       canUseTool: async (toolName: string, input: Record<string, unknown>) => {
         // Autonomous cron runs take a short-circuit path: decideCronTool
         // enforces the per-job allowlist, bash-prefix filter, and turn
@@ -829,12 +848,19 @@ class SessionManager {
             // Default behaviour after plan approval is to flip into
             // acceptEdits so Claude can actually execute the plan it
             // just proposed; the client can override by sending
-            // newMode: "default" if the user wants to keep confirming.
-            if (newMode === "default" || newMode === "plan" || newMode === "acceptEdits") {
-              session.permissionMode = newMode;
-            } else {
-              session.permissionMode = "acceptEdits";
-            }
+            // newMode: "default" | "plan" | "auto" if the user wants
+            // different follow-up behaviour.
+            const nextMode =
+              newMode === "default" ||
+              newMode === "plan" ||
+              newMode === "acceptEdits" ||
+              newMode === "auto"
+                ? newMode
+                : "acceptEdits";
+            // Broadcast so the client toolbar flips to the new mode —
+            // without this, the UI stays stuck on Plan Mode even though
+            // the agent is now in acceptEdits/auto.
+            this.setSessionMode(session, nextMode, "plan_approved");
             return { behavior: "allow", updatedInput: input };
           }
           return {
@@ -865,8 +891,12 @@ class SessionManager {
         const EDIT_TOOLS = new Set(["Write", "Edit"]);
         const mode = session.permissionMode;
 
-        if (mode === "acceptEdits") {
-          // Auto-allow safe tools + edit tools, ask for Bash and others
+        if (mode === "acceptEdits" || mode === "auto") {
+          // Auto-allow safe tools + edit tools, ask for Bash and others.
+          // "auto" mode additionally lets the SDK's native classifier
+          // pre-approve calls before they reach canUseTool — when it
+          // does intercept us, we mirror acceptEdits semantics so the
+          // UX is consistent and we never surprise-execute shell.
           if (SAFE_TOOLS.has(toolName) || EDIT_TOOLS.has(toolName)) {
             return { behavior: "allow", updatedInput: input };
           }
@@ -1127,8 +1157,9 @@ class SessionManager {
           // Broadcast live context usage from assistant usage field.
           // The assistant.message.usage has input_tokens, cache_read_input_tokens, cache_creation_input_tokens.
           const usage = assistantMsg?.usage as Record<string, number> | undefined;
+          const model = typeof assistantMsg?.model === "string" ? assistantMsg.model : undefined;
           if (usage) {
-            this.broadcastAssistantUsage(session, usage);
+            this.broadcastAssistantUsage(session, usage, model);
           }
           const content = assistantMsg?.content;
 
@@ -1435,9 +1466,12 @@ class SessionManager {
   /** Broadcast context usage from the final `result.modelUsage` (authoritative). */
   private broadcastContextUsage(session: ChatSession, modelUsage: unknown): void {
     if (!modelUsage || typeof modelUsage !== "object") return;
-    const firstModel = Object.values(modelUsage as Record<string, unknown>)[0] as
+    const entries = Object.entries(modelUsage as Record<string, unknown>);
+    const [modelId, firstModelRaw] = entries[0] ?? [];
+    const firstModel = firstModelRaw as
       | {
           inputTokens?: number;
+          outputTokens?: number;
           cacheReadInputTokens?: number;
           cacheCreationInputTokens?: number;
           contextWindow?: number;
@@ -1456,11 +1490,20 @@ class SessionManager {
       used,
       max,
       percentage: Math.round((used / max) * 100),
+      model: modelId ?? null,
+      inputTokens: firstModel.inputTokens || 0,
+      outputTokens: firstModel.outputTokens || 0,
+      cacheReadTokens: firstModel.cacheReadInputTokens || 0,
+      cacheCreateTokens: firstModel.cacheCreationInputTokens || 0,
     });
   }
 
   /** Broadcast live context usage from an assistant message's `usage` field. */
-  private broadcastAssistantUsage(session: ChatSession, usage: Record<string, number>): void {
+  private broadcastAssistantUsage(
+    session: ChatSession,
+    usage: Record<string, number>,
+    model?: string,
+  ): void {
     // The assistant message has raw API usage (input_tokens snake_case).
     const used =
       (usage.input_tokens || 0) +
@@ -1484,6 +1527,11 @@ class SessionManager {
       used,
       max,
       percentage: Math.round((used / max) * 100),
+      model: model ?? null,
+      inputTokens: usage.input_tokens || 0,
+      outputTokens: usage.output_tokens || 0,
+      cacheReadTokens: usage.cache_read_input_tokens || 0,
+      cacheCreateTokens: usage.cache_creation_input_tokens || 0,
     });
   }
 

@@ -80,7 +80,7 @@ interface MessageBubbleProps {
   onPlanRespond?: (
     id: string,
     approve: boolean,
-    opts?: { newMode?: "default" | "acceptEdits"; message?: string },
+    opts?: { newMode?: "default" | "acceptEdits" | "auto"; message?: string },
   ) => void;
 }
 
@@ -500,7 +500,7 @@ function PlanProposalBlock({
   onRespond?: (
     id: string,
     approve: boolean,
-    opts?: { newMode?: "default" | "acceptEdits"; message?: string },
+    opts?: { newMode?: "default" | "acceptEdits" | "auto"; message?: string },
   ) => void;
 }) {
   const [showReject, setShowReject] = useState(false);
@@ -508,7 +508,7 @@ function PlanProposalBlock({
   const resolved = !!message.planResolved;
   const outcome = message.planOutcome;
 
-  const handleApprove = (newMode: "default" | "acceptEdits") => {
+  const handleApprove = (newMode: "default" | "acceptEdits" | "auto") => {
     if (resolved) return;
     onRespond?.(message.planId ?? "", true, { newMode });
   };
@@ -543,6 +543,11 @@ function PlanProposalBlock({
             {outcome === "approved_default" && (
               <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-1 font-medium text-green-400">
                 <FiCheck size={10} /> Approved — confirm each step
+              </span>
+            )}
+            {outcome === "approved_auto" && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-green-500/10 px-2.5 py-1 font-medium text-green-400">
+                <FiCheck size={10} /> Approved — auto (SDK decides)
               </span>
             )}
             {outcome === "rejected" && (
@@ -594,6 +599,14 @@ function PlanProposalBlock({
               className="rounded-md bg-accent px-3 py-1.5 text-[12px] font-medium text-white active:opacity-80"
             >
               Approve &amp; auto-apply
+            </button>
+            <button
+              type="button"
+              onClick={() => handleApprove("auto")}
+              className="rounded-md border border-canvas-border px-3 py-1.5 text-[12px] font-medium text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+              title="Approve, then let the SDK's auto classifier decide what needs confirmation"
+            >
+              Approve &amp; auto
             </button>
             <button
               type="button"

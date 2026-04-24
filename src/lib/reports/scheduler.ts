@@ -4,7 +4,7 @@ import { executeRun, type CronCapableSessionManager } from "./runner";
 import { reconcileCrashedRuns } from "./run-store";
 import { ensureReportsTree } from "./paths";
 import type { ReportJob, ReportRun, RunTrigger } from "./types";
-import { getAuditWriter, type AuditWriter } from "@/lib/audit/writer";
+import { getAuditWriter, type AuditWriter } from "../audit/writer";
 
 /**
  * Singleton scheduler. Manages node-cron tasks + per-job in-flight

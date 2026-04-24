@@ -17,11 +17,19 @@ interface FilePathPillProps {
 const CODE_EXT =
   /\.(ts|tsx|js|jsx|py|rs|go|java|kt|swift|rb|cpp?|h|sh|sql|html?|css|yaml?|toml|json|xml|md|mdx)$/i;
 
-function iconFor(path: string) {
-  if (isImageExt(path)) return FiImage;
-  if (CODE_EXT.test(path)) return FiCode;
-  if (/\.(txt|log|csv)$/i.test(path)) return FiFileText;
-  return FiFile;
+/**
+ * Pick-and-render an icon based on the file's extension. Declared as a
+ * regular component (instead of `const Icon = iconFor(path)` inside
+ * render) to satisfy the React rule against creating components during
+ * render — each render otherwise binds a fresh identifier to a stable
+ * icon function, which lint treats as a new component identity.
+ */
+function FileIcon({ path, className }: { path: string; className?: string }) {
+  if (isImageExt(path)) return <FiImage size={11} className={className} />;
+  if (CODE_EXT.test(path)) return <FiCode size={11} className={className} />;
+  if (/\.(txt|log|csv)$/i.test(path))
+    return <FiFileText size={11} className={className} />;
+  return <FiFile size={11} className={className} />;
 }
 
 function basename(path: string): string {
@@ -65,7 +73,6 @@ function triggerDownload(path: string): void {
  * context menu with Preview / Download / Copy path.
  */
 export function FilePathPill({ path, onOpen }: FilePathPillProps) {
-  const Icon = iconFor(path);
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -140,7 +147,7 @@ export function FilePathPill({ path, onOpen }: FilePathPillProps) {
         title={path}
         className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-canvas-border bg-canvas-surface px-2 py-0.5 font-mono text-[11px] text-canvas-fg transition-colors hover:bg-canvas-surface-hover"
       >
-        <Icon size={11} className="shrink-0 text-canvas-muted" />
+        <FileIcon path={path} className="shrink-0 text-canvas-muted" />
         <span className="truncate">{basename(path)}</span>
       </button>
       {menu && <ContextMenu x={menu.x} y={menu.y} path={path} onClose={closeMenu} onOpen={open} />}

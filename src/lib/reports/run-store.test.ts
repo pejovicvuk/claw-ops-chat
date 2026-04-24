@@ -4,42 +4,48 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock paths so tests don't write to /root/reports. Must happen before the
-// module under test is imported (vi.mock hoists, but we want a dynamic
-// tmp dir per suite so each test run is isolated).
-let TMP_ROOT = "";
+// Shared state between the test file and the hoisted mock factory.
+// vi.mock() factories run in a separate context and can NOT close over
+// regular top-level variables — they'd see the initial snapshot and miss
+// every `beforeEach` update. `vi.hoisted` is the supported escape hatch:
+// the returned object is shared-by-reference between the test's scope and
+// the factory, so mutating `state.root` in a test is visible to the mock.
+const state = vi.hoisted(() => ({ root: "" }));
 
 vi.mock("./paths", async () => {
-  // Stub returns resolved at call time from the mutable TMP_ROOT.
+  const { join: pJoin } = await import("path");
+  const { existsSync: exists } = await import("fs");
+  const { mkdir: mk } = await import("fs/promises");
   return {
     get JOBS_DIR() {
-      return join(TMP_ROOT, ".jobs");
+      return pJoin(state.root, ".jobs");
     },
     get RUNS_DIR() {
-      return join(TMP_ROOT, ".runs");
+      return pJoin(state.root, ".runs");
     },
     get INDEX_PATH() {
-      return join(TMP_ROOT, ".index.json");
+      return pJoin(state.root, ".index.json");
     },
     get README_PATH() {
-      return join(TMP_ROOT, "README.md");
+      return pJoin(state.root, "README.md");
     },
     get REPORTS_ROOT() {
-      return TMP_ROOT;
+      return state.root;
     },
-    jobFilePath: (slug: string) => join(TMP_ROOT, ".jobs", `${slug}.md`),
-    disabledJobFilePath: (slug: string) => join(TMP_ROOT, ".jobs", `${slug}.disabled.md`),
-    jobRunsDir: (slug: string) => join(TMP_ROOT, ".runs", slug),
-    runSidecarPath: (slug: string, runId: string) => join(TMP_ROOT, ".runs", slug, `${runId}.json`),
+    jobFilePath: (slug: string) => pJoin(state.root, ".jobs", `${slug}.md`),
+    disabledJobFilePath: (slug: string) => pJoin(state.root, ".jobs", `${slug}.disabled.md`),
+    jobRunsDir: (slug: string) => pJoin(state.root, ".runs", slug),
+    runSidecarPath: (slug: string, runId: string) =>
+      pJoin(state.root, ".runs", slug, `${runId}.json`),
     runLogPath: (slug: string, runId: string) =>
-      join(TMP_ROOT, ".runs", slug, `${runId}.log.jsonl`),
-    defaultOutputDir: (slug: string) => join(TMP_ROOT, slug),
+      pJoin(state.root, ".runs", slug, `${runId}.log.jsonl`),
+    defaultOutputDir: (slug: string) => pJoin(state.root, slug),
     ensureReportsTree: async () => {
-      if (!existsSync(TMP_ROOT)) await mkdir(TMP_ROOT, { recursive: true });
-      const jobs = join(TMP_ROOT, ".jobs");
-      const runs = join(TMP_ROOT, ".runs");
-      if (!existsSync(jobs)) await mkdir(jobs, { recursive: true });
-      if (!existsSync(runs)) await mkdir(runs, { recursive: true });
+      if (!exists(state.root)) await mk(state.root, { recursive: true });
+      const jobs = pJoin(state.root, ".jobs");
+      const runs = pJoin(state.root, ".runs");
+      if (!exists(jobs)) await mk(jobs, { recursive: true });
+      if (!exists(runs)) await mk(runs, { recursive: true });
     },
   };
 });
@@ -49,11 +55,11 @@ const { countRunsForJob } = await import("./run-store");
 
 describe("countRunsForJob", () => {
   beforeEach(async () => {
-    TMP_ROOT = await mkdtemp(join(tmpdir(), "reports-test-"));
+    state.root = await mkdtemp(join(tmpdir(), "reports-test-"));
   });
   afterEach(async () => {
-    if (TMP_ROOT && existsSync(TMP_ROOT)) {
-      await rm(TMP_ROOT, { recursive: true, force: true });
+    if (state.root && existsSync(state.root)) {
+      await rm(state.root, { recursive: true, force: true });
     }
   });
 
@@ -63,7 +69,7 @@ describe("countRunsForJob", () => {
   });
 
   it("sums statuses across sidecars", async () => {
-    const dir = join(TMP_ROOT, ".runs", "demo");
+    const dir = join(state.root, ".runs", "demo");
     await mkdir(dir, { recursive: true });
     const base = {
       jobId: "demo",

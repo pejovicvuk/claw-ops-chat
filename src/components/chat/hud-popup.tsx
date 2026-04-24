@@ -1,153 +1,120 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import type { ActiveToolInfo, ChatMessage, ClaudeStatus } from "@/lib/types";
-import type { ContextUsage } from "@/lib/use-claude-chat";
-import { computeCost, formatCost, ratesFor } from "@/lib/model-pricing";
+import { useEffect, useState } from "react";
+import { authFetch } from "@/lib/auth";
+import { formatResetsIn, toMillis } from "@/lib/format-relative-time";
 
-interface HudPopupProps {
-  status: ClaudeStatus;
-  activeTool: ActiveToolInfo | null;
-  contextUsage: ContextUsage | null;
-  messages: ChatMessage[];
-  sessionStartedAt: number | null;
+const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
+
+interface RateLimitWindow {
+  status: "allowed" | "allowed_warning" | "rejected";
+  utilization?: number;
+  resetsAt?: number | null;
+  isUsingOverage?: boolean;
+}
+
+interface RateLimitsCache {
+  updatedAt: number | null;
+  windows: Record<string, RateLimitWindow>;
 }
 
 /**
- * Session stats popup. Three sections — Session, Usage, Right now —
- * each showing a few label / value rows. Elapsed ticks every second
- * while the popup is open (we avoid a global interval so closed popups
- * don't burn render cycles).
+ * Account-scoped rate-limits popup. Shows exactly two rows — the
+ * Claude subscriber 5-hour and 7-day windows, same as VS Code's Claude
+ * extension or the `/usage` slash command. Numbers are account-wide
+ * (not per-session) so switching chats shows the same values.
+ *
+ * Data comes from `GET /chat/api/rate-limits`, which is populated by
+ * the server whenever any turn in any session emits an SDK
+ * `rate_limit_event`. If the cache is empty (fresh deployment, no
+ * turns have run), the rows render "—" with a footnote.
  */
-export function HudPopup({
-  status,
-  activeTool,
-  contextUsage,
-  messages,
-  sessionStartedAt,
-}: HudPopupProps) {
-  // Tick for elapsed display. Only runs while the popup is mounted, which
-  // matches how often it's visible — the parent unmounts us when closed.
+export function HudPopup() {
+  const [cache, setCache] = useState<RateLimitsCache | null>(null);
   const [now, setNow] = useState(() => Date.now());
+
+  // One-second tick for the "resets in …" countdown. Mounted only while
+  // the popup is open, so closed popups don't burn cycles.
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
 
-  const { turns, toolCalls } = useMemo(() => {
-    let turns = 0;
-    let toolCalls = 0;
-    for (const m of messages) {
-      if (m.role === "assistant" && m.type === "text") turns++;
-      if (m.type === "tool_use") toolCalls++;
-    }
-    return { turns, toolCalls };
-  }, [messages]);
+  // Fetch on mount + every 30s. The fetch is authFetch-gated so it
+  // rides the existing session cookie.
+  useEffect(() => {
+    let cancelled = false;
+    const pull = async () => {
+      try {
+        const res = await authFetch(`${BASE}/api/rate-limits`);
+        if (!res.ok) throw new Error("fetch");
+        const data = (await res.json()) as RateLimitsCache;
+        if (!cancelled) setCache(data);
+      } catch {
+        if (!cancelled) setCache({ updatedAt: null, windows: {} });
+      }
+    };
+    void pull();
+    const id = setInterval(pull, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
 
-  const modelLabel = useMemo(() => {
-    const rates = ratesFor(contextUsage?.model);
-    if (rates) return rates.label;
-    if (contextUsage?.model) return contextUsage.model;
-    return "—";
-  }, [contextUsage]);
-
-  const cost = useMemo(
-    () =>
-      contextUsage
-        ? computeCost({
-            model: contextUsage.model,
-            inputTokens: contextUsage.inputTokens ?? 0,
-            outputTokens: contextUsage.outputTokens ?? 0,
-            cacheReadTokens: contextUsage.cacheReadTokens ?? 0,
-            cacheCreateTokens: contextUsage.cacheCreateTokens ?? 0,
-          })
-        : null,
-    [contextUsage],
-  );
-
-  const elapsed = sessionStartedAt ? formatElapsed(now - sessionStartedAt) : "—";
-  const contextLabel = contextUsage
-    ? `${contextUsage.percentage}%  (${formatTokens(contextUsage.used)} / ${formatTokens(contextUsage.max)})`
-    : "—";
-  const statusLabel = STATUS_LABELS[status] ?? status;
-  const activeLabel =
-    status === "tool_running" && activeTool ? activeTool.name : status === "idle" ? "Idle" : "—";
+  const fiveHour = cache?.windows.five_hour;
+  const sevenDay = cache?.windows.seven_day;
+  const empty = !cache || (!fiveHour && !sevenDay);
 
   return (
-    <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[240px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
-      <Section title="Session">
-        <Row label="Model" value={modelLabel} mono />
-        <Row label="Elapsed" value={elapsed} />
-        <Row label="Turns" value={String(turns)} />
-      </Section>
-      <Divider />
-      <Section title="Usage">
-        <Row label="Context" value={contextLabel} />
-        <Row label="Tool calls" value={String(toolCalls)} />
-        <Row label="Cost" value={formatCost(cost)} />
-      </Section>
-      <Divider />
-      <Section title="Right now">
-        <Row label="Status" value={statusLabel} />
-        <Row
-          label="Active"
-          value={activeLabel}
-          mono={activeLabel !== "—" && activeLabel !== "Idle"}
-        />
-      </Section>
-    </div>
-  );
-}
-
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-canvas-muted">
-        {title}
+    <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[260px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
+      <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-canvas-muted">
+        Rate limits
       </p>
-      <div className="space-y-0.5">{children}</div>
+      <div className="space-y-1.5">
+        <Row label="5-hour" window={fiveHour} now={now} />
+        <Row label="7-day" window={sevenDay} now={now} />
+      </div>
+      {empty && (
+        <p className="mt-2 text-[10px] leading-snug text-canvas-muted">
+          Numbers appear after your first turn.
+        </p>
+      )}
     </div>
   );
 }
 
-function Row({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+interface RowProps {
+  label: string;
+  window: RateLimitWindow | undefined;
+  now: number;
+}
+
+function Row({ label, window, now }: RowProps) {
+  const pct =
+    window && typeof window.utilization === "number"
+      ? Math.max(0, Math.min(100, Math.round(window.utilization * 100)))
+      : null;
+  const resetsAt = toMillis(window?.resetsAt);
+  const resetsLabel = resetsAt ? `resets in ${formatResetsIn(resetsAt, now)}` : "";
+  const pctClass =
+    pct === null
+      ? "text-canvas-muted"
+      : window?.status === "rejected" || pct >= 100
+        ? "text-red-500"
+        : pct >= 80
+          ? "text-orange-500"
+          : "text-canvas-fg";
+
   return (
     <div className="flex items-baseline justify-between gap-3">
       <span className="text-[11px] text-canvas-muted">{label}</span>
-      <span className={`truncate text-[12px] text-canvas-fg ${mono ? "font-mono" : "font-medium"}`}>
-        {value}
+      <span className="flex items-baseline gap-2">
+        <span className={`text-[13px] font-semibold ${pctClass}`}>
+          {pct === null ? "—" : `${pct}%`}
+        </span>
+        {resetsLabel && <span className="text-[10px] text-canvas-muted">{resetsLabel}</span>}
       </span>
     </div>
   );
-}
-
-function Divider() {
-  return <div className="my-2 h-px bg-canvas-border/60" />;
-}
-
-const STATUS_LABELS: Record<string, string> = {
-  disconnected: "Disconnected",
-  connecting: "Connecting",
-  idle: "Ready",
-  thinking: "Thinking",
-  tool_running: "Running tool",
-  awaiting_permission: "Needs approval",
-  awaiting_input: "Needs your input",
-};
-
-function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}k`;
-  return `${(n / 1_000_000).toFixed(2)}M`;
-}
-
-function formatElapsed(ms: number): string {
-  if (ms < 0) ms = 0;
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  if (h > 0) return `${h}h ${m}m ${s}s`;
-  if (m > 0) return `${m}m ${s}s`;
-  return `${s}s`;
 }

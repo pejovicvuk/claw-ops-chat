@@ -31,6 +31,7 @@ import {
   type PersistedSession,
 } from "./src/lib/session-persistence";
 import { getCustomAppendForSdk } from "./src/lib/agent-config";
+import { applyRateLimitEvent as applyAccountRateLimitEvent } from "./src/lib/account-rate-limits";
 import { decideCronTool, type ToolPolicy } from "./src/lib/reports/tool-policy";
 import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
@@ -198,7 +199,10 @@ interface ChatSession {
    * (emits a proper `result` with interrupt subtype) before falling back
    * to AbortController. Null when no turn is in flight.
    */
-  currentQuery: { interrupt?: () => Promise<void> } | null;
+  currentQuery: {
+    interrupt?: () => Promise<void>;
+    setPermissionMode?: (mode: string) => Promise<void>;
+  } | null;
   /**
    * Set to true when the `stop` client message aborts the current turn.
    * The for-await loop's catch block checks this flag and skips the
@@ -306,6 +310,19 @@ async function validateAccessToken(token: string): Promise<boolean> {
 /* ------------------------------------------------------------------ */
 /*  Session Manager                                                    */
 /* ------------------------------------------------------------------ */
+
+/**
+ * Short, per-process random hex injected into every pending-request ID so
+ * IDs never collide across server restarts. The client persists the set of
+ * already-answered request IDs to sessionStorage (so a reload doesn't
+ * re-prompt the user). Without a boot prefix, after a container restart
+ * the server's `requestCounter` resets to 0 and regenerates ids like
+ * `req-1`, `req-2`, ... — which the client's dedup cache has already
+ * marked "resolved". That caused the observed "agent is waiting for
+ * approval but no modal appears" bug: the new permission_request events
+ * were silently dropped as stale.
+ */
+const SERVER_BOOT_ID = Math.random().toString(36).slice(2, 10);
 
 class SessionManager {
   private sessions = new Map<string, ChatSession>();
@@ -736,7 +753,12 @@ class SessionManager {
     }
 
     if (type === "set_effort") {
-      session.effort = (msg.effort as string) || null;
+      // Whitelist the SDK's EffortLevel values; anything else (including
+      // "" for Auto) becomes null and the SDK falls back to adaptive
+      // thinking.
+      const raw = typeof msg.effort === "string" ? msg.effort : "";
+      const allowed = new Set(["low", "medium", "high", "xhigh", "max"]);
+      session.effort = allowed.has(raw) ? raw : null;
       return;
     }
 
@@ -747,12 +769,17 @@ class SessionManager {
   }
 
   /**
-   * Update a session's permission mode and broadcast the change to every
-   * connected client so the toolbar stays in sync. Called both when the
-   * client explicitly sends `set_mode` (for multi-tab sync) and when the
-   * server changes mode on its own (ExitPlanMode approval — otherwise the
-   * UI stays stuck on "Plan Mode" even though the agent is acting in
-   * accept-edits).
+   * Update a session's permission mode, broadcast the change to every
+   * connected client, and tell the live SDK Query handle to flip its
+   * own internal gate. Called both when the client explicitly sends
+   * `set_mode` (for multi-tab sync) and when the server changes mode on
+   * its own (ExitPlanMode approval).
+   *
+   * Without the `query.setPermissionMode()` call, the SDK keeps
+   * enforcing the previous mode for the rest of the turn — so after
+   * plan-approval the agent sees its Bash/Edit calls denied by the
+   * SDK's plan-mode gate even though our `session.permissionMode`
+   * flipped to `acceptEdits`.
    */
   private setSessionMode(
     session: ChatSession,
@@ -761,6 +788,18 @@ class SessionManager {
   ): void {
     session.permissionMode = mode;
     this.broadcast(session, { type: "mode_changed", mode, reason });
+    // Fire-and-forget: session state + UI stay correct even if the SDK
+    // call can't land (e.g. the Query handle already finished).
+    const setPermOnQuery = session.currentQuery?.setPermissionMode;
+    if (typeof setPermOnQuery === "function") {
+      try {
+        void setPermOnQuery.call(session.currentQuery, mode).catch(() => {
+          /* SDK rejected — we already updated our own state */
+        });
+      } catch {
+        /* synchronous throw — ignore */
+      }
+    }
   }
 
   private async handleUserMessage(session: ChatSession, text: string) {
@@ -828,7 +867,16 @@ class SessionManager {
       // problem warrants it. Delivered as thinking_delta stream events,
       // which the UI renders as a collapsible Thinking block. Opt-out
       // with CLAUDE_THINKING=off if the extra tokens cost matter.
-      ...(process.env.CLAUDE_THINKING !== "off" ? { thinking: { type: "adaptive" } } : {}),
+      //
+      // IMPORTANT: adaptive thinking overrides any explicit `effort`
+      // value, so the toolbar's Low/Med/High/Max selector used to be a
+      // no-op (every turn ran as "auto"). Only enable adaptive thinking
+      // when the user picked "Auto" (session.effort === null).
+      ...(session.effort
+        ? {}
+        : process.env.CLAUDE_THINKING !== "off"
+          ? { thinking: { type: "adaptive" } }
+          : {}),
       // Pass the mode through to the SDK. Without this, the SDK never
       // exposes the ExitPlanMode tool to Claude when the user chose
       // plan mode — Claude couldn't call it even when asked, and just
@@ -865,7 +913,7 @@ class SessionManager {
 
         // Handle AskUserQuestion
         if (toolName === "AskUserQuestion") {
-          const id = `req-${++session.requestCounter}`;
+          const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
           this.broadcast(session, { type: "ask_question", id, questions: input.questions || [] });
           this.setStatus(session, "awaiting_input");
           const response = await this.waitForResponse(session, id);
@@ -885,7 +933,7 @@ class SessionManager {
         // reason" in user bug reports). This branch renders a proper plan
         // card on the client and applies the user's chosen mode switch.
         if (toolName === "ExitPlanMode") {
-          const id = `req-${++session.requestCounter}`;
+          const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
           const planText = typeof input.plan === "string" ? input.plan : JSON.stringify(input);
           this.broadcast(session, { type: "plan_proposal", id, plan: planText });
           this.setStatus(session, "awaiting_permission");
@@ -961,7 +1009,7 @@ class SessionManager {
         }
 
         // Default mode (or tools not auto-handled above): ask the user
-        const id = `req-${++session.requestCounter}`;
+        const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
         const description = getToolDescription(toolName, input);
         this.broadcast(session, { type: "permission_request", id, toolName, input, description });
         this.setStatus(session, "awaiting_permission");
@@ -1092,9 +1140,13 @@ class SessionManager {
       try {
         messageStream = query(queryParams as Parameters<typeof query>[0]);
         // Stash the Query handle so the `stop` client message can call
-        // .interrupt() on it for a graceful SDK-level stop.
+        // .interrupt() on it for a graceful SDK-level stop, and so the
+        // ExitPlanMode approval / client mode switches can call
+        // .setPermissionMode() on it to tell the SDK's internal gate to
+        // stop enforcing plan mode mid-turn.
         session.currentQuery = messageStream as unknown as {
           interrupt?: () => Promise<void>;
+          setPermissionMode?: (mode: string) => Promise<void>;
         };
         // Try to get the first message to detect resume failures early
         const first = await (messageStream as AsyncIterableIterator<unknown>).next();
@@ -1142,6 +1194,7 @@ class SessionManager {
           messageStream = query(queryParams as Parameters<typeof query>[0]);
           session.currentQuery = messageStream as unknown as {
             interrupt?: () => Promise<void>;
+            setPermissionMode?: (mode: string) => Promise<void>;
           };
         } else {
           throw resumeErr;
@@ -1149,6 +1202,13 @@ class SessionManager {
       }
 
       for await (const message of messageStream!) {
+        // Bail out immediately if the user hit Stop. The SDK's
+        // abortController.abort() kills the subprocess, but the async
+        // iterator may still yield buffered messages for a second or two
+        // — leaving the turn visibly unresponsive to the user. This
+        // check short-circuits the loop the moment a stop arrives.
+        if (session.userAborted || abortController.signal.aborted) break;
+
         const msg = message as Record<string, unknown>;
 
         // Session init
@@ -1254,6 +1314,22 @@ class SessionManager {
             continue;
           }
 
+          continue;
+        }
+
+        // Subscriber rate-limit windows. One event per window type; we
+        // merge into session.rateLimits so the HUD always has the full
+        // 5h + 7d picture even when only one window changed.
+        if (msg.type === "rate_limit_event") {
+          // Account-scoped: the 5h / 7d windows are per-Anthropic-account,
+          // not per-session. One global cache on disk is the source of
+          // truth; the HUD popup fetches it via GET /chat/api/rate-limits.
+          // Fire-and-forget — a write failure must not block the turn.
+          void applyAccountRateLimitEvent(
+            (msg as Record<string, unknown>).rate_limit_info as Record<string, unknown>,
+          ).catch(() => {
+            /* swallow I/O errors; next event retries */
+          });
           continue;
         }
 

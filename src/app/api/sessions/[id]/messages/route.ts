@@ -13,7 +13,15 @@ interface MessageEntry {
 
 interface SessionMessagesResponse {
   messages: MessageEntry[];
-  contextUsage: { used: number; max: number; percentage: number } | null;
+  contextUsage: {
+    used: number;
+    max: number;
+    percentage: number;
+    model?: string | null;
+    inputTokens?: number;
+    cacheReadTokens?: number;
+    cacheCreateTokens?: number;
+  } | null;
   /** Original cwd used when the session was created — needed for SDK resume. */
   sessionCwd: string | null;
 }
@@ -148,7 +156,15 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
           const u = usageRef.value!;
           const used = u.input + u.cacheRead + u.cacheCreate;
           const max = getContextWindow();
-          return { used, max, percentage: Math.round((used / max) * 100) };
+          return {
+            used,
+            max,
+            percentage: Math.round((used / max) * 100),
+            model: u.model || null,
+            inputTokens: u.input,
+            cacheReadTokens: u.cacheRead,
+            cacheCreateTokens: u.cacheCreate,
+          };
         })()
       : null;
 

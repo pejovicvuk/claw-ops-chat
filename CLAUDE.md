@@ -160,6 +160,45 @@ once at boot and every 6 hours thereafter via node-cron (scheduled in
 `server.ts`). Manual purge available from the UI (bulk by `olderThan`
 timestamp + optional category filter).
 
+## Chat previews
+
+Image / file / link previews rendered inline in assistant messages. Three
+same-origin proxy routes keep the strict CSP intact:
+
+- `/api/files/serve?path=` — local files with correct `Content-Type` for inline `<img>` / `<video>` / `<iframe src=pdf>`.
+- `/api/proxy/unfurl?url=` — fetches + parses + caches OpenGraph metadata.
+- `/api/proxy/image?url=` — fetches + caches external images; unfurl responses rewrite `imageUrl` / `favicon` to point here.
+
+Disk caches under `/root/.cache/` (bind-mounted, persists across restarts):
+
+- `unfurls/<sha256>.json` — 24h TTL, 10k-file cap
+- `images/<sha256>.<ext>` + `.meta.json` sidecar — 7d TTL, 1 GB cap
+
+Both caches purge on boot + every 12h via node-cron in `server.ts`.
+
+### SSRF hardening (critical)
+
+Every proxy fetch goes through `assertPublicUrl()` in
+`src/lib/proxy/ssrf-guard.ts` — rejects private IPv4 (10/8, 172.16/12,
+192.168/16, 127/8, 169.254/16 including AWS metadata, CGNAT, TEST-NETs),
+IPv6 loopback/ULA/link-local, and non-http(s) schemes. `fetchWithHops`
+re-runs the guard on every redirect hop (3 max) to block redirect-based
+SSRF. Body size is capped per route (unfurl 2 MB, image 10 MB).
+
+### Client components
+
+- `ImagePreview` — auto-routes local paths through `/api/files/serve` and external URLs through `/api/proxy/image`; click opens global `<Lightbox>`.
+- `LinkPreview` — lazy-fetches unfurl via `useUnfurl` (in-memory + disk cache); renders compact card below the inline link.
+- `SyntaxCode` — lazy-loads shiki, bundled langs: ts/tsx/js/jsx/python/rust/go/java/bash/json/yaml/markdown/sql/html/css/diff. Copy button + plain-pre fallback while loading.
+- `FilePathPill` — inline chip opening the file in the existing editor panel via URL `?open=…&active=…`.
+- `ToolResultBlock` specialises per `toolName`: Read on an image → inline `ImagePreview`, WebFetch → unfurl card + collapsed body, WebSearch → stack of mini cards, Write/Edit → file pill + collapsed diff, everything else → file-path detection inside the raw output.
+
+### Adding a new preview type
+
+Wire it in `markdown-renderer.tsx` (for assistant text) or add a branch in
+`ToolResultBlock` (for tool-specific previews). Keep preview fetches
+same-origin — direct external `<img>`/`fetch()` is blocked by CSP.
+
 ## Security Checklist
 
 - All API routes must call `extractSession(request)` first

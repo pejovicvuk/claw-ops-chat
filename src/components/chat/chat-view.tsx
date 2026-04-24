@@ -329,6 +329,19 @@ export function ChatView({
     return null;
   }, [messages]);
 
+  /**
+   * Map toolCallId → matching tool_use message so ToolResultBlock can
+   * render per-tool previews (e.g. inline image for Read, unfurl card
+   * for WebFetch) without re-scanning the message list.
+   */
+  const toolUseByCallId = useMemo(() => {
+    const map = new Map<string, (typeof messages)[number]>();
+    for (const m of messages) {
+      if (m.type === "tool_use" && m.toolCallId) map.set(m.toolCallId, m);
+    }
+    return map;
+  }, [messages]);
+
   // Capture the first-load snapshot once — these IDs get staggered animation
   // delays on mount. Post-capture arrivals (streaming) animate without delay.
   useEffect(() => {
@@ -737,6 +750,11 @@ export function ChatView({
                       <MessageBubble
                         message={msg}
                         isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
+                        siblingToolUse={
+                          msg.type === "tool_result" && msg.toolCallId
+                            ? toolUseByCallId.get(msg.toolCallId)
+                            : undefined
+                        }
                         onPermissionRespond={respondPermission}
                         onQuestionRespond={respondQuestion}
                         onPlanRespond={respondPlan}

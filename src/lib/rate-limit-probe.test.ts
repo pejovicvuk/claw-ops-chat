@@ -66,7 +66,7 @@ describe("probeRateLimits", () => {
     expect(headers.authorization).toBe("Bearer from-env");
   });
 
-  it("writes both five_hour and seven_day windows from a single response", async () => {
+  it("writes ONLY the five_hour window — seven_day stays pristine for SDK events", async () => {
     await writeCreds("t");
     mockFetch({
       status: 200,
@@ -76,11 +76,39 @@ describe("probeRateLimits", () => {
       },
     });
     const result = await probeRateLimits();
-    expect(result.applied).toBe(2);
+    expect(result.applied).toBe(1);
     const cache = await loadRateLimits();
     expect(cache.windows.five_hour?.status).toBe("allowed_warning");
-    expect(cache.windows.seven_day?.status).toBe("allowed_warning");
     expect(cache.windows.five_hour?.resetsAt).toBe(Date.parse("2100-01-01T00:00:00Z"));
+    // seven_day MUST NOT be fabricated from the probe — the response
+    // header only represents one window and we don't know which.
+    expect(cache.windows.seven_day).toBeUndefined();
+  });
+
+  it("preserves utilization that a prior SDK event wrote under five_hour", async () => {
+    await writeCreds("t");
+    // Simulate an SDK `rate_limit_event` that landed with a real utilization.
+    const { applyRateLimitEvent } = await import("./account-rate-limits");
+    await applyRateLimitEvent({
+      rateLimitType: "five_hour",
+      status: "allowed",
+      utilization: 0.42,
+      resetsAt: Date.parse("2100-01-01T00:00:00Z"),
+    });
+    // Probe response has no utilization — older overwrite-semantics
+    // would drop it; merge-semantics preserve it.
+    mockFetch({
+      status: 200,
+      headers: {
+        "anthropic-ratelimit-unified-status": "allowed",
+        "anthropic-ratelimit-unified-reset": "2100-02-01T00:00:00Z",
+      },
+    });
+    await probeRateLimits();
+    const cache = await loadRateLimits();
+    expect(cache.windows.five_hour?.utilization).toBeCloseTo(0.42);
+    // Reset advanced to the newer value though.
+    expect(cache.windows.five_hour?.resetsAt).toBe(Date.parse("2100-02-01T00:00:00Z"));
   });
 
   it("parses the overage header as isUsingOverage", async () => {

@@ -21,9 +21,6 @@ import { applyRateLimitEvent } from "./account-rate-limits";
  * override, same precedence the CLI uses). No new auth flow.
  */
 
-/** Supported rate-limit types the Anthropic backend reports. */
-const KNOWN_TYPES = ["five_hour", "seven_day"] as const;
-
 /** Header name → field extraction for the `unified-*` response headers. */
 const HEADER_PREFIX = "anthropic-ratelimit-unified-";
 
@@ -153,20 +150,22 @@ export async function probeRateLimits(): Promise<ProbeResult> {
   const info = extractFromHeaders(response.headers);
   if (!info) return { applied: 0, httpStatus: response.status };
 
-  // Write under both windows so the UI's 5h + 7d rows both surface the
-  // headroom status. The SDK's per-turn events will correct with
-  // type-specific data (including utilization) once a real turn runs.
-  let applied = 0;
-  for (const type of KNOWN_TYPES) {
-    await applyRateLimitEvent({
-      rateLimitType: type,
-      status: info.status,
-      resetsAt: info.resetsAt ?? undefined,
-      isUsingOverage: info.isUsingOverage,
-    });
-    applied++;
-  }
-  return { applied, httpStatus: response.status };
+  // Write ONLY to the five_hour window. Anthropic's unified headers
+  // carry a single window's status — typically the most restrictive
+  // one currently in effect, which for most Max-plan users is the
+  // 5-hour window. We can't distinguish five_hour vs seven_day from
+  // headers alone, so writing to both was producing two rows with
+  // identical status + reset time. The seven_day window is populated
+  // by the SDK's `rate_limit_event` stream on actual chat turns (which
+  // is type-tagged), and `applyRateLimitEvent`'s merge semantics
+  // preserve whatever utilization the SDK reported.
+  await applyRateLimitEvent({
+    rateLimitType: "five_hour",
+    status: info.status,
+    resetsAt: info.resetsAt ?? undefined,
+    isUsingOverage: info.isUsingOverage,
+  });
+  return { applied: 1, httpStatus: response.status };
 }
 
 /**

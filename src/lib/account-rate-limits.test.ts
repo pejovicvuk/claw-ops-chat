@@ -109,6 +109,24 @@ describe("applyRateLimitEvent", () => {
     expect(entries.some((e) => e.endsWith(".tmp"))).toBe(false);
   });
 
+  it("merges fields — a later event without utilization preserves the prior one", async () => {
+    await applyRateLimitEvent({
+      rateLimitType: "five_hour",
+      status: "allowed",
+      utilization: 0.42,
+      resetsAt: 1_700_000_000_000,
+    });
+    // Second event carries status + newer reset but no utilization
+    // (mimics what the rate-limit probe sees from response headers).
+    const cache = await applyRateLimitEvent({
+      rateLimitType: "five_hour",
+      status: "allowed",
+      resetsAt: 1_700_500_000_000,
+    });
+    expect(cache.windows.five_hour?.utilization).toBeCloseTo(0.42);
+    expect(cache.windows.five_hour?.resetsAt).toBe(1_700_500_000_000);
+  });
+
   it("survives a malformed cache file and overwrites it cleanly", async () => {
     const { writeFile, mkdir } = await import("fs/promises");
     await mkdir(join(workHome, ".claude"), { recursive: true });

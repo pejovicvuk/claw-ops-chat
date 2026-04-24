@@ -9,6 +9,24 @@ const MAX_RECONNECT_DELAY = 30_000;
 /** Base reconnection delay in ms. */
 const BASE_RECONNECT_DELAY = 1_000;
 
+/** Per-session localStorage key for the toolbar's permission mode. */
+function modeStorageKey(sessionId: string | null): string {
+  return sessionId ? `claw-chat-mode:${sessionId}:v1` : "claw-chat-mode:new:v1";
+}
+
+export interface ContextUsage {
+  used: number;
+  max: number;
+  percentage: number;
+  /** Model ID from the SDK's modelUsage / assistant message (added on every event). */
+  model?: string | null;
+  /** Token breakdowns — added alongside totals so the HUD can compute cost. */
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+}
+
 export function useClaudeChat(sessionId: string | null, sessionCwd?: string | null) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<ClaudeStatus>("disconnected");
@@ -16,11 +34,20 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const [claudeSessionId, setClaudeSessionId] = useState<string | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
   const [authRequired, setAuthRequired] = useState<{ message: string; hint: string } | null>(null);
-  const [contextUsage, setContextUsage] = useState<{
-    used: number;
-    max: number;
-    percentage: number;
-  } | null>(null);
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
+  // Per-session permission mode, persisted under modeStorageKey(sessionId).
+  // `default` when the session is fresh / localStorage is empty.
+  const [permissionMode, setPermissionModeState] = useState<string>(() => {
+    if (typeof window === "undefined") return "default";
+    try {
+      return localStorage.getItem(modeStorageKey(sessionId)) || "default";
+    } catch {
+      return "default";
+    }
+  });
+  // Monotonic timestamp for the HUD's "Elapsed" counter. Seeded when the
+  // WS connects for this session; cleared on session switch.
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const currentAssistantRef = useRef<string | null>(null);
@@ -52,12 +79,9 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   }, []);
 
   /* ── Seed context usage from loaded history ── */
-  const setInitialContextUsage = useCallback(
-    (usage: { used: number; max: number; percentage: number } | null) => {
-      setContextUsage(usage);
-    },
-    [],
-  );
+  const setInitialContextUsage = useCallback((usage: ContextUsage | null) => {
+    setContextUsage(usage);
+  }, []);
 
   /* ── Append or update streaming assistant text ── */
   const upsertAssistantText = useCallback((delta: string) => {
@@ -110,6 +134,24 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "session_init") {
         setClaudeSessionId(evt.sessionId as string);
+        // First activity for this tab — seed the HUD's elapsed clock. Already
+        // running? Leave it alone so subsequent init events (e.g. a mid-turn
+        // resume after a WS hiccup) don't reset the counter.
+        setSessionStartedAt((prev) => prev ?? Date.now());
+        return;
+      }
+
+      if (type === "mode_changed") {
+        // Authoritative mode update from the server (e.g. after ExitPlanMode
+        // approval flips plan → acceptEdits). Update local state + persist
+        // without echoing `set_mode` back, or we'd loop.
+        const mode = typeof evt.mode === "string" ? evt.mode : "default";
+        setPermissionModeState(mode);
+        try {
+          localStorage.setItem(modeStorageKey(sessionId), mode);
+        } catch {
+          /* ignore storage errors */
+        }
         return;
       }
 
@@ -423,6 +465,11 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
           used: (evt.used as number) || 0,
           max: (evt.max as number) || 0,
           percentage: (evt.percentage as number) || 0,
+          model: (evt.model as string | null | undefined) ?? null,
+          inputTokens: (evt.inputTokens as number) || 0,
+          outputTokens: (evt.outputTokens as number) || 0,
+          cacheReadTokens: (evt.cacheReadTokens as number) || 0,
+          cacheCreateTokens: (evt.cacheCreateTokens as number) || 0,
         });
         return;
       }
@@ -471,7 +518,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         return;
       }
     },
-    [upsertAssistantText],
+    [upsertAssistantText, sessionId],
   );
 
   /* ── Send JSON to server via WebSocket ── */
@@ -514,6 +561,39 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       resolvedPermissionsRef.current = new Set();
     }
   }, [resolvedStorageKey]);
+
+  /* ── Per-session mode + elapsed-timer sync ── */
+  // Remember the last sessionId we saw so we can detect the "null → real"
+  // transition when the SDK assigns an id to a brand-new chat. In that case
+  // we migrate the transient "new" mode slot onto the real id rather than
+  // silently resetting to default.
+  const prevSessionIdRef = useRef<string | null>(sessionId);
+  useEffect(() => {
+    const prev = prevSessionIdRef.current;
+    prevSessionIdRef.current = sessionId;
+    if (prev === sessionId) return;
+    // Session swap → reset the HUD elapsed timer; session_init on the new
+    // socket will reseed it.
+    setSessionStartedAt(null);
+    try {
+      if (prev === null && sessionId !== null) {
+        // New chat just got a real id — carry the user's current mode
+        // choice onto the real key and clear the transient slot.
+        localStorage.setItem(modeStorageKey(sessionId), permissionMode);
+        localStorage.removeItem(modeStorageKey(null));
+      } else {
+        // Switched to a different session — load its persisted mode.
+        const saved = localStorage.getItem(modeStorageKey(sessionId)) || "default";
+        setPermissionModeState(saved);
+      }
+    } catch {
+      /* ignore storage failures */
+    }
+    // permissionMode intentionally omitted — we only need its value at the
+    // moment the session id transitions, and including it would cause this
+    // effect to rerun on every mode change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
   /* ── Connect WebSocket ── */
   const connect = useCallback(() => {
@@ -642,7 +722,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     (
       planId: string,
       approve: boolean,
-      opts?: { newMode?: "default" | "acceptEdits"; message?: string },
+      opts?: { newMode?: "default" | "acceptEdits" | "auto"; message?: string },
     ) => {
       sendToServer({
         type: "plan_response",
@@ -657,7 +737,9 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       const outcome: NonNullable<ChatMessage["planOutcome"]> = approve
         ? opts?.newMode === "default"
           ? "approved_default"
-          : "approved_accept_edits"
+          : opts?.newMode === "auto"
+            ? "approved_auto"
+            : "approved_accept_edits"
         : "rejected";
 
       setMessages((prev) =>
@@ -721,8 +803,20 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
   /* ── Mode & effort ── */
   const setPermissionMode = useCallback(
-    (mode: string) => sendToServer({ type: "set_mode", mode }),
-    [sendToServer],
+    (mode: string) => {
+      // Optimistic local update so the toolbar responds instantly, then
+      // ship the change to the server and persist under the per-session
+      // localStorage key. Server will echo back a `mode_changed` event —
+      // the handler above is idempotent so the round-trip is a no-op.
+      setPermissionModeState(mode);
+      try {
+        localStorage.setItem(modeStorageKey(sessionId), mode);
+      } catch {
+        /* ignore */
+      }
+      sendToServer({ type: "set_mode", mode });
+    },
+    [sendToServer, sessionId],
   );
 
   const setEffort = useCallback(
@@ -789,6 +883,8 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     authRequired,
     clearAuthRequired,
     contextUsage,
+    permissionMode,
+    sessionStartedAt,
     sendMessage,
     stopGeneration,
     respondPermission,

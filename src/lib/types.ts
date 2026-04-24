@@ -32,7 +32,7 @@ export interface ChatMessage {
   planContent?: string;
   planResolved?: boolean;
   /** How the user resolved the plan — drives the "Approved"/"Rejected" badge. */
-  planOutcome?: "approved_accept_edits" | "approved_default" | "rejected";
+  planOutcome?: "approved_accept_edits" | "approved_default" | "approved_auto" | "rejected";
   planMessage?: string;
 }
 

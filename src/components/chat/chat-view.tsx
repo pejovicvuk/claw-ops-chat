@@ -124,7 +124,6 @@ export function ChatView({
     clearAuthRequired,
     contextUsage,
     permissionMode,
-    sessionStartedAt,
     respondPermission,
     respondQuestion,
     respondPlan,
@@ -422,15 +421,7 @@ export function ChatView({
                 </div>
               )}
 
-              {openPopup === "hud" && (
-                <HudPopup
-                  status={status}
-                  activeTool={activeTool}
-                  contextUsage={contextUsage}
-                  messages={messages}
-                  sessionStartedAt={sessionStartedAt}
-                />
-              )}
+              {openPopup === "hud" && <HudPopup />}
             </div>
           </div>
         )}
@@ -580,15 +571,7 @@ export function ChatView({
                   </div>
                 )}
 
-                {openPopup === "hud" && (
-                  <HudPopup
-                    status={status}
-                    activeTool={activeTool}
-                    contextUsage={contextUsage}
-                    messages={messages}
-                    sessionStartedAt={sessionStartedAt}
-                  />
-                )}
+                {openPopup === "hud" && <HudPopup />}
               </div>
             </div>
           )}

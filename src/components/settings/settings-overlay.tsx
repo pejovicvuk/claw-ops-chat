@@ -19,6 +19,11 @@ import { SettingsJiraPage } from "./pages/settings-jira-page";
 import { SettingsNotionPage } from "./pages/settings-notion-page";
 import { SettingsTrelloPage } from "./pages/settings-trello-page";
 import { SettingsTerminalPage } from "./pages/settings-terminal-page";
+import { SettingsAgentPage } from "./pages/settings-agent-page";
+import { SettingsAgentSystemPromptPage } from "./pages/settings-agent-system-prompt-page";
+import { SettingsAgentRulesPage } from "./pages/settings-agent-rules-page";
+import { SettingsAgentSkillsPage } from "./pages/settings-agent-skills-page";
+import { SettingsAgentSubagentsPage } from "./pages/settings-agent-subagents-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -35,6 +40,11 @@ type PageKey =
   | "connections/jira"
   | "connections/notion"
   | "connections/trello"
+  | "agent"
+  | "agent/system-prompt"
+  | "agent/rules"
+  | "agent/skills"
+  | "agent/subagents"
   | "terminal";
 
 interface PageInfo {
@@ -59,6 +69,11 @@ const PAGES: Record<PageKey, PageInfo> = {
   "connections/jira": { title: "Jira", parent: "connections" },
   "connections/notion": { title: "Notion", parent: "connections" },
   "connections/trello": { title: "Trello", parent: "connections" },
+  agent: { title: "Agent", parent: "main" },
+  "agent/system-prompt": { title: "System prompt", parent: "agent" },
+  "agent/rules": { title: "Rules", parent: "agent" },
+  "agent/skills": { title: "Skills", parent: "agent" },
+  "agent/subagents": { title: "Subagents", parent: "agent" },
   terminal: { title: "Terminal", parent: "main", wide: true },
 };
 
@@ -180,6 +195,11 @@ export function SettingsOverlay() {
           {page === "connections/jira" && <SettingsJiraPage />}
           {page === "connections/notion" && <SettingsNotionPage />}
           {page === "connections/trello" && <SettingsTrelloPage />}
+          {page === "agent" && <SettingsAgentPage />}
+          {page === "agent/system-prompt" && <SettingsAgentSystemPromptPage />}
+          {page === "agent/rules" && <SettingsAgentRulesPage />}
+          {page === "agent/skills" && <SettingsAgentSkillsPage />}
+          {page === "agent/subagents" && <SettingsAgentSubagentsPage />}
           {page === "terminal" && <SettingsTerminalPage />}
         </div>
 

@@ -30,6 +30,7 @@ import {
   persistSession,
   type PersistedSession,
 } from "./src/lib/session-persistence";
+import { getCustomAppendForSdk } from "./src/lib/agent-config";
 import { decideCronTool, type ToolPolicy } from "./src/lib/reports/tool-policy";
 import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
@@ -733,6 +734,23 @@ class SessionManager {
       return "";
     };
 
+    // Fresh read per-turn so "Agent behavior" settings edits (system prompt
+    // + rules) apply on the very next message — matching the loadMcpServers
+    // pattern below. Always returns a string; never throws.
+    const customAppend = await getCustomAppendForSdk();
+    const modeAppend =
+      session.permissionMode === "plan"
+        ? "You are currently in PLAN MODE. Do not run shell commands, " +
+          "edit files, or write new files in this turn — the host will " +
+          "deny those tool calls. Instead, propose a plan and call " +
+          "ExitPlanMode when you are ready for the user to review it."
+        : session.permissionMode === "acceptEdits"
+          ? "You are in ACCEPT-EDITS MODE. File edits and writes are " +
+            "pre-approved; proceed without asking for permission for those " +
+            "tools. Shell commands still require explicit approval."
+          : "";
+    const combinedAppend = [customAppend, modeAppend].filter(Boolean).join("\n\n");
+
     const queryOptions: Record<string, unknown> = {
       // Prefer the original cwd from JSONL (for resume to find the session file).
       // Fall back to CLAUDE_CWD env, then homedir() (works cross-platform).
@@ -886,36 +904,25 @@ class SessionManager {
         const current = loadMcpServers();
         return current ? { mcpServers: current } : {};
       })(),
-      // Tell Claude which permission mode it's in via systemPrompt. Without
-      // this, the server's canUseTool silently denies Bash/Edit in plan
-      // mode but Claude doesn't *know* it's in plan mode, so it can go
-      // "I'll run this command…" → denial → retry → loop. Giving it an
-      // explicit instruction avoids the loop and nudges it toward
-      // ExitPlanMode when it's ready.
-      ...(session.permissionMode === "plan"
+      // System prompt append. Combines the user's "Agent behavior" settings
+      // (custom prompt + concatenated rules from $CLAUDE_CWD/.claude/) with
+      // the mode-specific hint that tells Claude whether it's in plan or
+      // accept-edits mode. Without the mode hint, canUseTool silently
+      // denies Bash/Edit in plan mode but Claude doesn't *know* it's in
+      // plan mode, so it can loop "I'll run this command…" → denial → retry.
+      ...(combinedAppend
         ? {
             systemPrompt: {
-              type: "preset",
-              preset: "claude_code",
-              append:
-                "\n\nYou are currently in PLAN MODE. Do not run shell commands, " +
-                "edit files, or write new files in this turn — the host will " +
-                "deny those tool calls. Instead, propose a plan and call " +
-                "ExitPlanMode when you are ready for the user to review it.",
+              type: "preset" as const,
+              preset: "claude_code" as const,
+              append: `\n\n${combinedAppend}`,
             },
           }
-        : session.permissionMode === "acceptEdits"
-          ? {
-              systemPrompt: {
-                type: "preset",
-                preset: "claude_code",
-                append:
-                  "\n\nYou are in ACCEPT-EDITS MODE. File edits and writes are " +
-                  "pre-approved; proceed without asking for permission for those " +
-                  "tools. Shell commands still require explicit approval.",
-              },
-            }
-          : {}),
+        : {}),
+      // Load CLAUDE.md + .claude/agents/ + .claude/skills/ from the session's
+      // working directory so subagents and skills configured via Settings →
+      // Agent apply natively (rules are baked into the append above).
+      settingSources: ["project"] as const,
       // Always seed the SDK's env with the parent process's full env
       // (so PATH / HOME / locale / NODE_OPTIONS / all the usual chain
       // reach through to the Claude CLI subprocess and the MCP servers

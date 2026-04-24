@@ -4,6 +4,7 @@ import type { ReactNode } from "react";
 import { useMemo, useSyncExternalStore } from "react";
 import {
   FiChevronRight,
+  FiCpu,
   FiFileText,
   FiLink,
   FiMail,
@@ -55,6 +56,29 @@ export function SettingsMainPage() {
       {/* Appearance */}
       <SettingsSection title="Appearance" description="Choose how the app looks">
         <ThemeSelector />
+      </SettingsSection>
+
+      {/* Agent behavior — link to sub-page */}
+      <SettingsSection
+        title="Agent behavior"
+        description="Tell Claude about this device and give him rules"
+      >
+        <button
+          type="button"
+          onClick={() => setParam("settings", "agent")}
+          className="flex w-full items-center gap-3 rounded-xl border border-canvas-border bg-canvas-bg px-4 py-3 text-left transition-colors hover:bg-canvas-surface-hover"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-canvas-surface text-canvas-fg">
+            <FiCpu size={15} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-canvas-fg">Agent</p>
+            <p className="mt-0.5 text-[11px] text-canvas-muted">
+              System prompt, rules, skills, and subagents
+            </p>
+          </div>
+          <FiChevronRight size={14} className="shrink-0 text-canvas-muted" />
+        </button>
       </SettingsSection>
 
       {/* Connections — link to sub-page */}

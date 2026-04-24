@@ -26,6 +26,11 @@ const platform_detect_1 = require("./src/lib/platform-detect");
 const fs_2 = require("fs");
 const session_status_store_1 = require("./src/lib/session-status-store");
 const session_persistence_1 = require("./src/lib/session-persistence");
+const agent_config_1 = require("./src/lib/agent-config");
+const tool_policy_1 = require("./src/lib/reports/tool-policy");
+const scheduler_1 = require("./src/lib/reports/scheduler");
+const scheduler_singleton_1 = require("./src/lib/reports/scheduler-singleton");
+const session_manager_singleton_1 = require("./src/lib/reports/session-manager-singleton");
 let ptyModule = null;
 let ptyLoadError = null;
 function loadPty() {
@@ -217,6 +222,11 @@ class SessionManager {
                 status: "idle",
                 lastUserMessage: "",
                 wasInterrupted: false,
+                cronPolicy: null,
+                cronOnComplete: null,
+                cronOnEvent: null,
+                cronAbortTimer: null,
+                cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
             };
             this.sessions.set(sessionId, session);
             (0, session_status_store_1.setSessionStatus)(sessionId, "idle");
@@ -291,6 +301,11 @@ class SessionManager {
             status: "idle",
             lastUserMessage: persisted.lastUserMessage ?? "",
             wasInterrupted: wasMidTurn,
+            cronPolicy: null,
+            cronOnComplete: null,
+            cronOnEvent: null,
+            cronAbortTimer: null,
+            cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
         };
         this.sessions.set(session.id, session);
         (0, session_status_store_1.setSessionStatus)(session.id, "idle");
@@ -584,6 +599,21 @@ class SessionManager {
                 return `pattern: ${input.pattern}`;
             return "";
         };
+        // Fresh read per-turn so "Agent behavior" settings edits (system prompt
+        // + rules) apply on the very next message — matching the loadMcpServers
+        // pattern below. Always returns a string; never throws.
+        const customAppend = await (0, agent_config_1.getCustomAppendForSdk)();
+        const modeAppend = session.permissionMode === "plan"
+            ? "You are currently in PLAN MODE. Do not run shell commands, " +
+                "edit files, or write new files in this turn — the host will " +
+                "deny those tool calls. Instead, propose a plan and call " +
+                "ExitPlanMode when you are ready for the user to review it."
+            : session.permissionMode === "acceptEdits"
+                ? "You are in ACCEPT-EDITS MODE. File edits and writes are " +
+                    "pre-approved; proceed without asking for permission for those " +
+                    "tools. Shell commands still require explicit approval."
+                : "";
+        const combinedAppend = [customAppend, modeAppend].filter(Boolean).join("\n\n");
         const queryOptions = {
             // Prefer the original cwd from JSONL (for resume to find the session file).
             // Fall back to CLAUDE_CWD env, then homedir() (works cross-platform).
@@ -611,6 +641,21 @@ class SessionManager {
                         }
                         : {}),
             canUseTool: async (toolName, input) => {
+                // Autonomous cron runs take a short-circuit path: decideCronTool
+                // enforces the per-job allowlist, bash-prefix filter, and turn
+                // budget — with no interactive prompts at all. Returning here
+                // keeps the interactive branches below 100% untouched so the
+                // existing chat behavior is byte-identical after this refactor.
+                if (session.cronPolicy) {
+                    const decision = (0, tool_policy_1.decideCronTool)(session.cronPolicy, toolName, input);
+                    if (decision.behavior === "allow") {
+                        return { behavior: "allow", updatedInput: decision.updatedInput ?? input };
+                    }
+                    return {
+                        behavior: "deny",
+                        message: decision.message ?? "Denied by cron policy",
+                    };
+                }
                 // Handle AskUserQuestion
                 if (toolName === "AskUserQuestion") {
                     const id = `req-${++session.requestCounter}`;
@@ -715,34 +760,25 @@ class SessionManager {
                 const current = loadMcpServers();
                 return current ? { mcpServers: current } : {};
             })(),
-            // Tell Claude which permission mode it's in via systemPrompt. Without
-            // this, the server's canUseTool silently denies Bash/Edit in plan
-            // mode but Claude doesn't *know* it's in plan mode, so it can go
-            // "I'll run this command…" → denial → retry → loop. Giving it an
-            // explicit instruction avoids the loop and nudges it toward
-            // ExitPlanMode when it's ready.
-            ...(session.permissionMode === "plan"
+            // System prompt append. Combines the user's "Agent behavior" settings
+            // (custom prompt + concatenated rules from $CLAUDE_CWD/.claude/) with
+            // the mode-specific hint that tells Claude whether it's in plan or
+            // accept-edits mode. Without the mode hint, canUseTool silently
+            // denies Bash/Edit in plan mode but Claude doesn't *know* it's in
+            // plan mode, so it can loop "I'll run this command…" → denial → retry.
+            ...(combinedAppend
                 ? {
                     systemPrompt: {
                         type: "preset",
                         preset: "claude_code",
-                        append: "\n\nYou are currently in PLAN MODE. Do not run shell commands, " +
-                            "edit files, or write new files in this turn — the host will " +
-                            "deny those tool calls. Instead, propose a plan and call " +
-                            "ExitPlanMode when you are ready for the user to review it.",
+                        append: `\n\n${combinedAppend}`,
                     },
                 }
-                : session.permissionMode === "acceptEdits"
-                    ? {
-                        systemPrompt: {
-                            type: "preset",
-                            preset: "claude_code",
-                            append: "\n\nYou are in ACCEPT-EDITS MODE. File edits and writes are " +
-                                "pre-approved; proceed without asking for permission for those " +
-                                "tools. Shell commands still require explicit approval.",
-                        },
-                    }
-                    : {}),
+                : {}),
+            // Load CLAUDE.md + .claude/agents/ + .claude/skills/ from the session's
+            // working directory so subagents and skills configured via Settings →
+            // Agent apply natively (rules are baked into the append above).
+            settingSources: ["project"],
             // Always seed the SDK's env with the parent process's full env
             // (so PATH / HOME / locale / NODE_OPTIONS / all the usual chain
             // reach through to the Claude CLI subprocess and the MCP servers
@@ -989,6 +1025,24 @@ class SessionManager {
                     this.broadcastContextUsage(session, msg.modelUsage);
                     // Clear event history after turn completes — JSONL has the persisted record
                     session.eventHistory = [];
+                    // Notify an awaiting cron runner that the turn reached its
+                    // terminal result. The sidecar write happens in the runner,
+                    // so we pass through everything it needs to finalize.
+                    if (session.cronOnComplete) {
+                        session.cronOnComplete({
+                            claudeSessionId: session.claudeSessionId,
+                            turnsUsed: 0,
+                            toolCallsCount: 0,
+                            denials: [],
+                            tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+                            isError: Boolean(msg.is_error),
+                            errorMessage: msg.is_error
+                                ? typeof msg.result === "string"
+                                    ? msg.result
+                                    : "Run ended with error"
+                                : undefined,
+                        });
+                    }
                     continue;
                 }
                 // Unknown message type — log and continue. Without this fallthrough
@@ -1107,6 +1161,20 @@ class SessionManager {
         // Turn is done — flip the dot off. If a queued message starts next,
         // handleUserMessage() will flip it straight back to "thinking".
         this.setStatus(session, "idle");
+        // If a cron run is still awaiting resolution (e.g. the stream ended
+        // without emitting a result event — abort, spawn failure, etc.),
+        // settle with an error so the runner doesn't hang forever.
+        if (session.cronOnComplete) {
+            session.cronOnComplete({
+                claudeSessionId: session.claudeSessionId,
+                turnsUsed: 0,
+                toolCallsCount: 0,
+                denials: [],
+                tokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+                isError: true,
+                errorMessage: "Run ended without a terminal result event",
+            });
+        }
         // Process queued messages
         if (session.messageQueue.length > 0) {
             const next = session.messageQueue.shift();
@@ -1154,6 +1222,17 @@ class SessionManager {
             // writes once per microtask.
             this.queuePersist(session);
         }
+        // Tee into the cron run log if this session is an autonomous run.
+        // Errors in the hook are deliberately swallowed — a failing log
+        // writer must never break the SDK stream.
+        if (session.cronOnEvent) {
+            try {
+                session.cronOnEvent(event);
+            }
+            catch {
+                /* ignore */
+            }
+        }
         const data = JSON.stringify(event);
         for (const client of session.clients) {
             if (client.readyState === ws_1.WebSocket.OPEN) {
@@ -1190,6 +1269,14 @@ class SessionManager {
         const used = (usage.input_tokens || 0) +
             (usage.cache_read_input_tokens || 0) +
             (usage.cache_creation_input_tokens || 0);
+        // Accumulate for cron token accounting — the sidecar stores the
+        // total at run-end, not per-message. Out-of-band of any broadcast.
+        if (session.cronPolicy) {
+            session.cronTokenUsage.input += usage.input_tokens || 0;
+            session.cronTokenUsage.output += usage.output_tokens || 0;
+            session.cronTokenUsage.cacheRead += usage.cache_read_input_tokens || 0;
+            session.cronTokenUsage.cacheCreate += usage.cache_creation_input_tokens || 0;
+        }
         // Context window isn't in assistant usage — assume 1M.
         // The final `result` event corrects this with the real contextWindow from modelUsage.
         const max = 1000000;
@@ -1200,6 +1287,64 @@ class SessionManager {
             used,
             max,
             percentage: Math.round((used / max) * 100),
+        });
+    }
+    /**
+     * Drive one autonomous run through the existing SDK pipeline. Sets up
+     * session.cronPolicy so canUseTool takes the allowlist path, then calls
+     * handleUserMessage and returns a promise that resolves when the SDK
+     * emits its terminal result (or errors out).
+     */
+    runCron(args) {
+        const session = this.getOrCreateSession(args.sessionId);
+        session.sessionCwd = args.cwd;
+        session.cronTokenUsage = { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 };
+        session.cronOnEvent = args.onEvent ?? null;
+        session.cronPolicy = {
+            kind: "cron",
+            allowed: args.allowedTools,
+            allowedBashPrefixes: args.allowedBashPrefixes,
+            turnBudget: { remaining: args.maxTurns },
+            denials: [],
+        };
+        return new Promise((resolve) => {
+            let settled = false;
+            const settle = (outcome) => {
+                if (settled)
+                    return;
+                settled = true;
+                if (session.cronAbortTimer) {
+                    clearTimeout(session.cronAbortTimer);
+                    session.cronAbortTimer = null;
+                }
+                const policy = session.cronPolicy;
+                session.cronPolicy = null;
+                session.cronOnComplete = null;
+                session.cronOnEvent = null;
+                resolve({
+                    ...outcome,
+                    denials: policy ? [...policy.denials] : outcome.denials,
+                    turnsUsed: policy ? args.maxTurns - policy.turnBudget.remaining : outcome.turnsUsed,
+                    tokenUsage: { ...session.cronTokenUsage },
+                });
+            };
+            session.cronOnComplete = settle;
+            // Wall-clock safety: abort if the SDK stream runs past maxDurationSec.
+            session.cronAbortTimer = setTimeout(() => {
+                try {
+                    const q = session.currentQuery;
+                    if (q?.interrupt) {
+                        q.interrupt().catch(() => session.abortController?.abort());
+                    }
+                    else {
+                        session.abortController?.abort();
+                    }
+                }
+                catch {
+                    /* best-effort abort */
+                }
+            }, Math.max(1, args.maxDurationSec) * 1000);
+            this.handleUserMessage(session, args.prompt);
         });
     }
 }
@@ -1319,6 +1464,12 @@ function isOriginAllowed(origin) {
 const app = (0, next_1.default)({ dev });
 const handle = app.getRequestHandler();
 const sessionManager = new SessionManager();
+// Publish the SessionManager via a module-level singleton so API routes
+// can reach it even when the scheduler hasn't finished booting. This was
+// the root cause of the "Run Now" 503s: the scheduler singleton was the
+// only handle API routes had, and any transient bootstrap failure made
+// manual runs unrunnable.
+(0, session_manager_singleton_1.setSessionManager)(sessionManager);
 // Rehydrate session state from disk so a container restart doesn't
 // wipe every in-flight conversation. Runs synchronously (well, fire
 // and log) before we start listening — if it fails we still come up,
@@ -1335,6 +1486,18 @@ const sessionManager = new SessionManager();
     }
     catch (err) {
         console.warn(`!! Could not rehydrate sessions: ${err.message}`);
+    }
+})();
+// Bootstrap the reports scheduler. Sibling IIFE so a scheduler failure
+// (e.g. corrupt .jobs/ directory) doesn't block chat from coming up.
+(async () => {
+    try {
+        const scheduler = new scheduler_1.ReportScheduler(sessionManager);
+        (0, scheduler_singleton_1.setScheduler)(scheduler);
+        await scheduler.bootstrap();
+    }
+    catch (err) {
+        console.warn(`!! Could not start reports scheduler: ${err.message}`);
     }
 })();
 app.prepare().then(() => {

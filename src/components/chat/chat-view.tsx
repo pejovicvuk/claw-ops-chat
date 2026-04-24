@@ -124,6 +124,7 @@ export function ChatView({
     clearAuthRequired,
     contextUsage,
     permissionMode,
+    effort,
     respondPermission,
     respondQuestion,
     respondPlan,
@@ -174,7 +175,6 @@ export function ChatView({
   const historyIdsRef = useRef<string[]>([]);
   const capturedHistoryRef = useRef(false);
   const [loadingHistory, setLoadingHistory] = useState(!!resumeSessionId);
-  const [effortLevel, setEffortLevel] = useState<string | null>(null);
   const [showModeMenu, setShowModeMenu] = useState(false);
   // Pre-fills the composer from empty-state suggestion chips. The seq
   // version bumps on every click so ChatInput's effect re-runs even when
@@ -492,7 +492,7 @@ export function ChatView({
 
           <div className="flex items-center gap-0.5 rounded-full bg-canvas-surface-hover p-0.5">
             {EFFORT_OPTIONS.map((opt) => {
-              const isActive = (opt.value === "" && !effortLevel) || opt.value === effortLevel;
+              const isActive = (opt.value === "" && !effort) || opt.value === effort;
               // On mobile only show the active effort as a tight pill with
               // the letter (A/L/M/H/X) — tapping the row still lets the user
               // cycle through by clicking on different letters in the
@@ -502,11 +502,7 @@ export function ChatView({
                 <button
                   key={opt.value}
                   type="button"
-                  onClick={() => {
-                    const val = opt.value || null;
-                    setEffortLevel(val);
-                    setEffort(val);
-                  }}
+                  onClick={() => setEffort(opt.value || null)}
                   aria-label={`Effort: ${opt.label}`}
                   className={`rounded-full ${isMobile ? "min-w-[18px] px-1 py-0.5 text-[10px]" : "px-2 py-0.5 text-[9px]"} font-medium transition-all duration-200 ${
                     isActive

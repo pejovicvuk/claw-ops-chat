@@ -32,6 +32,7 @@ import {
 } from "./src/lib/session-persistence";
 import { getCustomAppendForSdk } from "./src/lib/agent-config";
 import { applyRateLimitEvent as applyAccountRateLimitEvent } from "./src/lib/account-rate-limits";
+import { startRateLimitProbe } from "./src/lib/rate-limit-probe";
 import { decideCronTool, type ToolPolicy } from "./src/lib/reports/tool-policy";
 import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
@@ -2174,6 +2175,12 @@ app.prepare().then(() => {
     console.log(`> Claw Chat ready on http://localhost:${port}`);
     console.log(`> WebSocket endpoint: ws://localhost:${port}/ws/chat`);
     console.log(`> API_ORIGIN: ${API_ORIGIN}`);
+
+    // Bootstrap + periodically refresh the account-level rate-limit cache
+    // via a cheap /v1/messages ping. Keeps the HUD popup populated even
+    // before the user has sent their first chat message this boot, and
+    // after long idle periods. Noop when no OAuth token is available.
+    startRateLimitProbe();
 
     // SDK sanity probe. If the bundled entry can't be resolved, every chat
     // query dies with a non-obvious ENOENT. Logging the resolved path + SDK

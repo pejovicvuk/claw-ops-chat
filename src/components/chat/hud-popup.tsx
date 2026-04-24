@@ -19,29 +19,29 @@ interface RateLimitsCache {
 }
 
 /**
- * Account-scoped rate-limits popup. Shows exactly two rows — the
- * Claude subscriber 5-hour and 7-day windows, same as VS Code's Claude
- * extension or the `/usage` slash command. Numbers are account-wide
- * (not per-session) so switching chats shows the same values.
+ * Account-scoped rate-limits popup — only the two rows the user asked for.
  *
- * Data comes from `GET /chat/api/rate-limits`, which is populated by
- * the server whenever any turn in any session emits an SDK
- * `rate_limit_event`. If the cache is empty (fresh deployment, no
- * turns have run), the rows render "—" with a footnote.
+ * Data sources are:
+ *   - A /v1/messages ping the server fires on boot + every 15 min
+ *     (populates `status` + `resetsAt` + `isUsingOverage` via the
+ *     `anthropic-ratelimit-unified-*` headers).
+ *   - Live SDK `rate_limit_event` messages from active turns (can
+ *     additionally carry an exact `utilization` 0..1 on some accounts).
+ *
+ * When `utilization` is unavailable we fall back to a status badge so the
+ * user still gets the signal that matters: "do I have headroom right now?"
  */
 export function HudPopup() {
   const [cache, setCache] = useState<RateLimitsCache | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
-  // One-second tick for the "resets in …" countdown. Mounted only while
-  // the popup is open, so closed popups don't burn cycles.
+  // 1-second countdown tick. Mounted only while the popup is open.
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
 
-  // Fetch on mount + every 30s. The fetch is authFetch-gated so it
-  // rides the existing session cookie.
+  // Fetch on mount + every 30s.
   useEffect(() => {
     let cancelled = false;
     const pull = async () => {
@@ -67,17 +67,18 @@ export function HudPopup() {
   const empty = !cache || (!fiveHour && !sevenDay);
 
   return (
-    <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[260px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
+    <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[280px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
       <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-canvas-muted">
         Rate limits
       </p>
-      <div className="space-y-1.5">
+      <div className="space-y-2">
         <Row label="5-hour" window={fiveHour} now={now} />
         <Row label="7-day" window={sevenDay} now={now} />
       </div>
       {empty && (
         <p className="mt-2 text-[10px] leading-snug text-canvas-muted">
-          Numbers appear after your first turn.
+          Waiting for the first data point. The server probes the API on boot and every 15 min;
+          sending any chat message also refreshes these windows.
         </p>
       )}
     </div>
@@ -91,30 +92,62 @@ interface RowProps {
 }
 
 function Row({ label, window, now }: RowProps) {
+  const hasData = Boolean(window);
   const pct =
     window && typeof window.utilization === "number"
       ? Math.max(0, Math.min(100, Math.round(window.utilization * 100)))
       : null;
   const resetsAt = toMillis(window?.resetsAt);
   const resetsLabel = resetsAt ? `resets in ${formatResetsIn(resetsAt, now)}` : "";
-  const pctClass =
-    pct === null
-      ? "text-canvas-muted"
-      : window?.status === "rejected" || pct >= 100
-        ? "text-red-500"
-        : pct >= 80
-          ? "text-orange-500"
-          : "text-canvas-fg";
 
   return (
-    <div className="flex items-baseline justify-between gap-3">
+    <div className="flex items-center justify-between gap-3">
       <span className="text-[11px] text-canvas-muted">{label}</span>
-      <span className="flex items-baseline gap-2">
-        <span className={`text-[13px] font-semibold ${pctClass}`}>
-          {pct === null ? "—" : `${pct}%`}
-        </span>
+      <span className="flex items-center gap-2">
+        {!hasData ? (
+          <span className="text-[12px] text-canvas-muted">—</span>
+        ) : pct !== null ? (
+          <span className={`text-[13px] font-semibold ${percentClass(pct, window!.status)}`}>
+            {pct}%
+          </span>
+        ) : (
+          <StatusBadge status={window!.status} />
+        )}
+        {window?.isUsingOverage && (
+          <span className="rounded-full bg-orange-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-orange-500">
+            overage
+          </span>
+        )}
         {resetsLabel && <span className="text-[10px] text-canvas-muted">{resetsLabel}</span>}
       </span>
     </div>
   );
+}
+
+function StatusBadge({ status }: { status: RateLimitWindow["status"] }) {
+  if (status === "rejected") {
+    return (
+      <span className="rounded-full bg-red-500/15 px-2 py-0.5 text-[11px] font-semibold text-red-500">
+        Limit hit
+      </span>
+    );
+  }
+  if (status === "allowed_warning") {
+    return (
+      <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-[11px] font-semibold text-orange-500">
+        Warning
+      </span>
+    );
+  }
+  return (
+    <span className="rounded-full bg-green-500/15 px-2 py-0.5 text-[11px] font-semibold text-green-500">
+      Allowed
+    </span>
+  );
+}
+
+function percentClass(pct: number, status: RateLimitWindow["status"]): string {
+  if (status === "rejected" || pct >= 100) return "text-red-500";
+  if (status === "allowed_warning" || pct >= 80) return "text-orange-500";
+  return "text-canvas-fg";
 }

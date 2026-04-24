@@ -41,6 +41,17 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
+# Compiled artifacts produced by `npm run dev`'s tsc call. Server.ts is
+# the intended output (plus bitbucket-mcp.js) but tsc also dumps .js
+# beside every .ts it pulls in transitively. These .js shadow the .ts
+# at vitest resolution time (bundler prefers .js when both exist) and
+# break the reports test suite. Keep the hand-maintained .js mirrors
+# (auth-server.js, session-persistence.js, etc.) — they're tracked
+# deliberately because the compiled server.js requires() them.
+src/lib/agent-config.js
+src/lib/bitbucket-custom-config.js
+src/lib/reports/*.js
+
 # Claude Code local settings (not shared)
 .claude/settings.local.json
 .claude/agent-memory-local/

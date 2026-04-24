@@ -759,6 +759,9 @@ class SessionManager {
       const raw = typeof msg.effort === "string" ? msg.effort : "";
       const allowed = new Set(["low", "medium", "high", "xhigh", "max"]);
       session.effort = allowed.has(raw) ? raw : null;
+      // Echo back to every connected tab so toolbars stay in sync after a
+      // reload or across multi-tab sessions. Mirrors `mode_changed`.
+      this.broadcast(session, { type: "effort_changed", effort: session.effort });
       return;
     }
 

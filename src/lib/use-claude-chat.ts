@@ -14,6 +14,11 @@ function modeStorageKey(sessionId: string | null): string {
   return sessionId ? `claw-chat-mode:${sessionId}:v1` : "claw-chat-mode:new:v1";
 }
 
+/** Per-session localStorage key for the toolbar's effort level. Empty string means Auto. */
+function effortStorageKey(sessionId: string | null): string {
+  return sessionId ? `claw-chat-effort:${sessionId}:v1` : "claw-chat-effort:new:v1";
+}
+
 export interface ContextUsage {
   used: number;
   max: number;
@@ -43,6 +48,17 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       return localStorage.getItem(modeStorageKey(sessionId)) || "default";
     } catch {
       return "default";
+    }
+  });
+  // Per-session Claude effort level ("low" | "medium" | "high" | "xhigh" |
+  // "max" | null). null means Auto (adaptive thinking). Persisted under
+  // effortStorageKey(sessionId); empty string in storage round-trips to null.
+  const [effort, setEffortState] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return localStorage.getItem(effortStorageKey(sessionId)) || null;
+    } catch {
+      return null;
     }
   });
   // Monotonic timestamp for the HUD's "Elapsed" counter. Seeded when the
@@ -149,6 +165,21 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         setPermissionModeState(mode);
         try {
           localStorage.setItem(modeStorageKey(sessionId), mode);
+        } catch {
+          /* ignore storage errors */
+        }
+        return;
+      }
+
+      if (type === "effort_changed") {
+        // Authoritative effort update from the server — echoed back from
+        // our own `set_effort` or originated in another tab for this
+        // session. Mirrors `mode_changed`: update local state + persist,
+        // don't round-trip.
+        const next = typeof evt.effort === "string" && evt.effort ? evt.effort : null;
+        setEffortState(next);
+        try {
+          localStorage.setItem(effortStorageKey(sessionId), next ?? "");
         } catch {
           /* ignore storage errors */
         }
@@ -578,20 +609,24 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     try {
       if (prev === null && sessionId !== null) {
         // New chat just got a real id — carry the user's current mode
-        // choice onto the real key and clear the transient slot.
+        // and effort choices onto the real key and clear the transient slot.
         localStorage.setItem(modeStorageKey(sessionId), permissionMode);
         localStorage.removeItem(modeStorageKey(null));
+        localStorage.setItem(effortStorageKey(sessionId), effort ?? "");
+        localStorage.removeItem(effortStorageKey(null));
       } else {
-        // Switched to a different session — load its persisted mode.
+        // Switched to a different session — load its persisted mode + effort.
         const saved = localStorage.getItem(modeStorageKey(sessionId)) || "default";
         setPermissionModeState(saved);
+        const savedEffort = localStorage.getItem(effortStorageKey(sessionId)) || null;
+        setEffortState(savedEffort);
       }
     } catch {
       /* ignore storage failures */
     }
-    // permissionMode intentionally omitted — we only need its value at the
-    // moment the session id transitions, and including it would cause this
-    // effect to rerun on every mode change.
+    // permissionMode / effort intentionally omitted — we only need their
+    // values at the moment the session id transitions, and including them
+    // would cause this effect to rerun on every toolbar change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
@@ -820,8 +855,19 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   );
 
   const setEffort = useCallback(
-    (effort: string | null) => sendToServer({ type: "set_effort", effort }),
-    [sendToServer],
+    (next: string | null) => {
+      // Mirror setPermissionMode: optimistic local update + persist, then
+      // ship to the server. The `effort_changed` echo handler above is
+      // idempotent so the round-trip doesn't loop.
+      setEffortState(next);
+      try {
+        localStorage.setItem(effortStorageKey(sessionId), next ?? "");
+      } catch {
+        /* ignore */
+      }
+      sendToServer({ type: "set_effort", effort: next });
+    },
+    [sendToServer, sessionId],
   );
 
   /* ── Reconnect ── */
@@ -884,6 +930,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     clearAuthRequired,
     contextUsage,
     permissionMode,
+    effort,
     sessionStartedAt,
     sendMessage,
     stopGeneration,

@@ -199,6 +199,27 @@ Wire it in `markdown-renderer.tsx` (for assistant text) or add a branch in
 `ToolResultBlock` (for tool-specific previews). Keep preview fetches
 same-origin — direct external `<img>`/`fetch()` is blocked by CSP.
 
+### File attachments in assistant prose
+
+When Claude mentions local file paths in its text (e.g. a bulleted list
+of `.pptx` / `.html` sources), the markdown renderer converts them into
+**attachment cards** (when alone on a line/bullet) or **compact pills**
+(when embedded in prose):
+
+- `src/components/chat/previews/file-card.tsx` — full attachment card.
+  - Images → reuses `ImagePreview`.
+  - PDFs → `<iframe src=/api/files/serve>` (480 px, scrollable, lazy-loaded).
+  - Video / audio → native `<video>` / `<audio>` with `controls`.
+  - Anything else → icon + filename + `prettyMimeLabel` + size + `[Preview] [Download]` buttons.
+- `src/components/chat/previews/file-path-pill.tsx` — compact chip; right-click or long-press opens a portal menu with `Preview` / `Download` / `Copy path`.
+- `src/lib/detect-file-paths.ts`:
+  - Extended regex covers Office (`pptx`/`docx`/`xlsx`), archives, media, plus the original code/text/image set — still gated on a path separator (`/`, `~/`, `./`).
+  - `isLonePathLine(line)` tells the renderer whether a paragraph/list-item segment should become a card or a pill.
+- `src/app/api/files/stat/route.ts` — lightweight size/mtime/mime endpoint consumed by the hook `useFileStat` (in-memory cached, 100 ms debounce).
+- `remark-breaks` is added so single newlines in assistant text become `<br>` elements — this gives the `p`/`li` overrides something to split on when they scan for lone-path lines.
+- Card Preview buttons reuse the existing floating editor panel via the `?open=…&active=…` URL pattern; binary files degrade to `BinaryPlaceholder`'s download-link fallback.
+- Download buttons use a same-origin `<a href="/api/files/download?path=…" download>` — the browser handles the save dialog and the httpOnly session cookie rides along.
+
 ## Security Checklist
 
 - All API routes must call `extractSession(request)` first

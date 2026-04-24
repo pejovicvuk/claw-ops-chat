@@ -1,11 +1,12 @@
 import { rm, stat } from "fs/promises";
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { safePath, SafePathError } from "@/lib/safe-path";
 
 /** Maximum number of entries in a directory before recursive delete is refused. */
 const MAX_RECURSIVE_ENTRIES = 100;
 
-export async function DELETE(request: Request) {
+async function deleteHandler(request: Request) {
   if (!extractSession(request)) return unauthorized();
 
   const url = new URL(request.url);
@@ -59,3 +60,11 @@ export async function DELETE(request: Request) {
     );
   }
 }
+
+export const DELETE = withAudit(
+  {
+    route: "/api/files/delete",
+    subjectFrom: (req) => new URL(req.url).searchParams.get("path"),
+  },
+  deleteHandler,
+);

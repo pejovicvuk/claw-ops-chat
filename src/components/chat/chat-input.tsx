@@ -64,6 +64,11 @@ export function ChatInput({
     status === "idle" &&
     !hasPendingUpload;
   const isActive = ACTIVE_STATUSES.has(status);
+  // Pill stays in its "expanded" visual state whenever there's something
+  // to send — typed text or any attachment (including ones still
+  // uploading). Otherwise expansion falls back to CSS `:focus-within` so
+  // the pill grows while the user is interacting with it.
+  const hasContent = text.trim().length > 0 || attachments.length > 0;
 
   // Sync external pre-fills (suggestion chips) into the composer.
   const initialSeq = initialText?.seq ?? 0;
@@ -81,11 +86,15 @@ export function ChatInput({
 
   const handleFileInput = useCallback(
     async (e: React.ChangeEvent<HTMLInputElement>) => {
-      const list = e.target.files;
-      e.target.value = "";
-      if (!list || list.length === 0) return;
-      const files: File[] = [];
-      for (let i = 0; i < list.length; i++) files.push(list[i]);
+      // Snapshot the files into a real Array BEFORE resetting the input
+      // value. `input.files` is a live FileList in some browsers and gets
+      // cleared when we set `value = ""`, so iterating it afterwards
+      // yields an empty list and no files get attached — which was the
+      // symptom of uploads silently failing after picking from the dialog.
+      const target = e.target;
+      const files: File[] = target.files ? Array.from(target.files) : [];
+      target.value = "";
+      if (files.length === 0) return;
       await onAddFiles(files);
     },
     [onAddFiles],
@@ -159,10 +168,6 @@ export function ChatInput({
     el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
   }, []);
 
-  const triggerFileInput = useCallback(() => {
-    fileInputRef.current?.click();
-  }, []);
-
   // Native textarea cancels external file drops by default. preventDefault
   // on dragover + drop lets the outer dropzone handle it. We do NOT handle
   // the drop here — just stop the browser's default so the event bubbles
@@ -176,27 +181,46 @@ export function ChatInput({
       className="shrink-0 px-3 py-2"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
     >
-      <div className="mx-auto md:max-w-3xl md:focus-within:max-w-4xl">
-        <div className="glass-input flex flex-col rounded-2xl px-2.5 py-1.5 transition-all duration-300 ease-out focus-within:-translate-y-1 focus-within:px-3 focus-within:py-2 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]">
+      <div
+        className={`mx-auto ${
+          hasContent ? "md:max-w-4xl" : "md:max-w-3xl md:focus-within:max-w-4xl"
+        }`}
+      >
+        <div
+          className={`glass-input flex flex-col rounded-2xl transition-all duration-300 ease-out ${
+            hasContent
+              ? "-translate-y-1 px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
+              : "px-2.5 py-1.5 focus-within:-translate-y-1 focus-within:px-3 focus-within:py-2 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
+          }`}
+        >
           <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
           <div className="flex items-end gap-1.5">
-            <button
-              type="button"
-              onClick={triggerFileInput}
+            {/* Use a <label> wrapping the <input type="file"> so the browser
+                opens the native picker on click without any JavaScript. The
+                earlier `<button onClick={() => fileInput.click()}>` pattern
+                was flaky: whenever the composer was empty and unfocused,
+                the programmatic click got dropped by the browser (it fires
+                correctly only inside a "strict" user-activation context and
+                calling `focus()` around it kept consuming that activation).
+                A label's default behavior is the official cross-browser way
+                to open a file picker. */}
+            <label
               aria-label="Attach files"
-              className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-canvas-muted transition-colors duration-150 hover:bg-canvas-surface-hover hover:text-canvas-fg"
               title="Attach files"
+              className="pointer-events-auto mb-0.5 flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-canvas-muted transition-colors duration-150 hover:bg-canvas-surface-hover hover:text-canvas-fg"
             >
               <FiPaperclip size={15} />
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              className="hidden"
-              onChange={handleFileInput}
-            />
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="sr-only"
+                tabIndex={-1}
+                aria-hidden="true"
+                onChange={handleFileInput}
+              />
+            </label>
             <textarea
               ref={textareaRef}
               value={text}

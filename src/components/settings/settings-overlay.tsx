@@ -24,6 +24,7 @@ import { SettingsAgentSystemPromptPage } from "./pages/settings-agent-system-pro
 import { SettingsAgentRulesPage } from "./pages/settings-agent-rules-page";
 import { SettingsAgentSkillsPage } from "./pages/settings-agent-skills-page";
 import { SettingsAgentSubagentsPage } from "./pages/settings-agent-subagents-page";
+import { SettingsAuditPage } from "./pages/settings-audit-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -45,7 +46,8 @@ type PageKey =
   | "agent/rules"
   | "agent/skills"
   | "agent/subagents"
-  | "terminal";
+  | "terminal"
+  | "audit";
 
 interface PageInfo {
   /** Display title in the overlay header. */
@@ -75,6 +77,7 @@ const PAGES: Record<PageKey, PageInfo> = {
   "agent/skills": { title: "Skills", parent: "agent" },
   "agent/subagents": { title: "Subagents", parent: "agent" },
   terminal: { title: "Terminal", parent: "main", wide: true },
+  audit: { title: "Audit Log", parent: "main", wide: true },
 };
 
 /**
@@ -201,6 +204,7 @@ export function SettingsOverlay() {
           {page === "agent/skills" && <SettingsAgentSkillsPage />}
           {page === "agent/subagents" && <SettingsAgentSubagentsPage />}
           {page === "terminal" && <SettingsTerminalPage />}
+          {page === "audit" && <SettingsAuditPage />}
         </div>
 
         {/* Footer — only on main page */}

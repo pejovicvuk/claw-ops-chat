@@ -36,6 +36,11 @@ import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
+import { getAuditWriter } from "./src/lib/audit/writer";
+import { ensureAuditTree } from "./src/lib/audit/paths";
+import { purgeOldAuditFiles } from "./src/lib/audit/retention";
+import { logWsUpgrade } from "./src/lib/audit/api-wrap";
+import cron from "node-cron";
 
 // node-pty has a native binding — require it lazily so the server can still
 // start if the binding is missing, and only blow up when the terminal is used.
@@ -246,6 +251,8 @@ interface ChatSession {
     cacheRead: number;
     cacheCreate: number;
   };
+  /** Authenticated email of the client that established this session, for audit. */
+  actorEmail: string;
 }
 
 /**
@@ -331,6 +338,7 @@ class SessionManager {
         cronOnEvent: null,
         cronAbortTimer: null,
         cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+        actorEmail: "anonymous",
       };
       this.sessions.set(sessionId, session);
       setSessionStatus(sessionId, "idle");
@@ -410,6 +418,7 @@ class SessionManager {
       cronOnEvent: null,
       cronAbortTimer: null,
       cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+      actorEmail: "anonymous",
     };
     this.sessions.set(session.id, session);
     setSessionStatus(session.id, "idle");
@@ -480,9 +489,22 @@ class SessionManager {
     });
   }
 
-  connect(ws: WebSocket, sessionId: string, sessionCwd?: string) {
+  connect(ws: WebSocket, sessionId: string, sessionCwd?: string, actorEmail?: string) {
     const session = this.getOrCreateSession(sessionId);
     session.clients.add(ws);
+    if (actorEmail) session.actorEmail = actorEmail;
+    getAuditWriter()
+      .session({
+        type: "connected",
+        severity: "info",
+        actor: session.actorEmail,
+        subject: `Chat WS connected ${sessionId}`,
+        durationMs: null,
+        sessionId,
+        claudeSessionId: session.claudeSessionId,
+        details: { clientCount: session.clients.size, cwd: sessionCwd ?? null },
+      })
+      .catch(() => {});
 
     // Only treat a UUID-shaped sessionId as a resumable SDK session when
     // Claude Code has actually written a JSONL file for it. Previously
@@ -572,6 +594,18 @@ class SessionManager {
     ws.on("close", () => {
       clearInterval(heartbeat);
       session.clients.delete(ws);
+      getAuditWriter()
+        .session({
+          type: "disconnected",
+          severity: "info",
+          actor: session.actorEmail,
+          subject: `Chat WS disconnected ${sessionId}`,
+          durationMs: null,
+          sessionId,
+          claudeSessionId: session.claudeSessionId,
+          details: { clientCount: session.clients.size },
+        })
+        .catch(() => {});
       // Sessions stay alive even with 0 clients — work continues in background.
       // Only cleanup idle sessions (not processing, no clients) after 30 minutes.
       if (session.clients.size === 0 && !session.isProcessing) {
@@ -722,6 +756,20 @@ class SessionManager {
     // a new assistant-turn container before any stream_event arrives.
     const turnId = `turn-${Date.now()}-${++session.requestCounter}`;
     this.broadcast(session, { type: "turn_start", turnId });
+    const turnStartedAt = Date.now();
+    getAuditWriter()
+      .session({
+        type: "user_message",
+        severity: "info",
+        actor: session.actorEmail,
+        subject: `User message (${text.length} chars)`,
+        durationMs: null,
+        sessionId: session.id,
+        claudeSessionId: session.claudeSessionId,
+        turnId,
+        details: { textLength: text.length },
+      })
+      .catch(() => {});
     let toolInputAccum = "";
     let pendingToolUse: { id: string; name: string } | null = null;
 
@@ -885,6 +933,20 @@ class SessionManager {
         const description = getToolDescription(toolName, input);
         this.broadcast(session, { type: "permission_request", id, toolName, input, description });
         this.setStatus(session, "awaiting_permission");
+        getAuditWriter()
+          .session({
+            type: "permission_requested",
+            severity: "info",
+            actor: session.actorEmail,
+            subject: `Permission requested: ${toolName}`,
+            durationMs: null,
+            sessionId: session.id,
+            claudeSessionId: session.claudeSessionId,
+            turnId,
+            toolName,
+            details: { requestId: id },
+          })
+          .catch(() => {});
         const response = await this.waitForResponse(session, id);
         this.setStatus(session, "tool_running");
 
@@ -892,8 +954,36 @@ class SessionManager {
           if (response.allowSession) {
             session.sessionAllowedTools.add(toolName);
           }
+          getAuditWriter()
+            .session({
+              type: "permission_granted",
+              severity: "info",
+              actor: session.actorEmail,
+              subject: `Permission granted: ${toolName}`,
+              durationMs: null,
+              sessionId: session.id,
+              claudeSessionId: session.claudeSessionId,
+              turnId,
+              toolName,
+              details: { requestId: id, allowSession: Boolean(response.allowSession) },
+            })
+            .catch(() => {});
           return { behavior: "allow", updatedInput: input };
         }
+        getAuditWriter()
+          .session({
+            type: "permission_denied",
+            severity: "warn",
+            actor: session.actorEmail,
+            subject: `Permission denied: ${toolName}`,
+            durationMs: null,
+            sessionId: session.id,
+            claudeSessionId: session.claudeSessionId,
+            turnId,
+            toolName,
+            details: { requestId: id },
+          })
+          .catch(() => {});
         return { behavior: "deny", message: response.message || "User denied this action" };
       },
       ...(session.effort ? { effort: session.effort } : {}),
@@ -997,6 +1087,18 @@ class SessionManager {
             // lands on THIS session.
             this.aliasClaudeSessionId(session);
             this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
+            getAuditWriter()
+              .session({
+                type: "sdk_init",
+                severity: "info",
+                actor: session.actorEmail,
+                subject: `SDK session init ${msg.session_id}`,
+                durationMs: null,
+                sessionId: session.id,
+                claudeSessionId: session.claudeSessionId,
+                details: {},
+              })
+              .catch(() => {});
           }
         }
       } catch (resumeErr) {
@@ -1026,6 +1128,18 @@ class SessionManager {
           // Same alias trick as the probe path — see comment above.
           this.aliasClaudeSessionId(session);
           this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
+          getAuditWriter()
+            .session({
+              type: "sdk_init",
+              severity: "info",
+              actor: session.actorEmail,
+              subject: `SDK session init ${msg.session_id}`,
+              durationMs: null,
+              sessionId: session.id,
+              claudeSessionId: session.claudeSessionId,
+              details: {},
+            })
+            .catch(() => {});
           continue;
         }
 
@@ -1088,6 +1202,20 @@ class SessionManager {
                 name: pendingToolUse.name,
                 input: parsedInput,
               });
+              getAuditWriter()
+                .session({
+                  type: "tool_use_start",
+                  severity: "info",
+                  actor: session.actorEmail,
+                  subject: `Tool ${pendingToolUse.name}`,
+                  durationMs: null,
+                  sessionId: session.id,
+                  claudeSessionId: session.claudeSessionId,
+                  turnId,
+                  toolName: pendingToolUse.name,
+                  details: { toolId: pendingToolUse.id, inputKeys: Object.keys(parsedInput) },
+                })
+                .catch(() => {});
               pendingToolUse = null;
               toolInputAccum = "";
             }
@@ -1148,6 +1276,26 @@ class SessionManager {
                   name: block.name,
                   input: block.input,
                 });
+                getAuditWriter()
+                  .session({
+                    type: "tool_use_complete",
+                    severity: "info",
+                    actor: session.actorEmail,
+                    subject: `Tool ${block.name} complete`,
+                    durationMs: null,
+                    sessionId: session.id,
+                    claudeSessionId: session.claudeSessionId,
+                    turnId,
+                    toolName: block.name as string,
+                    details: {
+                      toolId: block.id,
+                      inputKeys:
+                        block.input && typeof block.input === "object"
+                          ? Object.keys(block.input as Record<string, unknown>)
+                          : [],
+                    },
+                  })
+                  .catch(() => {});
               }
             }
           }
@@ -1180,6 +1328,23 @@ class SessionManager {
             subtype: msg.subtype,
             permissionDenials: msg.permission_denials || [],
           });
+          getAuditWriter()
+            .session({
+              type: "turn_complete",
+              severity: msg.is_error ? "error" : "info",
+              actor: session.actorEmail,
+              subject: msg.is_error ? `Turn error ${turnId}` : `Turn complete ${turnId}`,
+              durationMs: Date.now() - turnStartedAt,
+              sessionId: session.id,
+              claudeSessionId: session.claudeSessionId,
+              turnId,
+              isError: Boolean(msg.is_error),
+              details: {
+                subtype: msg.subtype,
+                permissionDenials: msg.permission_denials || [],
+              },
+            })
+            .catch(() => {});
           this.broadcast(session, {
             type: "turn_end",
             turnId,
@@ -1301,6 +1466,25 @@ class SessionManager {
                 .slice(-10)
                 .join("\n")
             : undefined;
+
+        getAuditWriter()
+          .session({
+            type: "error",
+            severity: "error",
+            actor: session.actorEmail,
+            subject: authError
+              ? "Claude session auth error"
+              : setupRequired
+                ? "Claude setup error"
+                : "Claude session error",
+            durationMs: Date.now() - turnStartedAt,
+            sessionId: session.id,
+            claudeSessionId: session.claudeSessionId,
+            turnId,
+            isError: true,
+            details: { errorCode: errnoErr.code ?? null, message: rawMessage },
+          })
+          .catch(() => {});
 
         if (authError) {
           this.broadcast(session, {
@@ -1717,6 +1901,29 @@ setSessionManager(sessionManager);
   }
 })();
 
+// Bootstrap the audit log: ensure /root/.audit exists, run a one-shot
+// purge to sweep anything past retention that lingered through a crash,
+// then schedule a 6-hour recurring purge so we don't drift out of
+// retention while the container keeps running.
+(async () => {
+  try {
+    await ensureAuditTree();
+    await purgeOldAuditFiles();
+    cron.schedule(
+      "0 */6 * * *",
+      () => {
+        purgeOldAuditFiles().catch((err) => {
+          console.warn(`[audit] scheduled purge failed: ${(err as Error).message}`);
+        });
+      },
+      { timezone: "UTC" },
+    );
+    console.log(`> Audit log ready at /root/.audit (30-day retention)`);
+  } catch (err) {
+    console.warn(`!! Could not initialize audit log: ${(err as Error).message}`);
+  }
+})();
+
 app.prepare().then(() => {
   const server = createServer((req, res) => {
     const parsedUrl = parse(req.url || "/", true);
@@ -1758,27 +1965,42 @@ app.prepare().then(() => {
 
     // Authenticate: try signed session cookie first (fast, local HMAC check),
     // then fall back to validating access token via the Spring backend.
+    const wsRoute = isTerminalWs ? "/ws/terminal" : "/ws/chat";
     const sessionPayload = extractSessionFromCookieHeader(req.headers.cookie);
     if (!sessionPayload) {
       const queryToken = qs.token as string | undefined;
       if (!queryToken) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
+        logWsUpgrade({
+          route: wsRoute,
+          statusCode: 401,
+          actor: "anonymous",
+          errorMessage: "Missing credentials",
+        }).catch(() => {});
         return;
       }
       const valid = await validateAccessToken(queryToken);
       if (!valid) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
+        logWsUpgrade({
+          route: wsRoute,
+          statusCode: 401,
+          actor: "anonymous",
+          errorMessage: "Invalid access token",
+        }).catch(() => {});
         return;
       }
     }
 
+    const actorEmail = sessionPayload?.email ?? "anonymous";
+
     if (isTerminalWs) {
-      const email = sessionPayload?.email ?? "anonymous";
       wss.handleUpgrade(req, socket, head, (ws) => {
-        handleTerminalConnection(ws, email);
+        handleTerminalConnection(ws, actorEmail);
       });
+      logWsUpgrade({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => {});
       return;
     }
 
@@ -1786,8 +2008,14 @@ app.prepare().then(() => {
     const cwdParam = (qs.cwd as string) || undefined;
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      sessionManager.connect(ws, sessionId, cwdParam);
+      sessionManager.connect(ws, sessionId, cwdParam, actorEmail);
     });
+    logWsUpgrade({
+      route: wsRoute,
+      statusCode: 101,
+      actor: actorEmail,
+      target: sessionId,
+    }).catch(() => {});
   });
 
   server.listen(port, () => {

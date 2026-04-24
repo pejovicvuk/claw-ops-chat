@@ -1,8 +1,9 @@
 import { writeFile } from "fs/promises";
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { safePath, SafePathError } from "@/lib/safe-path";
 
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   if (!extractSession(request)) return unauthorized();
 
   const body = await request.json();
@@ -33,3 +34,18 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export const POST = withAudit(
+  {
+    route: "/api/files/write",
+    subjectFrom: async (req) => {
+      try {
+        const body = (await req.clone().json()) as { path?: unknown };
+        return typeof body.path === "string" ? body.path : null;
+      } catch {
+        return null;
+      }
+    },
+  },
+  postHandler,
+);

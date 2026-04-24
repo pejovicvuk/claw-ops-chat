@@ -1,5 +1,6 @@
 import { spawn } from "child_process";
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { clearLoginSession } from "@/lib/claude-auth-sessions";
 import { clearAuthState } from "@/lib/claude-auth-state";
 import { deleteCredentialsFile, CREDENTIALS_PATH } from "@/lib/claude-auth-direct-oauth";
@@ -21,7 +22,7 @@ import { resolveBundledClaudeBinary } from "@/lib/claude-status";
  * wouldn't be the default even if it were reliable because direct
  * file-delete is both simpler and faster.
  */
-export async function POST(request: Request) {
+async function postHandler(request: Request) {
   const session = extractSession(request);
   if (!session) return unauthorized();
 
@@ -49,6 +50,11 @@ export async function POST(request: Request) {
   }
   return Response.json({ ok: true });
 }
+
+export const POST = withAudit(
+  { route: "/api/claude-auth/logout", label: "Claude logout" },
+  postHandler,
+);
 
 async function legacySubcommandLogout(): Promise<Response> {
   const bundled = resolveBundledClaudeBinary();

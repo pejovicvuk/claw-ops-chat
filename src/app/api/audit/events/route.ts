@@ -70,7 +70,7 @@ export async function DELETE(request: Request) {
   }
 
   try {
-    const result = await purgeOldAuditFiles(maxAgeMs, category);
+    const result = await purgeOldAuditFiles(maxAgeMs, category ?? undefined);
     // Record the deletion as its own audit event so the act of clearing
     // logs is itself auditable.
     await getAuditWriter()
@@ -83,7 +83,7 @@ export async function DELETE(request: Request) {
         route: "/api/audit/events",
         method: "DELETE",
         statusCode: 200,
-        target: category,
+        target: category ?? undefined,
         details: { deleted: result.deleted.slice(0, 20), bytesFreed: result.bytesFreed },
       })
       .catch(() => {});

@@ -1,4 +1,4 @@
-import { extractSession } from "@/lib/auth-server";
+import { extractSession } from "../auth-server";
 import { scrubErrorMessage } from "./scrub";
 import { getAuditWriter } from "./writer";
 import type { ApiAuditEventType, AuditSeverity } from "./types";

@@ -5,7 +5,7 @@ import { assemblePrompt } from "./prompt-assembler";
 import { makeRunId, upsertIndexEntry, writeRunSidecar } from "./run-store";
 import { runLogPath, jobRunsDir } from "./paths";
 import type { ReportJob, ReportRun, RunTrigger } from "./types";
-import type { AuditWriter } from "@/lib/audit/writer";
+import type { AuditWriter } from "../audit/writer";
 
 /**
  * Interface the runner needs from the SessionManager. Declared as a

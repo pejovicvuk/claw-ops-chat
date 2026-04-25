@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -91,6 +92,64 @@ type ContextMenuState =
 interface BatchUploadState {
   progress: BatchProgress;
   controller: AbortController;
+}
+
+interface ClampedMenuProps {
+  x: number;
+  y: number;
+  className?: string;
+  children: React.ReactNode;
+  onClick?: (e: React.MouseEvent) => void;
+}
+
+const MENU_VIEWPORT_MARGIN = 8;
+
+/**
+ * Context-menu container that measures itself after first paint and
+ * clamps its position to the viewport. If the menu would overflow the
+ * bottom edge it flips upward so its bottom anchors to the touch point;
+ * if it would overflow horizontally it slides inward. Fixes the mobile
+ * bug where long-pressing a row near the bottom of the list spawned the
+ * menu off-screen.
+ */
+function ClampedMenu({ x, y, className, children, onClick }: ClampedMenuProps) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: x, top: y });
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || typeof window === "undefined") return;
+    const rect = el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const m = MENU_VIEWPORT_MARGIN;
+
+    let left = x;
+    if (left + rect.width > vw - m) left = vw - rect.width - m;
+    if (left < m) left = m;
+
+    let top = y;
+    if (top + rect.height > vh - m) {
+      // Flip above the touch — anchor the menu's bottom to (x, y).
+      const flipped = y - rect.height;
+      top = flipped >= m ? flipped : Math.max(m, vh - rect.height - m);
+    }
+    if (top < m) top = m;
+
+    setPos((prev) => (prev.left === left && prev.top === top ? prev : { left, top }));
+  }, [x, y]);
+
+  return (
+    <div
+      ref={ref}
+      role="menu"
+      onClick={onClick}
+      style={{ position: "fixed", left: pos.left, top: pos.top, zIndex: 9999 }}
+      className={className}
+    >
+      {children}
+    </div>
+  );
 }
 
 export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(function FileBrowser(
@@ -590,10 +649,10 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
 
             if (menu.kind === "empty") {
               return (
-                <div
-                  className={`fixed rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg ${menuAnimClass}`}
-                  style={{ left: menu.x, top: menu.y, zIndex: 9999 }}
-                  role="menu"
+                <ClampedMenu
+                  x={menu.x}
+                  y={menu.y}
+                  className={`rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg ${menuAnimClass}`}
                   onClick={(e) => e.stopPropagation()}
                 >
                   <button
@@ -645,15 +704,15 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
                     <FiUploadCloud size={12} />
                     Upload folder…
                   </button>
-                </div>
+                </ClampedMenu>
               );
             }
 
             return (
-              <div
-                className={`fixed rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg ${menuAnimClass}`}
-                style={{ left: menu.x, top: menu.y, zIndex: 9999 }}
-                role="menu"
+              <ClampedMenu
+                x={menu.x}
+                y={menu.y}
+                className={`rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg ${menuAnimClass}`}
                 onClick={(e) => e.stopPropagation()}
               >
                 {!menu.entry.directory && (
@@ -712,7 +771,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
                   <FiTrash2 size={12} />
                   Delete
                 </button>
-              </div>
+              </ClampedMenu>
             );
           })()}
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { searchWorkspace, FileApiError } from "@/lib/api";
+import { buildResolverMaps, type ResolverMaps } from "@/lib/resolve-path";
 
 /**
  * Workspace-wide flat file index for the chat composer's `@` autocomplete.
@@ -166,7 +167,27 @@ export function invalidateWorkspaceIndex(): void {
       /* noop */
     }
   }
+  resolverMapsCache = null;
   emit();
+}
+
+// ── Resolver maps cache ──────────────────────────────────────────────
+//
+// Used by `useResolvePath` (and pure tests) to translate bare/relative
+// file references the agent emits in chat into absolute paths. Built
+// once per index update and reused across every preview pill/card —
+// rebuilding per component on a 20k-entry workspace would be wasteful.
+
+let resolverMapsCache: { lastUpdated: number; maps: ResolverMaps } | null = null;
+
+export function getResolverMaps(): ResolverMaps {
+  const stamp = current.lastUpdated ?? 0;
+  if (resolverMapsCache && resolverMapsCache.lastUpdated === stamp) {
+    return resolverMapsCache.maps;
+  }
+  const maps = buildResolverMaps(current.entries);
+  resolverMapsCache = { lastUpdated: stamp, maps };
+  return maps;
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────

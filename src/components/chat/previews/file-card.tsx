@@ -14,6 +14,7 @@ import {
 } from "react-icons/fi";
 import { formatBytes, isImageExt, prettyMimeLabel } from "@/lib/mime";
 import { useFileStat } from "@/lib/use-file-stat";
+import { useResolvePath } from "@/lib/use-resolve-path";
 import { ImagePreview } from "./image-preview";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -160,6 +161,19 @@ export function FileCard({ path }: FileCardProps) {
       <CardActions path={path} name={name} showPreviewButton onPreview={() => openInEditor(path)} />
     </div>
   );
+}
+
+/**
+ * Card variant for bare/relative candidates the agent emits in prose
+ * on their own line. Tries to resolve the candidate against the
+ * workspace index; on success renders a normal `FileCard`. On miss,
+ * renders the candidate as a plain text paragraph so the layout still
+ * makes sense (the parent block reserves a card-shaped slot for it).
+ */
+export function ResolvedFileCard({ candidate }: { candidate: string }) {
+  const { resolved } = useResolvePath(candidate);
+  if (resolved) return <FileCard path={resolved} />;
+  return <p className="my-1 text-[14px] leading-relaxed text-canvas-fg">{candidate}</p>;
 }
 
 /* ── Internals ─────────────────────────────────────────────────────── */

@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { FiCopy, FiDownload, FiEye, FiFile, FiFileText, FiImage, FiCode } from "react-icons/fi";
 import { isImageExt } from "@/lib/mime";
 import { Z_INDEX } from "@/lib/z-index";
+import { useResolvePath } from "@/lib/use-resolve-path";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -27,8 +28,7 @@ const CODE_EXT =
 function FileIcon({ path, className }: { path: string; className?: string }) {
   if (isImageExt(path)) return <FiImage size={11} className={className} />;
   if (CODE_EXT.test(path)) return <FiCode size={11} className={className} />;
-  if (/\.(txt|log|csv)$/i.test(path))
-    return <FiFileText size={11} className={className} />;
+  if (/\.(txt|log|csv)$/i.test(path)) return <FiFileText size={11} className={className} />;
   return <FiFile size={11} className={className} />;
 }
 
@@ -222,6 +222,20 @@ function ContextMenu({
     </div>,
     document.body,
   );
+}
+
+/**
+ * Pill variant for bare/relative candidates the agent emits in prose
+ * (e.g. `report.pdf`, `notes/draft.md`). Tries to resolve the candidate
+ * against the workspace index; on success renders a regular `FilePathPill`
+ * pointing at the resolved absolute path. On miss (no match or
+ * ambiguous), falls back to the candidate text inline so the message
+ * looks normal.
+ */
+export function ResolvedPathPill({ candidate }: { candidate: string }) {
+  const { resolved } = useResolvePath(candidate);
+  if (resolved) return <FilePathPill path={resolved} />;
+  return <>{candidate}</>;
 }
 
 function MenuItem({

@@ -5,8 +5,8 @@ import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { detectFilePaths, isLonePathLine } from "@/lib/detect-file-paths";
-import { FileCard } from "./previews/file-card";
-import { FilePathPill } from "./previews/file-path-pill";
+import { FileCard, ResolvedFileCard } from "./previews/file-card";
+import { FilePathPill, ResolvedPathPill } from "./previews/file-path-pill";
 import { ImagePreview } from "./previews/image-preview";
 import { LinkPreview } from "./previews/link-preview";
 import { SyntaxCode } from "./previews/syntax-code";
@@ -31,6 +31,10 @@ function transformTextChildren(children: ReactNode): ReactNode {
     segs.forEach((seg, i) => {
       if (seg.kind === "path") {
         out.push(<FilePathPill key={`pill-${idx}-${i}-${seg.path}`} path={seg.path} />);
+      } else if (seg.kind === "candidate") {
+        out.push(
+          <ResolvedPathPill key={`cand-${idx}-${i}-${seg.candidate}`} candidate={seg.candidate} />,
+        );
       } else if (seg.text) {
         out.push(seg.text);
       }
@@ -52,6 +56,7 @@ function isBreak(child: ReactNode): boolean {
 
 type Segment =
   | { kind: "card"; path: string; key: string }
+  | { kind: "card-candidate"; candidate: string; key: string }
   | { kind: "text"; nodes: ReactNode[]; key: string };
 
 /**
@@ -68,9 +73,17 @@ function splitIntoSegments(children: ReactNode): Segment[] {
     // A segment is "lone path" only if it's exactly one string child
     // whose trimmed content matches isLonePathLine.
     if (current.length === 1 && typeof current[0] === "string") {
-      const path = isLonePathLine(current[0] as string);
-      if (path) {
-        segments.push({ kind: "card", path, key: `card-${idx}-${path}` });
+      const lone = isLonePathLine(current[0] as string);
+      if (lone) {
+        if (lone.kind === "path") {
+          segments.push({ kind: "card", path: lone.value, key: `card-${idx}-${lone.value}` });
+        } else {
+          segments.push({
+            kind: "card-candidate",
+            candidate: lone.value,
+            key: `card-cand-${idx}-${lone.value}`,
+          });
+        }
         current = [];
         idx += 1;
         return;
@@ -100,7 +113,7 @@ function splitIntoSegments(children: ReactNode): Segment[] {
  */
 function renderBlockWithFileCards(children: ReactNode, tag: "p" | "li"): ReactElement {
   const segments = splitIntoSegments(children);
-  const hasCard = segments.some((s) => s.kind === "card");
+  const hasCard = segments.some((s) => s.kind === "card" || s.kind === "card-candidate");
 
   if (!hasCard) {
     const transformed = transformTextChildren(children);
@@ -115,6 +128,9 @@ function renderBlockWithFileCards(children: ReactNode, tag: "p" | "li"): ReactEl
       {segments.map((seg) => {
         if (seg.kind === "card") {
           return <FileCard key={seg.key} path={seg.path} />;
+        }
+        if (seg.kind === "card-candidate") {
+          return <ResolvedFileCard key={seg.key} candidate={seg.candidate} />;
         }
         // Whitespace-only text segments between cards produce noise; skip.
         const isBlank =

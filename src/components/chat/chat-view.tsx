@@ -288,7 +288,19 @@ export function ChatView({
         }
       })
       .catch(() => {
-        if (!cancelled) setLoadingHistory(false);
+        if (cancelled) return;
+        // 404 is the normal path when the user taps "+ New chat" on
+        // mobile: handleNewChat mints a brand-new UUID the server has
+        // never seen, so there's no JSONL to load. Without this reset,
+        // the *previous* chat's messages leaked into the new view —
+        // the drawer would close and the user would see the old chat
+        // unchanged, making the + button feel broken ("it just closes
+        // the chats section"). Clearing here gives the new chat the
+        // empty-state UI it should have.
+        setInitialMessages([]);
+        setInitialContextUsage(null);
+        setSessionCwd(null);
+        setLoadingHistory(false);
       });
     return () => {
       cancelled = true;

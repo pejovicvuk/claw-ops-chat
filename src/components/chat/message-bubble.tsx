@@ -15,7 +15,7 @@ import { detectFilePaths } from "@/lib/detect-file-paths";
 import { isImageExt } from "@/lib/mime";
 import { ImagePreview } from "./previews/image-preview";
 import { LinkPreview } from "./previews/link-preview";
-import { FilePathPill } from "./previews/file-path-pill";
+import { FilePathPill, ResolvedPathPill } from "./previews/file-path-pill";
 
 // Lazy: react-markdown + remark-gfm (~33kb gz) are deferred out of the main
 // chunk. `preloadMarkdown` warms the chunk as soon as the user submits.
@@ -446,7 +446,7 @@ function GenericToolResult({ content }: { content: string }) {
   const [collapsed, setCollapsed] = useState(true);
   const lineCount = content.split("\n").length;
   const segments = useMemo(() => detectFilePaths(content.slice(0, 4000)), [content]);
-  const hasPaths = segments.some((s) => s.kind === "path");
+  const hasPaths = segments.some((s) => s.kind === "path" || s.kind === "candidate");
 
   return (
     <div className="px-4 py-0">
@@ -464,13 +464,15 @@ function GenericToolResult({ content }: { content: string }) {
         <div className="ml-2 max-h-[240px] overflow-y-auto rounded bg-canvas-bg/50 px-2 py-1.5 font-mono text-[10px] leading-relaxed text-canvas-muted">
           {hasPaths ? (
             <div className="whitespace-pre-wrap">
-              {segments.map((seg, i) =>
-                seg.kind === "path" ? (
-                  <FilePathPill key={`p-${i}`} path={seg.path} />
-                ) : (
-                  <span key={`t-${i}`}>{seg.text}</span>
-                ),
-              )}
+              {segments.map((seg, i) => {
+                if (seg.kind === "path") {
+                  return <FilePathPill key={`p-${i}`} path={seg.path} />;
+                }
+                if (seg.kind === "candidate") {
+                  return <ResolvedPathPill key={`c-${i}`} candidate={seg.candidate} />;
+                }
+                return <span key={`t-${i}`}>{seg.text}</span>;
+              })}
             </div>
           ) : (
             <pre className="whitespace-pre-wrap">{content.slice(0, 4000)}</pre>

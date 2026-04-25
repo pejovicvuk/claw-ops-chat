@@ -23,12 +23,7 @@ describe("detectFilePaths", () => {
     expect(out[1]).toEqual({ kind: "path", path: "/root/notes.md" });
   });
 
-  it("skips bare word-dot-word that lacks a path anchor (e.g. 'next.js')", () => {
-    const out = detectFilePaths("Running on next.js and tailwind.css only.");
-    expect(out.every((s) => s.kind === "text")).toBe(true);
-  });
-
-  it("keeps ./relative paths", () => {
+  it("keeps ./relative paths as anchored paths", () => {
     const out = detectFilePaths("check ./src/app.tsx now");
     expect(out.find((s) => s.kind === "path")).toEqual({
       kind: "path",
@@ -59,25 +54,111 @@ describe("detectFilePaths (extended extensions)", () => {
   });
 });
 
+describe("detectFilePaths (candidates)", () => {
+  it("emits a candidate for a bare basename", () => {
+    const out = detectFilePaths("see report.pdf today");
+    expect(out).toEqual([
+      { kind: "text", text: "see " },
+      { kind: "candidate", candidate: "report.pdf" },
+      { kind: "text", text: " today" },
+    ]);
+  });
+
+  it("emits a candidate for a relative-with-slash path", () => {
+    const out = detectFilePaths("see notes/draft.md please");
+    expect(out).toEqual([
+      { kind: "text", text: "see " },
+      { kind: "candidate", candidate: "notes/draft.md" },
+      { kind: "text", text: " please" },
+    ]);
+  });
+
+  it("treats anchored vs bare as different kinds in one message", () => {
+    const out = detectFilePaths("compare /root/a.md with b.md and ./c.md");
+    const kinds = out
+      .filter((s) => s.kind !== "text")
+      .map((s) => `${s.kind}:${"path" in s ? s.path : "candidate" in s ? s.candidate : ""}`);
+    expect(kinds).toEqual(["path:/root/a.md", "candidate:b.md", "path:./c.md"]);
+  });
+
+  it("rejects prose that resembles a known framework name (denylist)", () => {
+    const out = detectFilePaths("the next.js framework with vue.js plugins");
+    expect(out.every((s) => s.kind === "text")).toBe(true);
+  });
+
+  it("does not match a token glued onto surrounding letters", () => {
+    // Strict leading boundary: `abcreport.pdf` has no whitespace before — no match.
+    const out = detectFilePaths("xyzreport.pdf rest");
+    // Whole token `xyzreport.pdf` IS still a valid candidate (start of string).
+    // The guard is against splitting *inside* a longer alphabetic run, e.g.
+    // `frobreport.pdf` should NOT pull out `report.pdf` as a sub-candidate.
+    expect(out).toEqual([
+      { kind: "candidate", candidate: "xyzreport.pdf" },
+      { kind: "text", text: " rest" },
+    ]);
+  });
+
+  it("matches a bare candidate after open punctuation", () => {
+    const out = detectFilePaths("(see report.pdf)");
+    const candidates = out
+      .filter((s) => s.kind === "candidate")
+      .map((s) => (s as { candidate: string }).candidate);
+    expect(candidates).toEqual(["report.pdf"]);
+  });
+
+  it("skips tokens whose tail isn't in the extension list", () => {
+    // Version strings — `1.2.3` has no recognised extension.
+    const out = detectFilePaths("version 1.2.3 release");
+    expect(out.every((s) => s.kind === "text")).toBe(true);
+    // Random.unknownext also doesn't match.
+    const out2 = detectFilePaths("see thing.unknownext now");
+    expect(out2.every((s) => s.kind === "text")).toBe(true);
+  });
+});
+
 describe("isLonePathLine", () => {
-  it("returns the path for a bare path line with whitespace padding", () => {
-    expect(isLonePathLine("  /root/foo.pptx  ")).toBe("/root/foo.pptx");
+  it("returns a path entry for a bare anchored path with whitespace padding", () => {
+    expect(isLonePathLine("  /root/foo.pptx  ")).toEqual({
+      kind: "path",
+      value: "/root/foo.pptx",
+    });
   });
 
   it("strips bullet markers", () => {
-    expect(isLonePathLine("- /root/foo.pptx")).toBe("/root/foo.pptx");
-    expect(isLonePathLine("* /root/foo.pptx")).toBe("/root/foo.pptx");
-    expect(isLonePathLine("• /root/foo.pptx")).toBe("/root/foo.pptx");
-    expect(isLonePathLine("  - /root/foo.pptx")).toBe("/root/foo.pptx");
+    expect(isLonePathLine("- /root/foo.pptx")).toEqual({
+      kind: "path",
+      value: "/root/foo.pptx",
+    });
+    expect(isLonePathLine("* /root/foo.pptx")).toEqual({
+      kind: "path",
+      value: "/root/foo.pptx",
+    });
+    expect(isLonePathLine("• /root/foo.pptx")).toEqual({
+      kind: "path",
+      value: "/root/foo.pptx",
+    });
+    expect(isLonePathLine("  - /root/foo.pptx")).toEqual({
+      kind: "path",
+      value: "/root/foo.pptx",
+    });
   });
 
   it("accepts trailing punctuation", () => {
-    expect(isLonePathLine("/root/foo.pptx.")).toBe("/root/foo.pptx");
-    expect(isLonePathLine("/root/foo.pptx,")).toBe("/root/foo.pptx");
+    expect(isLonePathLine("/root/foo.pptx.")).toEqual({
+      kind: "path",
+      value: "/root/foo.pptx",
+    });
+    expect(isLonePathLine("/root/foo.pptx,")).toEqual({
+      kind: "path",
+      value: "/root/foo.pptx",
+    });
   });
 
   it("accepts tilde-prefixed paths", () => {
-    expect(isLonePathLine("~/uploads/pic.png")).toBe("~/uploads/pic.png");
+    expect(isLonePathLine("~/uploads/pic.png")).toEqual({
+      kind: "path",
+      value: "~/uploads/pic.png",
+    });
   });
 
   it("rejects lines that are not just a path", () => {
@@ -88,9 +169,24 @@ describe("isLonePathLine", () => {
     expect(isLonePathLine("   ")).toBe(null);
   });
 
-  it("rejects bare filename without path anchor", () => {
+  it("returns a candidate entry for a lone bare basename", () => {
+    expect(isLonePathLine("report.pdf")).toEqual({ kind: "candidate", value: "report.pdf" });
+    expect(isLonePathLine("- presentation.pptx")).toEqual({
+      kind: "candidate",
+      value: "presentation.pptx",
+    });
+  });
+
+  it("returns a candidate entry for a lone relative path", () => {
+    expect(isLonePathLine("notes/draft.md")).toEqual({
+      kind: "candidate",
+      value: "notes/draft.md",
+    });
+  });
+
+  it("rejects denylisted prose tokens even when alone on a line", () => {
     expect(isLonePathLine("next.js")).toBe(null);
-    expect(isLonePathLine("README.md")).toBe(null);
+    expect(isLonePathLine("- node.js")).toBe(null);
   });
 });
 

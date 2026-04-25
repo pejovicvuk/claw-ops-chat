@@ -21,6 +21,7 @@ import { ContextIndicator } from "./context-indicator";
 import { HudIndicator } from "./hud-indicator";
 import { HudPopup } from "./hud-popup";
 import { MessageBubble } from "./message-bubble";
+import { SessionCwdProvider } from "@/lib/session-cwd-context";
 import { ChatInput } from "./chat-input";
 import { SetupGuard } from "./setup-guard";
 import { EmptyState } from "./empty-state";
@@ -679,92 +680,94 @@ export function ChatView({
             {!loadingHistory && messages.length === 0 && status === "idle" ? (
               <EmptyState onSuggestionClick={handleSuggestionClick} />
             ) : (
-              <div className={isMobile ? "py-3" : "py-3 pb-24"}>
-                {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
-                {sortedMessages.map((msg, idx) => {
-                  // Staggered enter animation for first-load history only —
-                  // streaming messages (idx not in historyIdsRef) animate
-                  // instantly. Capped at 12 * 25ms so a huge backlog doesn't
-                  // visibly cascade for half a second.
-                  const histIdx = historyIdsRef.current.indexOf(msg.id);
-                  const staggerStyle =
-                    histIdx >= 0
-                      ? { animationDelay: `${Math.min(histIdx, 12) * 25}ms` }
-                      : undefined;
+              <SessionCwdProvider value={sessionCwd}>
+                <div className={isMobile ? "py-3" : "py-3 pb-24"}>
+                  {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
+                  {sortedMessages.map((msg, idx) => {
+                    // Staggered enter animation for first-load history only —
+                    // streaming messages (idx not in historyIdsRef) animate
+                    // instantly. Capped at 12 * 25ms so a huge backlog doesn't
+                    // visibly cascade for half a second.
+                    const histIdx = historyIdsRef.current.indexOf(msg.id);
+                    const staggerStyle =
+                      histIdx >= 0
+                        ? { animationDelay: `${Math.min(histIdx, 12) * 25}ms` }
+                        : undefined;
 
-                  if (msg._isInfo) {
+                    if (msg._isInfo) {
+                      return (
+                        <div
+                          key={msg.id}
+                          className="animate-msg-in flex justify-center px-4 py-1.5"
+                          style={staggerStyle}
+                        >
+                          <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
+                            {msg.content}
+                          </span>
+                        </div>
+                      );
+                    }
+                    // Timeline nodes (thinking / tool_use / tool_result) are the
+                    // ambient "Claude is working" stream. Wrap each one in a
+                    // container that paints a subtle left rail so contiguous nodes
+                    // read as a single vertical timeline. User bubbles, assistant
+                    // replies, and interactive cards break the rail cleanly.
+                    const isTimelineNode =
+                      msg.type === "thinking" ||
+                      msg.type === "tool_use" ||
+                      msg.type === "tool_result";
+                    const prev = idx > 0 ? sortedMessages[idx - 1] : null;
+                    const next = idx < sortedMessages.length - 1 ? sortedMessages[idx + 1] : null;
+                    const prevIsTimeline =
+                      !!prev &&
+                      !prev._isInfo &&
+                      (prev.type === "thinking" ||
+                        prev.type === "tool_use" ||
+                        prev.type === "tool_result");
+                    const nextIsTimeline =
+                      !!next &&
+                      !next._isInfo &&
+                      (next.type === "thinking" ||
+                        next.type === "tool_use" ||
+                        next.type === "tool_result");
                     return (
                       <div
                         key={msg.id}
-                        className="animate-msg-in flex justify-center px-4 py-1.5"
+                        className={`animate-msg-in ${
+                          isTimelineNode ? "ml-4 border-l border-accent/15 pl-1" : ""
+                        } ${isTimelineNode && !prevIsTimeline ? "mt-2 pt-1" : ""} ${
+                          isTimelineNode && !nextIsTimeline ? "mb-2 pb-1" : ""
+                        }`}
                         style={staggerStyle}
                       >
-                        <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
-                          {msg.content}
-                        </span>
+                        <MessageBubble
+                          message={msg}
+                          isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
+                          siblingToolUse={
+                            msg.type === "tool_result" && msg.toolCallId
+                              ? toolUseByCallId.get(msg.toolCallId)
+                              : undefined
+                          }
+                          onPermissionRespond={respondPermission}
+                          onQuestionRespond={respondQuestion}
+                          onPlanRespond={respondPlan}
+                        />
                       </div>
                     );
-                  }
-                  // Timeline nodes (thinking / tool_use / tool_result) are the
-                  // ambient "Claude is working" stream. Wrap each one in a
-                  // container that paints a subtle left rail so contiguous nodes
-                  // read as a single vertical timeline. User bubbles, assistant
-                  // replies, and interactive cards break the rail cleanly.
-                  const isTimelineNode =
-                    msg.type === "thinking" ||
-                    msg.type === "tool_use" ||
-                    msg.type === "tool_result";
-                  const prev = idx > 0 ? sortedMessages[idx - 1] : null;
-                  const next = idx < sortedMessages.length - 1 ? sortedMessages[idx + 1] : null;
-                  const prevIsTimeline =
-                    !!prev &&
-                    !prev._isInfo &&
-                    (prev.type === "thinking" ||
-                      prev.type === "tool_use" ||
-                      prev.type === "tool_result");
-                  const nextIsTimeline =
-                    !!next &&
-                    !next._isInfo &&
-                    (next.type === "thinking" ||
-                      next.type === "tool_use" ||
-                      next.type === "tool_result");
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`animate-msg-in ${
-                        isTimelineNode ? "ml-4 border-l border-accent/15 pl-1" : ""
-                      } ${isTimelineNode && !prevIsTimeline ? "mt-2 pt-1" : ""} ${
-                        isTimelineNode && !nextIsTimeline ? "mb-2 pb-1" : ""
-                      }`}
-                      style={staggerStyle}
-                    >
-                      <MessageBubble
-                        message={msg}
-                        isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
-                        siblingToolUse={
-                          msg.type === "tool_result" && msg.toolCallId
-                            ? toolUseByCallId.get(msg.toolCallId)
-                            : undefined
-                        }
-                        onPermissionRespond={respondPermission}
-                        onQuestionRespond={respondQuestion}
-                        onPlanRespond={respondPlan}
-                      />
+                  })}
+                  {(status === "thinking" || status === "tool_running") && (
+                    <div className="animate-msg-in flex items-center gap-2.5 px-5 py-2">
+                      <span className="thinking-loader" aria-hidden="true" />
+                      <span className="text-accent text-[11px]">
+                        {status === "tool_running" && activeTool
+                          ? `Running ${activeTool.name}...`
+                          : `${thinkingVerb}...`}
+                      </span>
                     </div>
-                  );
-                })}
-                {(status === "thinking" || status === "tool_running") && (
-                  <div className="animate-msg-in flex items-center gap-2.5 px-5 py-2">
-                    <span className="thinking-loader" aria-hidden="true" />
-                    <span className="text-accent text-[11px]">
-                      {status === "tool_running" && activeTool
-                        ? `Running ${activeTool.name}...`
-                        : `${thinkingVerb}...`}
-                    </span>
-                  </div>
-                )}
-                <div ref={bottomRef} />
-              </div>
+                  )}
+                  <div ref={bottomRef} />
+                </div>
+              </SessionCwdProvider>
             )}
           </div>
 

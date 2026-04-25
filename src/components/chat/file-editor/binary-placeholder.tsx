@@ -4,8 +4,8 @@ import { useEffect, useState } from "react";
 import { FiDownload, FiFile } from "react-icons/fi";
 import { downloadFile } from "@/lib/api";
 import { authFetch } from "@/lib/auth";
-import { FileIcon } from "../file-browser/file-icon";
 import type { FileEntry } from "@/lib/types";
+import { FileIcon } from "../file-browser/file-icon";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -66,9 +66,12 @@ function formatSize(bytes: number): string {
 
 interface BinaryPlaceholderProps {
   file: FileEntry;
+  /** Optional download handler — when provided, used instead of the
+   *  built-in `downloadFile()` so callers can hook in progress UI. */
+  onDownload?: () => void;
 }
 
-export function BinaryPlaceholder({ file }: BinaryPlaceholderProps) {
+export function BinaryPlaceholder({ file, onDownload }: BinaryPlaceholderProps) {
   const ext = (file.name.split(".").pop() ?? "").toLowerCase();
   const isImage = IMAGE_EXT.has(ext);
   const [imgUrl, setImgUrl] = useState<string | null>(null);
@@ -133,9 +136,13 @@ export function BinaryPlaceholder({ file }: BinaryPlaceholderProps) {
       <button
         type="button"
         onClick={() => {
-          downloadFile(file.path).catch(() => {
-            /* surfaced via toast at the caller */
-          });
+          if (onDownload) {
+            onDownload();
+          } else {
+            downloadFile(file.path).catch(() => {
+              /* surfaced via toast at the caller */
+            });
+          }
         }}
         className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90"
       >

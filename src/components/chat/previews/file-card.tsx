@@ -15,6 +15,7 @@ import {
 import { formatBytes, isImageExt, prettyMimeLabel } from "@/lib/mime";
 import { useFileStat } from "@/lib/use-file-stat";
 import { useResolvePath } from "@/lib/use-resolve-path";
+import { useReportChatFile } from "@/lib/chat-files-context";
 import { ImagePreview } from "./image-preview";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -85,6 +86,12 @@ function openInEditor(path: string): void {
 }
 
 export function FileCard({ path }: FileCardProps) {
+  // Register this path with the per-chat references set so ambiguous
+  // bare candidates that mount later can disambiguate by directory
+  // affinity. `ResolvedFileCard` reaches FileCard transitively when its
+  // candidate resolves, so registration covers both code paths.
+  useReportChatFile(path);
+
   const kind = classify(path);
   const name = useMemo(() => basename(path), [path]);
   const { stat } = useFileStat(path);

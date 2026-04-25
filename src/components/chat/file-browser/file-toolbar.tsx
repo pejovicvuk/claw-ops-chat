@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { FiArrowDown, FiArrowUp, FiRefreshCw, FiSearch, FiUpload, FiX } from "react-icons/fi";
+import {
+  FiArrowDown,
+  FiArrowUp,
+  FiGitBranch,
+  FiRefreshCw,
+  FiSearch,
+  FiUpload,
+  FiX,
+} from "react-icons/fi";
 
 export type SortKey = "name" | "size" | "mtime";
 export type SortDir = "asc" | "desc";
@@ -18,6 +26,12 @@ interface FileToolbarProps {
   onUpload: () => void;
   onRefresh: () => void;
   loading: boolean;
+  /** When true, render the git toggle button. */
+  isRepo?: boolean;
+  /** Active state of the git toggle. */
+  gitMode?: boolean;
+  /** Click handler for the git toggle. */
+  onToggleGit?: () => void;
 }
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
@@ -34,6 +48,9 @@ export function FileToolbar({
   onUpload,
   onRefresh,
   loading,
+  isRepo = false,
+  gitMode = false,
+  onToggleGit,
 }: FileToolbarProps) {
   // Initialize `local` from `query` at mount. The parent remounts this
   // component with a new `key` when the directory changes (and `query` is
@@ -158,6 +175,19 @@ export function FileToolbar({
       >
         <FiRefreshCw className={`text-[14px] sm:text-[12px] ${loading ? "animate-spin" : ""}`} />
       </button>
+      {isRepo && onToggleGit && (
+        <button
+          type="button"
+          onClick={onToggleGit}
+          aria-label={gitMode ? "Show files" : "Show branches and commits"}
+          aria-pressed={gitMode}
+          className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md hover:bg-canvas-surface-hover sm:h-auto sm:w-auto sm:p-1.5 ${
+            gitMode ? "text-accent" : "text-canvas-muted hover:text-canvas-fg"
+          }`}
+        >
+          <FiGitBranch className="text-[14px] sm:text-[12px]" />
+        </button>
+      )}
     </div>
   );
 }

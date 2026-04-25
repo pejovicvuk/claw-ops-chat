@@ -28,15 +28,18 @@ import { invalidateDir } from "@/lib/file-cache";
 import { invalidateWorkspaceIndex } from "@/lib/use-workspace-index";
 import { useExitAnimation } from "@/lib/use-exit-animation";
 import { useFileListings } from "@/lib/use-file-listings";
+import { useGitStatus } from "@/lib/use-git-status";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useToast } from "@/lib/use-toast";
 import { uploadBatch, type BatchProgress, type UploadEntry } from "@/lib/batch-upload";
+import type { GitFileStatus } from "@/lib/git/types";
 import type { FileEntry } from "@/lib/types";
 import { Breadcrumbs } from "./file-browser/breadcrumbs";
 import { DeleteConfirm } from "./file-browser/delete-confirm";
 import { FileDropzone } from "./file-browser/file-dropzone";
 import { FileRow } from "./file-browser/file-row";
 import { FileToolbar, type SortState } from "./file-browser/file-toolbar";
+import { GitPanelView } from "./file-browser/git/git-panel-view";
 import { NewItemDialog } from "./file-browser/new-item-dialog";
 
 export interface FileBrowserHandle {
@@ -98,6 +101,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
   const isMobile = useIsMobile();
   const [currentPath, setCurrentPath] = useState(initialPath || "~");
   const { entries, loading, error, reload } = useFileListings(currentPath);
+  const git = useGitStatus(currentPath);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortState>({ key: "name", dir: "asc" });
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -105,6 +109,13 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
   const [newItem, setNewItem] = useState<{ kind: "file" | "folder" } | null>(null);
   const [batch, setBatch] = useState<BatchUploadState | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
+  const [viewMode, setViewMode] = useState<"files" | "git">("files");
+
+  // Snap back to the file view if we navigate out of a git repo while the
+  // git panel is open.
+  useEffect(() => {
+    if (!git.isRepo && viewMode === "git") setViewMode("files");
+  }, [git.isRepo, viewMode]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
   const listContainerRef = useRef<HTMLDivElement>(null);
@@ -232,6 +243,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       invalidateDir(currentPath);
       invalidateWorkspaceIndex();
       reload();
+      git.reload();
       setBatch(null);
 
       if (result.aborted) {
@@ -254,7 +266,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
         );
       }
     },
-    [currentPath, reload, toast],
+    [currentPath, reload, git, toast],
   );
 
   const triggerFileInput = useCallback(() => {
@@ -283,12 +295,13 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
         invalidateDir(currentPath);
         invalidateWorkspaceIndex();
         reload();
+        git.reload();
         setConfirm(null);
       } catch (err) {
         setConfirm((prev) => (prev ? { ...prev, error: mapError(err) } : prev));
       }
     },
-    [currentPath, reload],
+    [currentPath, reload, git],
   );
 
   const handleCreateItem = useCallback(
@@ -309,8 +322,9 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       invalidateDir(currentPath);
       invalidateWorkspaceIndex();
       reload();
+      git.reload();
     },
-    [currentPath, reload, newItem, toast],
+    [currentPath, reload, git, newItem, toast],
   );
 
   /** Derived filtered + sorted list. */
@@ -367,12 +381,24 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
     [visibleEntries, selectedIndex, navigateTo, onFileOpen, parentOf, currentPath],
   );
 
+  // Resolve a per-entry git status. Files use the direct lookup; folders
+  // tint yellow when any descendant is changed (VS Code's behavior).
+  const statusFor = useCallback(
+    (entry: FileEntry): GitFileStatus | null => {
+      if (!git.isRepo) return null;
+      if (entry.directory) return git.dirtyAncestors.has(entry.path) ? "modified" : null;
+      return git.statusByPath.get(entry.path) ?? null;
+    },
+    [git.isRepo, git.dirtyAncestors, git.statusByPath],
+  );
+
   // Row renderer shared between virtualized and plain paths.
   const renderRow = useCallback(
     (entry: FileEntry, idx: number, style?: React.CSSProperties) => (
       <div key={entry.path} style={style} role="listitem">
         <FileRow
           entry={entry}
+          gitStatus={statusFor(entry)}
           onClick={() => {
             setSelectedIndex(idx);
             handleEntryClick(entry);
@@ -385,7 +411,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
         />
       </div>
     ),
-    [handleEntryClick, handleEntryDoubleClick, handleEntryContextMenu],
+    [handleEntryClick, handleEntryDoubleClick, handleEntryContextMenu, statusFor],
   );
 
   // Virtualized row — react-window v2 passes `index` + `style` + our rowProps.
@@ -424,8 +450,12 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           onRefresh={() => {
             invalidateDir(currentPath);
             reload();
+            git.reload();
           }}
           loading={loading}
+          isRepo={git.isRepo}
+          gitMode={viewMode === "git"}
+          onToggleGit={() => setViewMode((m) => (m === "git" ? "files" : "git"))}
         />
         <input
           ref={fileInputRef}
@@ -449,66 +479,75 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           onChange={handleInputUpload}
         />
 
-        <div
-          ref={listContainerRef}
-          className="flex-1 min-h-0 overflow-y-auto"
-          role="list"
-          aria-label="Files and folders"
-          aria-busy={loading}
-          onContextMenu={handleEmptyContextMenu}
-        >
-          {loading && !error && entries.length === 0 && (
-            <div className="space-y-1.5 p-3">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div
-                  key={i}
-                  className="h-7 animate-pulse rounded-md bg-canvas-surface"
-                  style={{ animationDelay: `${i * 60}ms` }}
-                  aria-hidden
-                />
-              ))}
-            </div>
-          )}
+        {viewMode === "files" ? (
+          <div
+            key="files"
+            ref={listContainerRef}
+            className="flex-1 min-h-0 overflow-y-auto animate-panel-in"
+            role="list"
+            aria-label="Files and folders"
+            aria-busy={loading}
+            onContextMenu={handleEmptyContextMenu}
+          >
+            {loading && !error && entries.length === 0 && (
+              <div className="space-y-1.5 p-3">
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div
+                    key={i}
+                    className="h-7 animate-pulse rounded-md bg-canvas-surface"
+                    style={{ animationDelay: `${i * 60}ms` }}
+                    aria-hidden
+                  />
+                ))}
+              </div>
+            )}
 
-          {!loading && error && (
-            <div className="flex flex-col items-center gap-2 px-4 py-8">
-              <FiAlertTriangle size={18} className="text-red-400" />
-              <p className="text-center text-[12px] text-red-400">{error}</p>
-              <button
-                type="button"
-                onClick={() => reload()}
-                className="flex items-center gap-1 text-[11px] text-blue-400 hover:underline"
-              >
-                <FiRefreshCw size={10} />
-                Retry
-              </button>
-            </div>
-          )}
+            {!loading && error && (
+              <div className="flex flex-col items-center gap-2 px-4 py-8">
+                <FiAlertTriangle size={18} className="text-red-400" />
+                <p className="text-center text-[12px] text-red-400">{error}</p>
+                <button
+                  type="button"
+                  onClick={() => reload()}
+                  className="flex items-center gap-1 text-[11px] text-blue-400 hover:underline"
+                >
+                  <FiRefreshCw size={10} />
+                  Retry
+                </button>
+              </div>
+            )}
 
-          {!loading && !error && entries.length === 0 && (
-            <p className="py-8 text-center text-[12px] text-canvas-muted">Empty directory</p>
-          )}
+            {!loading && !error && entries.length === 0 && (
+              <p className="py-8 text-center text-[12px] text-canvas-muted">Empty directory</p>
+            )}
 
-          {!loading && !error && entries.length > 0 && visibleEntries.length === 0 && (
-            <p className="py-8 text-center text-[12px] text-canvas-muted">
-              No matches for &ldquo;{query}&rdquo;
-            </p>
-          )}
+            {!loading && !error && entries.length > 0 && visibleEntries.length === 0 && (
+              <p className="py-8 text-center text-[12px] text-canvas-muted">
+                No matches for &ldquo;{query}&rdquo;
+              </p>
+            )}
 
-          {!error && !shouldVirtualize && visibleEntries.map((entry, idx) => renderRow(entry, idx))}
+            {!error &&
+              !shouldVirtualize &&
+              visibleEntries.map((entry, idx) => renderRow(entry, idx))}
 
-          {!error && shouldVirtualize && (
-            <List
-              rowCount={visibleEntries.length}
-              rowHeight={ROW_HEIGHT}
-              rowComponent={VirtualRow}
-              rowProps={{}}
-              overscanCount={8}
-              defaultHeight={600}
-              className="!h-full"
-            />
-          )}
-        </div>
+            {!error && shouldVirtualize && (
+              <List
+                rowCount={visibleEntries.length}
+                rowHeight={ROW_HEIGHT}
+                rowComponent={VirtualRow}
+                rowProps={{}}
+                overscanCount={8}
+                defaultHeight={600}
+                className="!h-full"
+              />
+            )}
+          </div>
+        ) : git.repoRoot ? (
+          <div key="git" className="flex-1 min-h-0 animate-panel-in">
+            <GitPanelView git={git} repoRoot={git.repoRoot} />
+          </div>
+        ) : null}
 
         {batch && (
           <div className="shrink-0 border-t border-canvas-border bg-canvas-surface/60 p-2">

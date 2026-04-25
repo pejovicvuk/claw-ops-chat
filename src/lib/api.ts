@@ -171,28 +171,16 @@ export async function uploadFile(
 }
 
 /**
- * Download a file via a same-origin anchor click — the browser handles
- * the save dialog and the httpOnly session cookie rides along.
- *
- * The previous implementation fetched the file as a blob and clicked a
- * blob: URL anchor. iOS Safari refuses to honor `download` on blob: URLs
- * and opens the file inline in the same tab instead, which is what
- * mobile users were reporting. The direct-link approach matches what
- * `file-card.tsx` already uses successfully.
+ * Download a file. Thin wrapper around `downloadFileWithProgress` that
+ * discards progress events — preserved for callers that don't need
+ * progress feedback. Surfaces with progress UI should call
+ * `useDownload()` (in `use-download.ts`) directly.
  */
 export async function downloadFile(path: string): Promise<void> {
-  const url = `${BASE}/api/files/download?path=${encodeURIComponent(path)}`;
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = path.split("/").pop() || "download";
-  a.rel = "noopener";
-  // Forces a download in modern browsers; iOS Safari opens in a new tab
-  // where the user can long-press → Save which is the platform's native
-  // download flow.
-  a.target = "_self";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  // Lazy import to avoid pulling the XHR helper into bundles that don't
+  // touch downloads (and to keep the previous module graph identical).
+  const { downloadFileWithProgress } = await import("@/lib/download-xhr");
+  await downloadFileWithProgress(path);
 }
 
 export async function deleteFile(path: string, recursive = false): Promise<void> {

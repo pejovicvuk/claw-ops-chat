@@ -4,12 +4,15 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiAlertTriangle, FiLoader, FiX } from "react-icons/fi";
 import { readFile, writeFile, FileApiError } from "@/lib/api";
 import { isEditableKind, pickRenderer, type PreviewKind } from "@/lib/file-preview/pick-renderer";
+import { useDownload } from "@/lib/use-download";
 import { useIsMobile } from "@/lib/use-is-mobile";
+import { useToast } from "@/lib/use-toast";
 import { Z_INDEX } from "@/lib/z-index";
 import { clampRectToViewport } from "@/lib/clamp-to-viewport";
 import type { FileEntry } from "@/lib/types";
 import { BinaryPlaceholder } from "./binary-placeholder";
 import { CodeMirror } from "./code-mirror";
+import { DownloadProgress } from "./download-progress";
 import { EditorHeader } from "./header";
 import { getPanelLayout, setPanelLayout } from "./layout-store";
 import { ReadablePreview } from "./readable-preview";
@@ -61,6 +64,11 @@ export function FileEditorPanel({
   onRevealInBrowser,
 }: FileEditorPanelProps) {
   const isMobile = useIsMobile();
+  const { toast } = useToast();
+  const dl = useDownload({ onError: (msg) => toast.error(msg) });
+  const handleDownload = useCallback(() => {
+    dl.download(file.path);
+  }, [dl, file.path]);
   const [closing, setClosing] = useState(false);
   const requestClose = useCallback(() => {
     if (closing) return;
@@ -461,6 +469,9 @@ export function FileEditorPanel({
         showCopyAll={editable}
         copyAllOk={copyAllOk}
         onCopyAll={editable ? handleCopyAll : undefined}
+        showDownload
+        onDownload={handleDownload}
+        downloadInFlight={dl.progress !== null}
         onTouchStart={onHeaderTouchStart}
         onTouchEnd={onHeaderTouchEnd}
       />
@@ -498,7 +509,7 @@ export function FileEditorPanel({
           </div>
         )}
         {!loading && !error && isMediaOrBinary && kind === "binary" && (
-          <BinaryPlaceholder file={file} />
+          <BinaryPlaceholder file={file} onDownload={handleDownload} />
         )}
         {!loading && !error && isMediaOrBinary && kind !== "binary" && (
           <ReadablePreview file={file} kind={kind} content="" wrap={wrap} />
@@ -516,6 +527,8 @@ export function FileEditorPanel({
           <CodeMirror value={content} onChange={setContent} path={file.path} onSave={handleSave} />
         )}
       </div>
+
+      <DownloadProgress progress={dl.progress} onCancel={dl.abort} />
 
       {/* Mobile close bar at top-right — header X is the primary. Provide extra
           close affordance within thumb reach. */}

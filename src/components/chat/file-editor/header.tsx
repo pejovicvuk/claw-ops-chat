@@ -8,6 +8,7 @@ import {
   FiChevronRight,
   FiCopy,
   FiCornerUpLeft,
+  FiDownload,
   FiEdit2,
   FiEye,
   FiHome,
@@ -44,6 +45,11 @@ interface HeaderProps {
   showCopyAll?: boolean;
   copyAllOk?: boolean;
   onCopyAll?: () => void;
+  /** Show the download button. */
+  showDownload?: boolean;
+  onDownload?: () => void;
+  /** True while a download is in flight — disables and shrinks the button. */
+  downloadInFlight?: boolean;
   /** Touch handlers used on mobile for swipe-down-to-close. */
   onTouchStart?: (e: React.TouchEvent) => void;
   onTouchEnd?: (e: React.TouchEvent) => void;
@@ -96,6 +102,9 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
     showCopyAll,
     copyAllOk,
     onCopyAll,
+    showDownload,
+    onDownload,
+    downloadInFlight,
     onTouchStart,
     onTouchEnd,
   },
@@ -196,6 +205,18 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
           >
             {copyAllOk ? <FiCheck size={12} /> : <FiCopy size={12} />}
+          </button>
+        )}
+        {showDownload && onDownload && (
+          <button
+            type="button"
+            onClick={onDownload}
+            disabled={downloadInFlight}
+            title="Download"
+            aria-label="Download file"
+            className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-50 sm:h-6 sm:w-6"
+          >
+            <FiDownload size={12} />
           </button>
         )}
         {showModeToggle && onToggleMode && (

@@ -23,11 +23,13 @@ import {
   FiUploadCloud,
   FiX,
 } from "react-icons/fi";
+import { createPortal } from "react-dom";
 import { List, type RowComponentProps } from "react-window";
-import { createFolder, deleteFile, downloadFile, FileApiError, writeFile } from "@/lib/api";
+import { createFolder, deleteFile, FileApiError, writeFile } from "@/lib/api";
 import { invalidateDir } from "@/lib/file-cache";
 import { invalidateWorkspaceIndex } from "@/lib/use-workspace-index";
 import { useExitAnimation } from "@/lib/use-exit-animation";
+import { useDownload } from "@/lib/use-download";
 import { useFileListings } from "@/lib/use-file-listings";
 import { useGitStatus } from "@/lib/use-git-status";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -42,6 +44,7 @@ import { FileRow } from "./file-browser/file-row";
 import { FileToolbar, type SortState } from "./file-browser/file-toolbar";
 import { GitPanelView } from "./file-browser/git/git-panel-view";
 import { NewItemDialog } from "./file-browser/new-item-dialog";
+import { DownloadProgress } from "./file-editor/download-progress";
 
 export interface FileBrowserHandle {
   navigateTo: (path: string) => void;
@@ -158,6 +161,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
 ) {
   const { toast } = useToast();
   const isMobile = useIsMobile();
+  const dl = useDownload({ onError: (msg) => toast.error(msg) });
   const [currentPath, setCurrentPath] = useState(initialPath || "~");
   const { entries, loading, error, reload } = useFileListings(currentPath);
   const git = useGitStatus(currentPath);
@@ -638,16 +642,80 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           </div>
         )}
 
+        <DownloadProgress progress={dl.progress} onCancel={dl.abort} />
+
         {contextMenuMounted &&
           lastContextMenuRef.current &&
-          (() => {
-            const menu = lastContextMenuRef.current;
-            const menuAnimClass =
-              contextMenuAnim === "exiting" ? "animate-menu-out" : "animate-menu-in";
-            const baseItemClass =
-              "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-canvas-fg hover:bg-canvas-surface-hover";
+          typeof document !== "undefined" &&
+          createPortal(
+            (() => {
+              const menu = lastContextMenuRef.current;
+              const menuAnimClass =
+                contextMenuAnim === "exiting" ? "animate-menu-out" : "animate-menu-in";
+              const baseItemClass =
+                "flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-canvas-fg hover:bg-canvas-surface-hover";
 
-            if (menu.kind === "empty") {
+              if (menu.kind === "empty") {
+                return (
+                  <ClampedMenu
+                    x={menu.x}
+                    y={menu.y}
+                    className={`rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg ${menuAnimClass}`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewItem({ kind: "file" });
+                        closeMenu();
+                      }}
+                      className={baseItemClass}
+                      role="menuitem"
+                    >
+                      <FiFilePlus size={12} />
+                      New file…
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewItem({ kind: "folder" });
+                        closeMenu();
+                      }}
+                      className={baseItemClass}
+                      role="menuitem"
+                    >
+                      <FiFolderPlus size={12} />
+                      New folder…
+                    </button>
+                    <div className="my-1 h-px bg-canvas-border" />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeMenu();
+                        triggerFileInput();
+                      }}
+                      className={baseItemClass}
+                      role="menuitem"
+                    >
+                      <FiUpload size={12} />
+                      Upload files…
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeMenu();
+                        triggerFolderInput();
+                      }}
+                      className={baseItemClass}
+                      role="menuitem"
+                    >
+                      <FiUploadCloud size={12} />
+                      Upload folder…
+                    </button>
+                  </ClampedMenu>
+                );
+              }
+
               return (
                 <ClampedMenu
                   x={menu.x}
@@ -655,125 +723,65 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
                   className={`rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg ${menuAnimClass}`}
                   onClick={(e) => e.stopPropagation()}
                 >
+                  {!menu.entry.directory && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onFileOpen?.(menu.entry);
+                        closeMenu();
+                      }}
+                      className={baseItemClass}
+                      role="menuitem"
+                    >
+                      <FiFile size={12} />
+                      Open
+                    </button>
+                  )}
+                  {onCopyPath && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onCopyPath(menu.entry.path);
+                        closeMenu();
+                      }}
+                      className={baseItemClass}
+                      role="menuitem"
+                    >
+                      <FiCopy size={12} />
+                      Copy path
+                    </button>
+                  )}
+                  {!menu.entry.directory && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        dl.download(menu.entry.path);
+                        closeMenu();
+                      }}
+                      className={baseItemClass}
+                      role="menuitem"
+                    >
+                      <FiDownload size={12} />
+                      Download
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
-                      setNewItem({ kind: "file" });
+                      setConfirm({ entry: menu.entry, error: null });
                       closeMenu();
                     }}
-                    className={baseItemClass}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-red-400 hover:bg-canvas-surface-hover"
                     role="menuitem"
                   >
-                    <FiFilePlus size={12} />
-                    New file…
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewItem({ kind: "folder" });
-                      closeMenu();
-                    }}
-                    className={baseItemClass}
-                    role="menuitem"
-                  >
-                    <FiFolderPlus size={12} />
-                    New folder…
-                  </button>
-                  <div className="my-1 h-px bg-canvas-border" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeMenu();
-                      triggerFileInput();
-                    }}
-                    className={baseItemClass}
-                    role="menuitem"
-                  >
-                    <FiUpload size={12} />
-                    Upload files…
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeMenu();
-                      triggerFolderInput();
-                    }}
-                    className={baseItemClass}
-                    role="menuitem"
-                  >
-                    <FiUploadCloud size={12} />
-                    Upload folder…
+                    <FiTrash2 size={12} />
+                    Delete
                   </button>
                 </ClampedMenu>
               );
-            }
-
-            return (
-              <ClampedMenu
-                x={menu.x}
-                y={menu.y}
-                className={`rounded-md border border-canvas-border bg-canvas-bg py-1 shadow-lg ${menuAnimClass}`}
-                onClick={(e) => e.stopPropagation()}
-              >
-                {!menu.entry.directory && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onFileOpen?.(menu.entry);
-                      closeMenu();
-                    }}
-                    className={baseItemClass}
-                    role="menuitem"
-                  >
-                    <FiFile size={12} />
-                    Open
-                  </button>
-                )}
-                {onCopyPath && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onCopyPath(menu.entry.path);
-                      closeMenu();
-                    }}
-                    className={baseItemClass}
-                    role="menuitem"
-                  >
-                    <FiCopy size={12} />
-                    Copy path
-                  </button>
-                )}
-                {!menu.entry.directory && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      downloadFile(menu.entry.path).catch((err) => {
-                        toast.error(mapError(err));
-                      });
-                      closeMenu();
-                    }}
-                    className={baseItemClass}
-                    role="menuitem"
-                  >
-                    <FiDownload size={12} />
-                    Download
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setConfirm({ entry: menu.entry, error: null });
-                    closeMenu();
-                  }}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12px] text-red-400 hover:bg-canvas-surface-hover"
-                  role="menuitem"
-                >
-                  <FiTrash2 size={12} />
-                  Delete
-                </button>
-              </ClampedMenu>
-            );
-          })()}
+            })(),
+            document.body,
+          )}
 
         {confirmMounted && lastConfirmRef.current && (
           <DeleteConfirm

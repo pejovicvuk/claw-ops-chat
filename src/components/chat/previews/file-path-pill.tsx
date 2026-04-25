@@ -6,6 +6,7 @@ import { FiCopy, FiDownload, FiEye, FiFile, FiFileText, FiImage, FiCode } from "
 import { isImageExt } from "@/lib/mime";
 import { Z_INDEX } from "@/lib/z-index";
 import { useResolvePath } from "@/lib/use-resolve-path";
+import { useReportChatFile } from "@/lib/chat-files-context";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -73,6 +74,11 @@ function triggerDownload(path: string): void {
  * context menu with Preview / Download / Copy path.
  */
 export function FilePathPill({ path, onOpen }: FilePathPillProps) {
+  // Anchored paths register themselves as "files referenced in this
+  // chat" so subsequent ambiguous candidates (`helper.tsx`) can
+  // disambiguate by directory affinity.
+  useReportChatFile(path);
+
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

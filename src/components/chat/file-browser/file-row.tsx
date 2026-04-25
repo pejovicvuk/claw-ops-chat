@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useCallback } from "react";
+import { forwardRef, useCallback, useRef } from "react";
 import { useLongPress } from "@/lib/use-long-press";
 import type { FileEntry } from "@/lib/types";
 import type { GitFileStatus } from "@/lib/git/types";
@@ -56,15 +56,35 @@ export const FileRow = forwardRef<HTMLButtonElement, FileRowProps>(function File
   { entry, gitStatus, onClick, onDoubleClick, onContextMenu },
   ref,
 ) {
+  // Local ref so the long-press handler can read the row's bounding
+  // rect to position the context menu next to the file (rather than at
+  // the arbitrary touch coordinate, which on a phone often lands near
+  // the row's bottom edge and pushes the menu off-screen).
+  const localRef = useRef<HTMLButtonElement | null>(null);
+  const composedRef = useCallback(
+    (node: HTMLButtonElement | null) => {
+      localRef.current = node;
+      if (typeof ref === "function") ref(node);
+      else if (ref) ref.current = node;
+    },
+    [ref],
+  );
+
   // Long-press → context menu, mirroring desktop right-click. The hook
   // also cancels on finger drift so list scrolling doesn't trigger the
   // menu, and suppresses the follow-up click via guardClick.
-  const longPress = useLongPress((touch) => {
+  const longPress = useLongPress(() => {
+    const rect = localRef.current?.getBoundingClientRect();
+    // Anchor to the row: just below its left edge. The menu's own
+    // viewport-clamping logic (in file-browser.tsx) will flip it above
+    // the row when there is no room below.
+    const x = rect ? rect.left + 8 : 0;
+    const y = rect ? rect.bottom : 0;
     onContextMenu({
       preventDefault: () => {},
       stopPropagation: () => {},
-      clientX: touch.x,
-      clientY: touch.y,
+      clientX: x,
+      clientY: y,
     } as unknown as React.MouseEvent);
   });
 
@@ -75,7 +95,7 @@ export const FileRow = forwardRef<HTMLButtonElement, FileRowProps>(function File
 
   return (
     <button
-      ref={ref}
+      ref={composedRef}
       type="button"
       onClick={guardedClick}
       onDoubleClick={onDoubleClick}

@@ -1,16 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiAlertTriangle, FiLoader, FiX } from "react-icons/fi";
 import { readFile, writeFile, FileApiError } from "@/lib/api";
+import { isEditableKind, pickRenderer, type PreviewKind } from "@/lib/file-preview/pick-renderer";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { Z_INDEX } from "@/lib/z-index";
 import { clampRectToViewport } from "@/lib/clamp-to-viewport";
 import type { FileEntry } from "@/lib/types";
-import { BinaryPlaceholder, isBinaryPath } from "./binary-placeholder";
+import { BinaryPlaceholder } from "./binary-placeholder";
 import { CodeMirror } from "./code-mirror";
 import { EditorHeader } from "./header";
 import { getPanelLayout, setPanelLayout } from "./layout-store";
+import { ReadablePreview } from "./readable-preview";
+
+type Mode = "view" | "edit";
+
+/**
+ * Session-scoped memory of the last view/edit mode chosen per file path.
+ * Reopening the same file mid-session restores the user's last choice.
+ */
+const lastModeByPath = new Map<string, Mode>();
 
 export interface FileEditorPanelProps {
   file: FileEntry;
@@ -98,17 +108,33 @@ export function FileEditorPanel({
     return () => window.removeEventListener("resize", onResize);
   }, [isMobile]);
 
-  // File content + dirty state.
-  const binary = isBinaryPath(file.path);
+  // Renderer choice + view/edit mode.
+  const choice = useMemo(() => pickRenderer(file.path), [file.path]);
+  const kind: PreviewKind = choice.kind;
+  const editable = isEditableKind(kind);
+  const isMediaOrBinary = !editable;
+
+  const [mode, setMode] = useState<Mode>(() => {
+    const saved = lastModeByPath.get(file.path);
+    if (saved) return saved;
+    return "view";
+  });
+  // Force view mode for non-editable kinds (image / pdf / video / audio / binary).
+  const effectiveMode: Mode = editable ? mode : "view";
+
+  // Wrap long lines in code/text view. Defaults: on for mobile readability,
+  // off on desktop where horizontal scroll is fine. Persist per-session.
+  const [wrap, setWrap] = useState<boolean>(() => isMobile);
+
   const [original, setOriginal] = useState<string>("");
   const [content, setContent] = useState<string>("");
-  const [loading, setLoading] = useState(!binary);
+  const [loading, setLoading] = useState(editable);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const dirty = !binary && content !== original;
+  const dirty = editable && content !== original;
 
   useEffect(() => {
-    if (binary) {
+    if (!editable) {
       setLoading(false);
       return;
     }
@@ -130,10 +156,10 @@ export function FileEditorPanel({
     return () => {
       cancelled = true;
     };
-  }, [file.path, binary]);
+  }, [file.path, editable]);
 
   const handleSave = useCallback(async () => {
-    if (binary || !dirty || saving) return;
+    if (!editable || !dirty || saving) return;
     setSaving(true);
     setError(null);
     try {
@@ -144,7 +170,85 @@ export function FileEditorPanel({
     } finally {
       setSaving(false);
     }
-  }, [binary, dirty, saving, file.path, content]);
+  }, [editable, dirty, saving, file.path, content]);
+
+  // Scroll-position preservation: when the user toggles between view and
+  // edit, restore the scrollTop of the inner container so they don't lose
+  // their place in a long file.
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  const savedScrollByMode = useRef<Record<Mode, number>>({ view: 0, edit: 0 });
+  const lastModeRef = useRef<Mode>(effectiveMode);
+  useEffect(() => {
+    const prev = lastModeRef.current;
+    const next = effectiveMode;
+    if (prev !== next) {
+      // Save outgoing mode's scroll, restore incoming's on next paint.
+      const el = contentScrollRef.current;
+      if (el) savedScrollByMode.current[prev] = el.scrollTop;
+      requestAnimationFrame(() => {
+        const target = contentScrollRef.current;
+        if (target) target.scrollTop = savedScrollByMode.current[next] ?? 0;
+      });
+      lastModeRef.current = next;
+    }
+  }, [effectiveMode]);
+
+  const handleToggleMode = useCallback(() => {
+    if (!editable) return;
+    setMode((m) => {
+      const next: Mode = m === "view" ? "edit" : "view";
+      lastModeByPath.set(file.path, next);
+      return next;
+    });
+  }, [editable, file.path]);
+
+  const [copyAllOk, setCopyAllOk] = useState(false);
+  const handleCopyAll = useCallback(async () => {
+    if (!editable) return;
+    try {
+      await navigator.clipboard?.writeText(content);
+      setCopyAllOk(true);
+      setTimeout(() => setCopyAllOk(false), 1500);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }, [content, editable]);
+
+  // Body-scroll lock while a panel is open on mobile so the page underneath
+  // doesn't drift while the user scrolls the preview.
+  useEffect(() => {
+    if (!isMobile) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [isMobile]);
+
+  // Swipe-down-to-close on the mobile header. Tracks Y delta from the
+  // touchstart Y; release with > 80 px downward delta closes the panel.
+  const swipeStartY = useRef<number | null>(null);
+  const onHeaderTouchStart = useCallback(
+    (e: React.TouchEvent) => {
+      if (!isMobile) return;
+      const t = e.touches[0];
+      if (!t) return;
+      swipeStartY.current = t.clientY;
+    },
+    [isMobile],
+  );
+  const onHeaderTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      if (!isMobile) return;
+      const start = swipeStartY.current;
+      swipeStartY.current = null;
+      if (start === null) return;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      if (t.clientY - start > 80) requestClose();
+    },
+    [isMobile, requestClose],
+  );
 
   // Drag handling — desktop only.
   const dragStart = useRef<{
@@ -348,9 +452,20 @@ export function FileEditorPanel({
             : undefined
         }
         onDragStart={onDragStart}
+        showModeToggle={editable}
+        mode={effectiveMode}
+        onToggleMode={editable ? handleToggleMode : undefined}
+        showWrapToggle={effectiveMode === "view" && (kind === "code" || kind === "text")}
+        wrap={wrap}
+        onToggleWrap={() => setWrap((w) => !w)}
+        showCopyAll={editable}
+        copyAllOk={copyAllOk}
+        onCopyAll={editable ? handleCopyAll : undefined}
+        onTouchStart={onHeaderTouchStart}
+        onTouchEnd={onHeaderTouchEnd}
       />
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div ref={contentScrollRef} className="min-h-0 flex-1 overflow-y-auto">
         {loading && (
           <div className="flex h-full items-center justify-center">
             <FiLoader size={16} className="animate-spin text-canvas-muted" />
@@ -382,8 +497,22 @@ export function FileEditorPanel({
             </button>
           </div>
         )}
-        {!loading && !error && binary && <BinaryPlaceholder file={file} />}
-        {!loading && !error && !binary && (
+        {!loading && !error && isMediaOrBinary && kind === "binary" && (
+          <BinaryPlaceholder file={file} />
+        )}
+        {!loading && !error && isMediaOrBinary && kind !== "binary" && (
+          <ReadablePreview file={file} kind={kind} content="" wrap={wrap} />
+        )}
+        {!loading && !error && editable && effectiveMode === "view" && (
+          <ReadablePreview
+            file={file}
+            kind={kind}
+            language={choice.language}
+            content={content}
+            wrap={wrap}
+          />
+        )}
+        {!loading && !error && editable && effectiveMode === "edit" && (
           <CodeMirror value={content} onChange={setContent} path={file.path} onSave={handleSave} />
         )}
       </div>

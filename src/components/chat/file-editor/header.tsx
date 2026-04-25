@@ -2,8 +2,14 @@
 
 import { forwardRef } from "react";
 import {
+  FiAlignJustify,
+  FiAlignLeft,
+  FiCheck,
   FiChevronRight,
+  FiCopy,
   FiCornerUpLeft,
+  FiEdit2,
+  FiEye,
   FiHome,
   FiMaximize2,
   FiMinimize2,
@@ -26,6 +32,21 @@ interface HeaderProps {
   onReveal?: () => void;
   /** Invoked by pointerDown on the drag-handle region (desktop). */
   onDragStart?: (e: React.PointerEvent) => void;
+  /** Show the View / Edit toggle button. */
+  showModeToggle?: boolean;
+  mode?: "view" | "edit";
+  onToggleMode?: () => void;
+  /** Show the line-wrap toggle (only useful in code/text view). */
+  showWrapToggle?: boolean;
+  wrap?: boolean;
+  onToggleWrap?: () => void;
+  /** Show the copy-all-content button. */
+  showCopyAll?: boolean;
+  copyAllOk?: boolean;
+  onCopyAll?: () => void;
+  /** Touch handlers used on mobile for swipe-down-to-close. */
+  onTouchStart?: (e: React.TouchEvent) => void;
+  onTouchEnd?: (e: React.TouchEvent) => void;
 }
 
 function segmentsFor(path: string): { label: string; path: string }[] {
@@ -66,6 +87,17 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
     onToggleMaximize,
     onReveal,
     onDragStart,
+    showModeToggle,
+    mode,
+    onToggleMode,
+    showWrapToggle,
+    wrap,
+    onToggleWrap,
+    showCopyAll,
+    copyAllOk,
+    onCopyAll,
+    onTouchStart,
+    onTouchEnd,
   },
   ref,
 ) {
@@ -79,6 +111,8 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
       ref={ref}
       className="flex shrink-0 cursor-default select-none items-center gap-2 border-b border-canvas-border bg-canvas-surface px-2 py-1.5"
       onPointerDown={onDragStart}
+      onTouchStart={onTouchStart}
+      onTouchEnd={onTouchEnd}
     >
       <nav
         aria-label="File path"
@@ -137,6 +171,45 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
           >
             <FiCornerUpLeft size={12} />
+          </button>
+        )}
+        {showWrapToggle && onToggleWrap && (
+          <button
+            type="button"
+            onClick={onToggleWrap}
+            title={wrap ? "Disable line wrap" : "Enable line wrap"}
+            aria-label={wrap ? "Disable line wrap" : "Enable line wrap"}
+            aria-pressed={wrap}
+            className={`flex h-7 w-7 items-center justify-center rounded hover:bg-canvas-surface-hover sm:h-6 sm:w-6 ${
+              wrap ? "text-accent" : "text-canvas-muted hover:text-canvas-fg"
+            }`}
+          >
+            {wrap ? <FiAlignJustify size={12} /> : <FiAlignLeft size={12} />}
+          </button>
+        )}
+        {showCopyAll && onCopyAll && (
+          <button
+            type="button"
+            onClick={onCopyAll}
+            title="Copy all"
+            aria-label="Copy entire file content"
+            className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
+          >
+            {copyAllOk ? <FiCheck size={12} /> : <FiCopy size={12} />}
+          </button>
+        )}
+        {showModeToggle && onToggleMode && (
+          <button
+            type="button"
+            onClick={onToggleMode}
+            title={mode === "view" ? "Edit" : "View"}
+            aria-label={mode === "view" ? "Switch to edit" : "Switch to view"}
+            aria-pressed={mode === "edit"}
+            className={`flex h-7 w-7 items-center justify-center rounded hover:bg-canvas-surface-hover sm:h-6 sm:w-6 ${
+              mode === "edit" ? "text-accent" : "text-canvas-muted hover:text-canvas-fg"
+            }`}
+          >
+            {mode === "view" ? <FiEdit2 size={12} /> : <FiEye size={12} />}
           </button>
         )}
         <button

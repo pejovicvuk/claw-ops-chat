@@ -1,6 +1,7 @@
 "use client";
 
-import { forwardRef } from "react";
+import { forwardRef, useCallback } from "react";
+import { useLongPress } from "@/lib/use-long-press";
 import type { FileEntry } from "@/lib/types";
 import { FileIcon } from "./file-icon";
 
@@ -36,13 +37,34 @@ export const FileRow = forwardRef<HTMLButtonElement, FileRowProps>(function File
   { entry, onClick, onDoubleClick, onContextMenu },
   ref,
 ) {
+  // Long-press → context menu, mirroring desktop right-click. The hook
+  // also cancels on finger drift so list scrolling doesn't trigger the
+  // menu, and suppresses the follow-up click via guardClick.
+  const longPress = useLongPress((touch) => {
+    onContextMenu({
+      preventDefault: () => {},
+      stopPropagation: () => {},
+      clientX: touch.x,
+      clientY: touch.y,
+    } as unknown as React.MouseEvent);
+  });
+
+  const handleClick = useCallback(() => {
+    onClick();
+  }, [onClick]);
+  const guardedClick = longPress.guardClick(handleClick);
+
   return (
     <button
       ref={ref}
       type="button"
-      onClick={onClick}
+      onClick={guardedClick}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
+      onTouchStart={longPress.onTouchStart}
+      onTouchMove={longPress.onTouchMove}
+      onTouchEnd={longPress.onTouchEnd}
+      onTouchCancel={longPress.onTouchCancel}
       onKeyDown={(e) => {
         if (e.key === "ContextMenu" || (e.key === "F10" && e.shiftKey)) {
           e.preventDefault();

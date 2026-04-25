@@ -29,6 +29,7 @@ import { invalidateWorkspaceIndex } from "@/lib/use-workspace-index";
 import { useExitAnimation } from "@/lib/use-exit-animation";
 import { useFileListings } from "@/lib/use-file-listings";
 import { useGitStatus } from "@/lib/use-git-status";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { useToast } from "@/lib/use-toast";
 import { uploadBatch, type BatchProgress, type UploadEntry } from "@/lib/batch-upload";
 import type { GitFileStatus } from "@/lib/git/types";
@@ -97,6 +98,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
   ref,
 ) {
   const { toast } = useToast();
+  const isMobile = useIsMobile();
   const [currentPath, setCurrentPath] = useState(initialPath || "~");
   const { entries, loading, error, reload } = useFileListings(currentPath);
   const git = useGitStatus(currentPath);
@@ -165,11 +167,20 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
     (entry: FileEntry) => {
       if (entry.directory) {
         navigateTo(entry.path);
+        return;
+      }
+      // Mobile: a single tap on a file opens it (the desktop "tap inserts
+      // @path into the chat" affordance is replaced by the long-press menu's
+      // Copy path item, which is more discoverable on touch). Desktop keeps
+      // its prior single-click → onFileClick behavior.
+      if (isMobile) {
+        if (onFileOpen) onFileOpen(entry);
+        else onFileClick?.(entry.path);
       } else {
         onFileClick?.(entry.path);
       }
     },
-    [navigateTo, onFileClick],
+    [navigateTo, onFileClick, onFileOpen, isMobile],
   );
 
   const handleEntryDoubleClick = useCallback(

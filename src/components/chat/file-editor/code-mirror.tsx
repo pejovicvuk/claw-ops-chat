@@ -140,7 +140,10 @@ export function CodeMirror({
   return (
     <div
       ref={hostRef}
-      className="h-full w-full overflow-hidden text-[12px]"
+      // No `overflow-hidden` here — CodeMirror's own `.cm-scroller` handles
+      // scrolling internally. Trapping it with `overflow-hidden` was the
+      // root of the "preview can't scroll on mobile" bug.
+      className="h-full w-full min-h-0 text-[12px]"
       role="textbox"
       aria-multiline="true"
     />

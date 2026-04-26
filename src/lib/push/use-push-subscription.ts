@@ -31,6 +31,47 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
+/**
+ * Resolve once the registration has an `active` worker. State-aware
+ * (vs. plain `.ready`) so we never block when activation has already
+ * happened, and so a `redundant` worker — typically caused by a failed
+ * install — surfaces as a real error instead of an indefinite hang.
+ */
+function waitForActivation(reg: ServiceWorkerRegistration): Promise<void> {
+  if (reg.active) return Promise.resolve();
+  const target = reg.installing ?? reg.waiting;
+  if (!target) {
+    // Nothing to listen on — fall back to global `.ready`, which
+    // resolves once any worker becomes active for this scope.
+    return navigator.serviceWorker.ready.then(() => undefined);
+  }
+  return new Promise<void>((resolve, reject) => {
+    const onStateChange = () => {
+      if (target.state === "activated") {
+        target.removeEventListener("statechange", onStateChange);
+        resolve();
+      } else if (target.state === "redundant") {
+        target.removeEventListener("statechange", onStateChange);
+        reject(
+          new Error(
+            "Service worker became redundant during install (the install handler likely threw — try a hard reload).",
+          ),
+        );
+      }
+    };
+    target.addEventListener("statechange", onStateChange);
+    // Edge case: state may have flipped between the read and the
+    // listener attach. Re-check synchronously.
+    if (target.state === "activated") {
+      target.removeEventListener("statechange", onStateChange);
+      resolve();
+    } else if (target.state === "redundant") {
+      target.removeEventListener("statechange", onStateChange);
+      reject(new Error("Service worker is redundant — try a hard reload."));
+    }
+  });
+}
+
 export type PushSupport = { kind: "supported" } | { kind: "unsupported"; reason: string };
 
 export interface UsePushSubscriptionResult {
@@ -45,7 +86,11 @@ export interface UsePushSubscriptionResult {
   error: string | null;
   enable: () => Promise<void>;
   disable: () => Promise<void>;
+  /** Update event preferences for THIS device. Thin wrapper around
+   *  `setDevicePrefs(thisDevice.id, events)`. */
   setPrefs: (events: Partial<EventPreferences>) => Promise<void>;
+  /** Update event preferences for any registered device by id. */
+  setDevicePrefs: (id: string, events: Partial<EventPreferences>) => Promise<void>;
   removeDevice: (id: string) => Promise<void>;
   clearAll: () => Promise<void>;
   sendTest: () => Promise<void>;
@@ -189,7 +234,10 @@ export function usePushSubscription(): UsePushSubscriptionResult {
         );
       }
       const reg = await navigator.serviceWorker.register(`${BASE}/sw.js`, { scope: `${BASE}/` });
-      await withTimeout(navigator.serviceWorker.ready, 10_000, "service worker activation");
+      // State-aware wait: returns instantly if `reg.active` is already
+      // truthy, listens for activation otherwise, surfaces `redundant`
+      // (failed install) as a clean error. 30 s ceiling for slow nets.
+      await withTimeout(waitForActivation(reg), 30_000, "service worker activation");
       const publicKey = await fetchVapidPublicKey();
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
@@ -233,12 +281,11 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     }
   }, [support.kind, thisDevice, refresh]);
 
-  const setPrefs = useCallback(
-    async (events: Partial<EventPreferences>) => {
-      if (!thisDevice) return;
+  const setDevicePrefs = useCallback(
+    async (id: string, events: Partial<EventPreferences>) => {
       setError(null);
       try {
-        const res = await authFetch(`${BASE}/api/push/subscriptions/${thisDevice.id}`, {
+        const res = await authFetch(`${BASE}/api/push/subscriptions/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ events }),
@@ -249,7 +296,15 @@ export function usePushSubscription(): UsePushSubscriptionResult {
         setError(err instanceof Error ? err.message : "Failed to update preferences");
       }
     },
-    [thisDevice, refresh],
+    [refresh],
+  );
+
+  const setPrefs = useCallback(
+    async (events: Partial<EventPreferences>) => {
+      if (!thisDevice) return;
+      await setDevicePrefs(thisDevice.id, events);
+    },
+    [thisDevice, setDevicePrefs],
   );
 
   const removeDevice = useCallback(
@@ -308,6 +363,7 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     enable,
     disable,
     setPrefs,
+    setDevicePrefs,
     removeDevice,
     clearAll,
     sendTest,

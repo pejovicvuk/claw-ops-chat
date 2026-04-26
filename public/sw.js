@@ -3,8 +3,27 @@ const CACHE_NAME = "claw-chat-v1";
 const PRECACHE_URLS = ["/chat", "/chat/login"];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS)));
-  self.skipWaiting();
+  // Resilient install: a single failed precache URL must not abort the
+  // install (which would leave the worker `redundant` and break Push
+  // forever — `serviceWorker.ready` then never resolves). Use
+  // Promise.allSettled so per-URL failures are swallowed, wrap the
+  // cache-open itself in try/catch, and run skipWaiting INSIDE the
+  // waitUntil promise so it doesn't race with install.
+  event.waitUntil(
+    (async () => {
+      try {
+        const cache = await caches.open(CACHE_NAME);
+        await Promise.allSettled(PRECACHE_URLS.map((u) => cache.add(u)));
+      } catch {
+        /* cache subsystem unavailable — push still works without it */
+      }
+      try {
+        await self.skipWaiting();
+      } catch {
+        /* skipWaiting can reject in some Safari versions — non-fatal */
+      }
+    })(),
+  );
 });
 
 self.addEventListener("activate", (event) => {
@@ -59,7 +78,7 @@ self.addEventListener("push", (event) => {
   let data = {};
   try {
     data = event.data ? event.data.json() : {};
-  } catch (_e) {
+  } catch {
     data = { title: "Claw Chat", body: event.data ? event.data.text() : "" };
   }
   event.waitUntil(
@@ -73,7 +92,7 @@ self.addEventListener("push", (event) => {
         for (const w of wins) {
           try {
             w.postMessage({ kind: "push-suppressed", data });
-          } catch (_e) {
+          } catch {
             /* ignore */
           }
         }
@@ -103,12 +122,12 @@ self.addEventListener("notificationclick", (event) => {
       if (existing) {
         try {
           await existing.focus();
-        } catch (_e) {
+        } catch {
           /* ignore */
         }
         try {
           if ("navigate" in existing) await existing.navigate(target);
-        } catch (_e) {
+        } catch {
           /* ignore */
         }
         return;

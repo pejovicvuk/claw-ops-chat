@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import {
   FiAlertTriangle,
   FiBell,
   FiBellOff,
   FiCheck,
+  FiChevronDown,
+  FiChevronRight,
   FiInfo,
   FiLoader,
   FiSend,
@@ -14,6 +16,7 @@ import {
 } from "react-icons/fi";
 import { ALL_EVENT_KINDS, type EventPreferences, type PushEventKind } from "@/lib/push/types";
 import { usePushSubscription } from "@/lib/push/use-push-subscription";
+import type { DeviceSummary } from "@/lib/push/types";
 
 const EVENT_LABELS: Record<PushEventKind, { title: string; description: string }> = {
   turnComplete: {
@@ -194,36 +197,14 @@ export function SettingsNotificationsPage() {
           </div>
           <div className="space-y-1.5">
             {sub.allDevices.map((d) => (
-              <div
+              <DeviceRow
                 key={d.id}
-                className="flex items-center justify-between rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="truncate text-[12px] font-medium text-canvas-fg">
-                      {d.label}
-                    </span>
-                    {d.isThisDevice && (
-                      <span className="inline-flex items-center gap-0.5 rounded bg-accent/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-accent">
-                        <FiCheck size={8} />
-                        this
-                      </span>
-                    )}
-                  </div>
-                  <span className="block text-[10px] text-canvas-muted">
-                    Active {relTime(d.lastSeenAt)} · added {relTime(d.createdAt)}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => void sub.removeDevice(d.id)}
-                  aria-label={`Remove ${d.label}`}
-                  className="ml-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] text-red-500 transition-colors hover:bg-red-500/10"
-                >
-                  <FiTrash2 size={11} />
-                  Remove
-                </button>
-              </div>
+                device={d}
+                onRemove={() => void sub.removeDevice(d.id)}
+                onTogglePref={(kind, value) =>
+                  void sub.setDevicePrefs(d.id, { [kind]: value } as Partial<EventPreferences>)
+                }
+              />
             ))}
           </div>
         </div>
@@ -259,5 +240,72 @@ function EventCheckbox({ kind, checked, onChange }: EventCheckboxProps) {
         <span className="block text-[10px] text-canvas-muted">{meta.description}</span>
       </div>
     </label>
+  );
+}
+
+interface DeviceRowProps {
+  device: DeviceSummary;
+  onRemove: () => void;
+  onTogglePref: (kind: PushEventKind, value: boolean) => void;
+}
+
+function DeviceRow({ device, onRemove, onTogglePref }: DeviceRowProps) {
+  const [expanded, setExpanded] = useState(false);
+  const enabledCount = ALL_EVENT_KINDS.filter((k) => device.events[k]).length;
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-canvas-border bg-canvas-bg">
+      <div className="flex items-center justify-between px-2 py-1.5">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          aria-label={expanded ? `Collapse ${device.label}` : `Expand ${device.label}`}
+          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1 py-1 text-left transition-colors hover:bg-canvas-surface-hover"
+        >
+          <span className="shrink-0 text-canvas-muted">
+            {expanded ? <FiChevronDown size={12} /> : <FiChevronRight size={12} />}
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-[12px] font-medium text-canvas-fg">
+                {device.label}
+              </span>
+              {device.isThisDevice && (
+                <span className="inline-flex items-center gap-0.5 rounded bg-accent/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-accent">
+                  <FiCheck size={8} />
+                  this
+                </span>
+              )}
+            </div>
+            <span className="block text-[10px] text-canvas-muted">
+              Active {relTime(device.lastSeenAt)} · added {relTime(device.createdAt)} ·{" "}
+              {enabledCount}/{ALL_EVENT_KINDS.length} events
+            </span>
+          </div>
+        </button>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={`Remove ${device.label}`}
+          className="ml-2 inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] text-red-500 transition-colors hover:bg-red-500/10"
+        >
+          <FiTrash2 size={11} />
+          Remove
+        </button>
+      </div>
+      {expanded && (
+        <div className="space-y-1.5 border-t border-canvas-border bg-canvas-surface/40 p-2">
+          {ALL_EVENT_KINDS.map((kind) => (
+            <EventCheckbox
+              key={kind}
+              kind={kind}
+              checked={device.events[kind]}
+              onChange={(v) => onTogglePref(kind, v)}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

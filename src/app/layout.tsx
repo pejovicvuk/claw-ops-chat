@@ -52,11 +52,11 @@ export default function RootLayout({
             __html: `window.__CLAWCHAT_API_ORIGIN__=${JSON.stringify(runtimeApiOrigin)};`,
           }}
         />
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `if("serviceWorker"in navigator){navigator.serviceWorker.register("/chat/sw.js").catch(function(){})}`,
-          }}
-        />
+        {/*
+          Service worker registration moved to <ServiceWorkerBoot /> in
+          providers.tsx so failures surface in the settings UI instead of
+          being silently swallowed.
+        */}
       </head>
       <body className="antialiased">
         <Providers>{children}</Providers>

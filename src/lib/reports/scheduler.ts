@@ -5,6 +5,7 @@ import { reconcileCrashedRuns } from "./run-store";
 import { ensureReportsTree } from "./paths";
 import type { ReportJob, ReportRun, RunTrigger } from "./types";
 import { getAuditWriter, type AuditWriter } from "../audit/writer";
+import { navUrls } from "../nav-urls";
 import { sendToAll } from "../push/send";
 
 /**
@@ -307,7 +308,8 @@ export class ReportScheduler {
             ? `Cron job ${job.slug} ran in ${Math.round((Date.now() - startedAt) / 1000)}s.`
             : run.errorMessage?.slice(0, 120) || `Cron job ${job.slug} did not complete.`,
         kind: "cronComplete",
-        url: `/chat?report=${encodeURIComponent(job.slug)}`,
+        url: navUrls.report(job.slug),
+        tagKey: job.slug,
       },
       "cronComplete",
     );

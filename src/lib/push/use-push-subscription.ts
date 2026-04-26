@@ -1,10 +1,35 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "@/lib/auth";
 import { DEFAULT_PREFERENCES, type DeviceSummary, type EventPreferences } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
+
+/**
+ * Resolve `promise` within `ms`, otherwise reject with a timeout error.
+ * Used to ensure a stuck `serviceWorker.ready` (which can hang
+ * indefinitely if a worker never reaches "active") surfaces as a
+ * visible error instead of an eternal loading spinner.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Timed out waiting for ${label} (${ms} ms)`)),
+      ms,
+    );
+    promise.then(
+      (v) => {
+        clearTimeout(timer);
+        resolve(v);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
 
 export type PushSupport = { kind: "supported" } | { kind: "unsupported"; reason: string };
 
@@ -97,7 +122,7 @@ async function fetchDevices(currentEndpoint?: string): Promise<ServerListRespons
 }
 
 export function usePushSubscription(): UsePushSubscriptionResult {
-  const support = useRef<PushSupport>(detectSupport()).current;
+  const [support] = useState<PushSupport>(() => detectSupport());
   const [permission, setPermission] = useState<NotificationPermission>(() =>
     typeof Notification !== "undefined" ? Notification.permission : "default",
   );
@@ -114,9 +139,28 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     }
     try {
       setError(null);
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.getSubscription();
-      const list = await fetchDevices(sub?.endpoint);
+      // `getRegistration()` resolves immediately (with `undefined` when
+      // no SW exists) — unlike `.ready`, which hangs forever if no
+      // worker ever activates. The read path must never block on `.ready`.
+      const reg = await withTimeout(
+        navigator.serviceWorker.getRegistration(`${BASE}/`),
+        3000,
+        "service worker registration lookup",
+      );
+      let endpoint: string | undefined;
+      if (reg) {
+        try {
+          const sub = await withTimeout(
+            reg.pushManager.getSubscription(),
+            3000,
+            "push subscription lookup",
+          );
+          endpoint = sub?.endpoint;
+        } catch {
+          /* leave endpoint undefined; server still returns the device list */
+        }
+      }
+      const list = await fetchDevices(endpoint);
       setAllDevices(list.devices);
       setThisDevice(list.devices.find((d) => d.isThisDevice) ?? null);
     } catch (err) {
@@ -145,7 +189,7 @@ export function usePushSubscription(): UsePushSubscriptionResult {
         );
       }
       const reg = await navigator.serviceWorker.register(`${BASE}/sw.js`, { scope: `${BASE}/` });
-      await navigator.serviceWorker.ready;
+      await withTimeout(navigator.serviceWorker.ready, 10_000, "service worker activation");
       const publicKey = await fetchVapidPublicKey();
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
@@ -177,8 +221,8 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     if (support.kind !== "supported") return;
     setError(null);
     try {
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.getSubscription();
+      const reg = await navigator.serviceWorker.getRegistration(`${BASE}/`);
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
       if (sub && thisDevice) {
         await authFetch(`${BASE}/api/push/subscriptions/${thisDevice.id}`, { method: "DELETE" });
       }
@@ -217,8 +261,8 @@ export function usePushSubscription(): UsePushSubscriptionResult {
         // If we removed THIS device, also unsubscribe locally so the
         // browser stops receiving messages for the orphaned subscription.
         if (thisDevice && thisDevice.id === id) {
-          const reg = await navigator.serviceWorker.ready;
-          const sub = await reg.pushManager.getSubscription();
+          const reg = await navigator.serviceWorker.getRegistration(`${BASE}/`);
+          const sub = reg ? await reg.pushManager.getSubscription() : null;
           await sub?.unsubscribe();
         }
         await refresh();
@@ -234,8 +278,8 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     try {
       const res = await authFetch(`${BASE}/api/push/subscriptions?all=true`, { method: "DELETE" });
       if (!res.ok) throw new Error(`Failed to clear devices (${res.status})`);
-      const reg = await navigator.serviceWorker.ready;
-      const sub = await reg.pushManager.getSubscription();
+      const reg = await navigator.serviceWorker.getRegistration(`${BASE}/`);
+      const sub = reg ? await reg.pushManager.getSubscription() : null;
       await sub?.unsubscribe();
       await refresh();
     } catch (err) {

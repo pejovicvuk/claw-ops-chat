@@ -27,6 +27,7 @@ import { ChatInput } from "./chat-input";
 import { SetupGuard } from "./setup-guard";
 import { EmptyState } from "./empty-state";
 import { FileDropzone } from "./file-browser/file-dropzone";
+import { PushReminderBanner } from "./push-reminder-banner";
 
 const MODE_LABELS: Record<string, string> = {
   default: "Default",
@@ -666,6 +667,7 @@ export function ChatView({
         )}
 
         {/* Messages */}
+        <PushReminderBanner />
         <div className="relative flex-1">
           <div
             ref={scrollRef}

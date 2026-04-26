@@ -297,9 +297,9 @@ function TestNotificationsCard({ prefs, sendTest }: TestNotificationsCardProps) 
         <span className="text-[13px] font-medium text-canvas-fg">Send a test notification</span>
       </div>
       <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
-        Picks the channel directly so you can verify each toggle independently. With this tab
-        focused, you&rsquo;ll see an in-app toast; switch to another tab first to see a system
-        notification.
+        Picks the channel directly so you can verify each toggle independently. Tests always
+        produce a system notification (even with this tab focused) so you can confirm OS-level
+        delivery without alt-tabbing first.
       </p>
       <div className="flex flex-wrap gap-2">
         {ALL_EVENT_KINDS.map((kind) => {

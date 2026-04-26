@@ -76,4 +76,11 @@ export interface PushPayload {
    * resolved from another tab and the stale prompt should disappear.
    */
   closeOnly?: boolean;
+  /**
+   * When true, the SW shows the system notification even if the tab is
+   * focused, and skips the in-app `push-suppressed` toast path. Set by
+   * the test endpoint so a user sitting on the settings page can verify
+   * their OS-level notifications work without alt-tabbing first.
+   */
+  forceShow?: boolean;
 }

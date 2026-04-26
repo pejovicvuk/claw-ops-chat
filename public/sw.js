@@ -1,7 +1,7 @@
-// Bumped to v2 when the push handler was rewritten so older clients
-// re-install with the new logic (the activate handler below cleans up
-// stale caches).
-const CACHE_NAME = "claw-chat-v2";
+// Bumped to v3 when the push handler learned about `forceShow` (so the
+// test button can produce a system notification even on a focused tab).
+// The activate handler below cleans up stale caches on every bump.
+const CACHE_NAME = "claw-chat-v3";
 
 const PRECACHE_URLS = ["/chat", "/chat/login"];
 
@@ -138,7 +138,12 @@ self.addEventListener("push", (event) => {
         includeUncontrolled: true,
       });
       const focused = wins.some((w) => w.visibilityState === "visible" && w.focused);
-      if (focused) {
+      // forceShow bypasses the focused-tab suppression entirely. Used by
+      // the test endpoint so a user clicking "Send test" while looking
+      // at the settings page actually sees a system notification —
+      // otherwise the test path silently degrades to an in-app toast and
+      // the user can't tell whether their OS-level notifications work.
+      if (focused && !data.forceShow) {
         for (const w of wins) {
           try {
             w.postMessage({ kind: "push-suppressed", data });
@@ -156,6 +161,10 @@ self.addEventListener("push", (event) => {
         badge: "/chat/icons/icon-192.png",
         tag,
         renotify: true,
+        // Tests come with `requireInteraction: true` so the user has
+        // time to look — auto-dismiss on real notifications still works
+        // (they don't carry forceShow).
+        requireInteraction: !!data.forceShow,
         data: { url: data.url || "/chat", kind: data.kind || null, tagKey: data.tagKey || null },
       });
     })(),

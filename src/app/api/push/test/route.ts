@@ -25,6 +25,11 @@ const TEST_PAYLOADS: Record<PushEventKind, Omit<PushPayload, "kind">> = {
     body: "If you see this, scheduled-report alerts will reach this device.",
     url: navUrls.chatRoot(),
   },
+  monitoringAlert: {
+    title: "Claw Chat — monitoring alert (test)",
+    body: "If you see this, monitoring alerts will reach this device.",
+    url: navUrls.chatRoot(),
+  },
 };
 
 function isPushEventKind(value: string | null): value is PushEventKind {

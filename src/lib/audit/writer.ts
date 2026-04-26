@@ -4,6 +4,8 @@ import { dirname } from "path";
 import { AUDIT_CATEGORIES, META_PATH, dailyFilePath, ensureAuditTree } from "./paths";
 import { scrubDetails, scrubErrorMessage, scrubSubject } from "./scrub";
 import type {
+  AlertAuditEvent,
+  AlertAuditEventInput,
   ApiAuditEvent,
   ApiAuditEventInput,
   AuditCategory,
@@ -58,6 +60,18 @@ class AuditWriter {
       ...event,
       v: 1,
       category: "session",
+      at: Date.now(),
+      subject: scrubSubject(event.subject),
+      details: scrubDetails(event.details),
+    };
+    await this.writeEvent(full);
+  }
+
+  async alert(event: AlertAuditEventInput): Promise<void> {
+    const full: AlertAuditEvent = {
+      ...event,
+      v: 1,
+      category: "alert",
       at: Date.now(),
       subject: scrubSubject(event.subject),
       details: scrubDetails(event.details),

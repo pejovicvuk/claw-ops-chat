@@ -51,6 +51,10 @@ next-env.d.ts
 src/lib/agent-config.js
 src/lib/bitbucket-custom-config.js
 src/lib/reports/*.js
+src/lib/monitoring/**/*.js
+src/lib/audit/*.js
+src/app/api/monitoring/**/*.js
+src/components/monitoring/**/*.js
 
 # Claude Code local settings (not shared)
 .claude/settings.local.json

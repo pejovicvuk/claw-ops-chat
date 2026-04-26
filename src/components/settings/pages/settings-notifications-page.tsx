@@ -16,11 +16,7 @@ import {
   FiSmartphone,
   FiTrash2,
 } from "react-icons/fi";
-import {
-  ALL_EVENT_KINDS,
-  type EventPreferences,
-  type PushEventKind,
-} from "@/lib/push/types";
+import { ALL_EVENT_KINDS, type EventPreferences, type PushEventKind } from "@/lib/push/types";
 import { usePushDiagnostics } from "@/lib/push/use-push-diagnostics";
 import { usePushSubscription } from "@/lib/push/use-push-subscription";
 import { useSwRegistrationStatus } from "@/lib/push/use-sw-registration";
@@ -43,6 +39,10 @@ const EVENT_LABELS: Record<PushEventKind, { title: string; description: string }
   cronComplete: {
     title: "Scheduled report finished",
     description: "A cron job from Settings → Reports completed a run.",
+  },
+  monitoringAlert: {
+    title: "Monitoring alert",
+    description: "A configured alert rule fired or resolved (Settings → Monitoring → Alerts).",
   },
 };
 
@@ -253,7 +253,8 @@ function ServiceWorkerStatusRow({ status, error }: ServiceWorkerStatusRowProps) 
     return (
       <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-[11px] text-yellow-700 dark:text-yellow-300">
         <FiAlertTriangle size={11} />
-        Service workers aren&rsquo;t available in this browser — push notifications won&rsquo;t work.
+        Service workers aren&rsquo;t available in this browser — push notifications won&rsquo;t
+        work.
       </div>
     );
   }
@@ -297,9 +298,9 @@ function TestNotificationsCard({ prefs, sendTest }: TestNotificationsCardProps) 
         <span className="text-[13px] font-medium text-canvas-fg">Send a test notification</span>
       </div>
       <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
-        Picks the channel directly so you can verify each toggle independently. Tests always
-        produce a system notification (even with this tab focused) so you can confirm OS-level
-        delivery without alt-tabbing first.
+        Picks the channel directly so you can verify each toggle independently. Tests always produce
+        a system notification (even with this tab focused) so you can confirm OS-level delivery
+        without alt-tabbing first.
       </p>
       <div className="flex flex-wrap gap-2">
         {ALL_EVENT_KINDS.map((kind) => {
@@ -310,7 +311,11 @@ function TestNotificationsCard({ prefs, sendTest }: TestNotificationsCardProps) 
               type="button"
               onClick={() => void handleTest(kind)}
               disabled={!enabled || pending !== null}
-              title={enabled ? `Send a test for ${EVENT_LABELS[kind].title}` : "Channel disabled — toggle it on above first"}
+              title={
+                enabled
+                  ? `Send a test for ${EVENT_LABELS[kind].title}`
+                  : "Channel disabled — toggle it on above first"
+              }
               className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-2.5 py-1.5 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
             >
               {pending === kind ? (

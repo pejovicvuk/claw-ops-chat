@@ -1,10 +1,16 @@
-export type PushEventKind = "turnComplete" | "permissionRequest" | "error" | "cronComplete";
+export type PushEventKind =
+  | "turnComplete"
+  | "permissionRequest"
+  | "error"
+  | "cronComplete"
+  | "monitoringAlert";
 
 export const ALL_EVENT_KINDS: PushEventKind[] = [
   "turnComplete",
   "permissionRequest",
   "error",
   "cronComplete",
+  "monitoringAlert",
 ];
 
 export interface EventPreferences {
@@ -12,6 +18,7 @@ export interface EventPreferences {
   permissionRequest: boolean;
   error: boolean;
   cronComplete: boolean;
+  monitoringAlert: boolean;
 }
 
 export const DEFAULT_PREFERENCES: EventPreferences = {
@@ -19,6 +26,7 @@ export const DEFAULT_PREFERENCES: EventPreferences = {
   permissionRequest: true,
   error: true,
   cronComplete: true,
+  monitoringAlert: true,
 };
 
 export interface PushKeys {

@@ -16,6 +16,16 @@
   --glass-bg: rgba(255, 255, 255, 0.55);
   --glass-border: rgba(255, 255, 255, 0.35);
   --glass-blur: 20px;
+  /* Monitoring status palette — WCAG-AA on canvas-bg. */
+  --mon-healthy: #16a34a;
+  --mon-warning: #d97706;
+  --mon-critical: #dc2626;
+  --mon-unknown: #737373;
+  --mon-info: #2563eb;
+  --mon-chart-grid: rgba(0, 0, 0, 0.06);
+  --mon-chart-axis: #737373;
+  --mon-spark-default: rgba(26, 26, 26, 0.55);
+  --mon-area-fill: rgba(232, 85, 58, 0.1);
 }
 
 .dark {
@@ -32,6 +42,15 @@
   --glass-bg: rgba(30, 30, 30, 0.55);
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-blur: 20px;
+  --mon-healthy: #22c55e;
+  --mon-warning: #f59e0b;
+  --mon-critical: #ef4444;
+  --mon-unknown: #9ca3af;
+  --mon-info: #3b82f6;
+  --mon-chart-grid: rgba(255, 255, 255, 0.07);
+  --mon-chart-axis: #9ca3af;
+  --mon-spark-default: rgba(240, 240, 240, 0.55);
+  --mon-area-fill: rgba(232, 85, 58, 0.18);
 }
 
 /* ── Tailwind Theme Inline ── */

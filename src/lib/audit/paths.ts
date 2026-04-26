@@ -12,7 +12,12 @@ import type { AuditCategory } from "./types";
 
 export const AUDIT_ROOT = "/root/.audit";
 
-export const AUDIT_CATEGORIES: readonly AuditCategory[] = ["api", "cron", "session"] as const;
+export const AUDIT_CATEGORIES: readonly AuditCategory[] = [
+  "api",
+  "cron",
+  "session",
+  "alert",
+] as const;
 
 export const META_PATH = join(AUDIT_ROOT, ".meta.json");
 

@@ -60,4 +60,7 @@ RUN mkdir -p /root/.claude
 
 EXPOSE ${PORT}
 
-CMD ["node", "server.js"]
+# --expose-gc enables the optional "Force GC" admin action in the
+# Monitoring → Server Health section. It does NOT enable user-triggered
+# GC over the wire — the admin route is auth-gated and audit-logged.
+CMD ["node", "--expose-gc", "server.js"]

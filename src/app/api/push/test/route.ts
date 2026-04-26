@@ -37,7 +37,12 @@ async function postHandler(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const kindParam = url.searchParams.get("kind");
   const kind: PushEventKind = isPushEventKind(kindParam) ? kindParam : "turnComplete";
-  const payload: PushPayload = { ...TEST_PAYLOADS[kind], kind };
+  // forceShow: tests must produce a visible system notification even
+  // when the user is sitting on the settings page (i.e. the tab is
+  // focused). Real notifications keep the in-app-toast suppression
+  // because the user is already looking at the app — but the whole
+  // point of "Send test" is to verify the OS-level path.
+  const payload: PushPayload = { ...TEST_PAYLOADS[kind], kind, forceShow: true };
   // Awaited so the UI can show a real success/failure toast — fire-and-
   // forget would always look successful even when zero devices delivered.
   await sendToUser(session.email, payload, kind);

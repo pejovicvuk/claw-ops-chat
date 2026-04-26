@@ -176,11 +176,7 @@ export function ReportViewer({ runId, onOpenSessions }: ReportViewerProps) {
               .
             </div>
           )}
-          {state.data?.content && (
-            <div className="markdown-content">
-              <MarkdownRenderer text={state.data.content} />
-            </div>
-          )}
+          {state.data?.content && <MarkdownRenderer text={state.data.content} variant="document" />}
         </div>
       </div>
     </div>

@@ -1,6 +1,7 @@
 "use client";
 
-import Markdown from "react-markdown";
+import Markdown, { type Components } from "react-markdown";
+import rehypeSlug from "rehype-slug";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
@@ -150,22 +151,33 @@ function renderBlockWithFileCards(children: ReactNode, tag: "p" | "li"): ReactEl
   return body;
 }
 
+// Shared inline / block code renderer. Both variants use the same
+// SyntaxCode + inline-code styling so syntax highlighting and the copy
+// button behave identically across chat and document surfaces.
+function inlineOrBlockCode({
+  className,
+  children,
+}: {
+  className?: string;
+  children?: ReactNode;
+}): ReactElement {
+  const match = /language-(\w+)/.exec(className ?? "");
+  if (match) {
+    const code = String(children).replace(/\n$/, "");
+    return <SyntaxCode language={match[1]} code={code} />;
+  }
+  return (
+    <code className="rounded bg-canvas-surface-hover px-1.5 py-0.5 font-mono text-[0.875em] text-canvas-fg">
+      {children}
+    </code>
+  );
+}
+
 // Module-level: stable reference required so react-markdown keeps its per-component cache.
-const markdownComponents = {
+const chatComponents = {
   p: ({ children }: { children?: ReactNode }) => renderBlockWithFileCards(children, "p"),
   li: ({ children }: { children?: ReactNode }) => renderBlockWithFileCards(children, "li"),
-  code: ({ className, children }: { className?: string; children?: ReactNode }) => {
-    const match = /language-(\w+)/.exec(className ?? "");
-    if (match) {
-      const code = String(children).replace(/\n$/, "");
-      return <SyntaxCode language={match[1]} code={code} />;
-    }
-    return (
-      <code className="rounded bg-canvas-surface-hover px-1.5 py-0.5 font-mono text-[12px] text-canvas-fg">
-        {children}
-      </code>
-    );
-  },
+  code: inlineOrBlockCode,
   pre: ({ children }: { children?: ReactNode }) => <>{children}</>,
   strong: ({ children }: { children?: ReactNode }) => (
     <strong className="font-bold text-canvas-fg">{children}</strong>
@@ -200,9 +212,151 @@ const markdownComponents = {
   ),
 };
 
-export default function MarkdownRenderer({ text }: { text: string }) {
+// Document variant: GitHub-style polished long-form layout. Used by file
+// preview (.md files) and the reports viewer. No file-path / file-card
+// transforms — paragraphs and list items render plain.
+const documentComponents: Components = {
+  h1: ({ children, id }) => (
+    <h1
+      id={id}
+      className="mt-8 mb-4 border-b border-canvas-border pb-2 text-[28px] font-semibold leading-tight tracking-tight text-canvas-fg first:mt-0"
+    >
+      {children}
+    </h1>
+  ),
+  h2: ({ children, id }) => (
+    <h2
+      id={id}
+      className="mt-7 mb-3 border-b border-canvas-border pb-1.5 text-[22px] font-semibold leading-snug text-canvas-fg"
+    >
+      {children}
+    </h2>
+  ),
+  h3: ({ children, id }) => (
+    <h3 id={id} className="mt-6 mb-2 text-[18px] font-semibold leading-snug text-canvas-fg">
+      {children}
+    </h3>
+  ),
+  h4: ({ children, id }) => (
+    <h4 id={id} className="mt-5 mb-2 text-[16px] font-semibold text-canvas-fg">
+      {children}
+    </h4>
+  ),
+  h5: ({ children, id }) => (
+    <h5 id={id} className="mt-4 mb-1.5 text-[14px] font-semibold text-canvas-fg">
+      {children}
+    </h5>
+  ),
+  h6: ({ children, id }) => (
+    <h6
+      id={id}
+      className="mt-4 mb-1.5 text-[13px] font-semibold uppercase tracking-wider text-canvas-muted"
+    >
+      {children}
+    </h6>
+  ),
+  p: ({ children }) => <p className="my-3 leading-7 text-canvas-fg">{children}</p>,
+  ul: ({ children }) => (
+    <ul className="my-3 ml-6 list-disc space-y-1 marker:text-canvas-muted">{children}</ul>
+  ),
+  ol: ({ children }) => (
+    <ol className="my-3 ml-6 list-decimal space-y-1 marker:text-canvas-muted">{children}</ol>
+  ),
+  li: ({ children, className }) => {
+    // GFM task-list items get className="task-list-item"; render the
+    // checkbox + text on a single flex row with no list marker.
+    if (typeof className === "string" && className.includes("task-list-item")) {
+      return <li className="-ml-6 flex list-none items-start gap-2 leading-7">{children}</li>;
+    }
+    return <li className="leading-7 [&>p]:my-1">{children}</li>;
+  },
+  input: ({ type, checked, disabled }) =>
+    type === "checkbox" ? (
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        readOnly
+        className="mt-1.5 h-3.5 w-3.5 shrink-0 rounded border-canvas-border accent-accent"
+      />
+    ) : null,
+  blockquote: ({ children }) => (
+    <blockquote className="my-4 border-l-4 border-accent/70 bg-canvas-surface-hover/50 px-4 py-2 italic text-canvas-muted [&>p]:my-1">
+      {children}
+    </blockquote>
+  ),
+  hr: () => <hr className="my-8 border-0 border-t border-canvas-border" />,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  strong: ({ children }) => <strong className="font-semibold text-canvas-fg">{children}</strong>,
+  del: ({ children }) => <del className="text-canvas-muted line-through">{children}</del>,
+  code: inlineOrBlockCode,
+  pre: ({ children }) => <>{children}</>,
+  a: ({ href, children }) =>
+    href ? (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="break-words text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
+      >
+        {children}
+      </a>
+    ) : (
+      <>{children}</>
+    ),
+  img: ({ src, alt }) => {
+    if (typeof src !== "string" || !src) return null;
+    return <ImagePreview src={src} alt={alt} />;
+  },
+  table: ({ children }) => (
+    <div className="my-5 overflow-x-auto rounded-md border border-canvas-border">
+      <table className="w-full border-collapse text-[14px] text-canvas-fg">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="bg-canvas-surface-hover">{children}</thead>,
+  tbody: ({ children }) => <tbody>{children}</tbody>,
+  tr: ({ children }) => (
+    <tr className="border-t border-canvas-border even:bg-canvas-surface-hover/40">{children}</tr>
+  ),
+  th: ({ children }) => (
+    <th className="px-3 py-2 text-left text-[13px] font-semibold text-canvas-fg">{children}</th>
+  ),
+  td: ({ children }) => <td className="px-3 py-2 align-top">{children}</td>,
+};
+
+const documentRehypePlugins = [rehypeSlug];
+
+export type MarkdownVariant = "chat" | "document";
+
+interface MarkdownRendererProps {
+  text: string;
+  /**
+   * "chat" (default) — compact chat-tuned layout with file-path detection,
+   * file cards / pills, and link unfurls. Used in assistant messages.
+   *
+   * "document" — polished GitHub-style long-form layout with proper heading
+   * hierarchy, blockquotes, task-list checkboxes, slugged heading IDs.
+   * Used by the file preview (`.md`) and the reports viewer.
+   */
+  variant?: MarkdownVariant;
+}
+
+export default function MarkdownRenderer({ text, variant = "chat" }: MarkdownRendererProps) {
+  if (variant === "document") {
+    return (
+      <div className="text-[15px] leading-7 text-canvas-fg">
+        <Markdown
+          remarkPlugins={[remarkGfm, remarkBreaks]}
+          rehypePlugins={documentRehypePlugins}
+          components={documentComponents}
+        >
+          {text}
+        </Markdown>
+      </div>
+    );
+  }
   return (
-    <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={markdownComponents}>
+    <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={chatComponents}>
       {text}
     </Markdown>
   );

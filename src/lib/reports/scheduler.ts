@@ -5,6 +5,7 @@ import { reconcileCrashedRuns } from "./run-store";
 import { ensureReportsTree } from "./paths";
 import type { ReportJob, ReportRun, RunTrigger } from "./types";
 import { getAuditWriter, type AuditWriter } from "../audit/writer";
+import { sendToAll } from "../push/send";
 
 /**
  * Singleton scheduler. Manages node-cron tasks + per-job in-flight
@@ -292,6 +293,24 @@ export class ReportScheduler {
         },
       })
       .catch(() => {});
+    // Web Push: announce cron completion to every subscribed device.
+    // Cron jobs aren't owned per-user in this single-user app, so we
+    // broadcast across the whole subscription list.
+    void sendToAll(
+      {
+        title:
+          run.status === "success"
+            ? `Report finished: ${job.name}`
+            : `Report ${run.status}: ${job.name}`,
+        body:
+          run.status === "success"
+            ? `Cron job ${job.slug} ran in ${Math.round((Date.now() - startedAt) / 1000)}s.`
+            : run.errorMessage?.slice(0, 120) || `Cron job ${job.slug} did not complete.`,
+        kind: "cronComplete",
+        url: `/chat?report=${encodeURIComponent(job.slug)}`,
+      },
+      "cronComplete",
+    );
     return run;
   }
 

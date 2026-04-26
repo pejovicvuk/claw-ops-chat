@@ -39,6 +39,7 @@ import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
+import { sendToUser } from "./src/lib/push/send";
 import { ensureAuditTree } from "./src/lib/audit/paths";
 import { purgeOldAuditFiles } from "./src/lib/audit/retention";
 import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
@@ -1017,6 +1018,16 @@ class SessionManager {
         const description = getToolDescription(toolName, input);
         this.broadcast(session, { type: "permission_request", id, toolName, input, description });
         this.setStatus(session, "awaiting_permission");
+        void sendToUser(
+          session.actorEmail,
+          {
+            title: "Permission requested",
+            body: `Claude wants to run ${toolName}. Tap to approve or deny.`,
+            kind: "permissionRequest",
+            url: `/chat?session=${session.id}`,
+          },
+          "permissionRequest",
+        );
         getAuditWriter()
           .session({
             type: "permission_requested",
@@ -1458,6 +1469,32 @@ class SessionManager {
               },
             })
             .catch(() => {});
+          // Web Push: notify subscribed devices that the turn finished.
+          // Errors fire on the "error" channel instead so users can opt
+          // out of one without losing the other.
+          if (msg.is_error) {
+            void sendToUser(
+              session.actorEmail,
+              {
+                title: "Claude turn errored",
+                body: `Session ${session.id} hit an error.`,
+                kind: "error",
+                url: `/chat?session=${session.id}`,
+              },
+              "error",
+            );
+          } else {
+            void sendToUser(
+              session.actorEmail,
+              {
+                title: "Claude finished",
+                body: `Session ${session.id} is ready for your next message.`,
+                kind: "turnComplete",
+                url: `/chat?session=${session.id}`,
+              },
+              "turnComplete",
+            );
+          }
           this.broadcast(session, {
             type: "turn_end",
             turnId,
@@ -1598,6 +1635,20 @@ class SessionManager {
             details: { errorCode: errnoErr.code ?? null, message: rawMessage },
           })
           .catch(() => {});
+        void sendToUser(
+          session.actorEmail,
+          {
+            title: authError
+              ? "Claude needs to sign in again"
+              : setupRequired
+                ? "Claude setup error"
+                : "Claude session error",
+            body: rawMessage.slice(0, 120),
+            kind: "error",
+            url: `/chat?session=${session.id}`,
+          },
+          "error",
+        );
 
         if (authError) {
           this.broadcast(session, {

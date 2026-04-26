@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import {
+  FiActivity,
   FiAlertTriangle,
   FiBell,
   FiBellOff,
@@ -10,12 +11,20 @@ import {
   FiChevronRight,
   FiInfo,
   FiLoader,
+  FiRefreshCw,
   FiSend,
   FiSmartphone,
   FiTrash2,
 } from "react-icons/fi";
-import { ALL_EVENT_KINDS, type EventPreferences, type PushEventKind } from "@/lib/push/types";
+import {
+  ALL_EVENT_KINDS,
+  type EventPreferences,
+  type PushEventKind,
+} from "@/lib/push/types";
+import { usePushDiagnostics } from "@/lib/push/use-push-diagnostics";
 import { usePushSubscription } from "@/lib/push/use-push-subscription";
+import { useSwRegistrationStatus } from "@/lib/push/use-sw-registration";
+import { toast } from "@/lib/use-toast";
 import type { DeviceSummary } from "@/lib/push/types";
 
 const EVENT_LABELS: Record<PushEventKind, { title: string; description: string }> = {
@@ -51,6 +60,7 @@ function relTime(ts: number): string {
 
 export function SettingsNotificationsPage() {
   const sub = usePushSubscription();
+  const swStatus = useSwRegistrationStatus();
 
   const handleEnable = useCallback(() => {
     void sub.enable();
@@ -90,6 +100,8 @@ export function SettingsNotificationsPage() {
 
   return (
     <div className="space-y-4">
+      <ServiceWorkerStatusRow status={swStatus.status} error={swStatus.error} />
+
       <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
         <div className="mb-2 flex items-center gap-2">
           {enabled ? (
@@ -148,16 +160,6 @@ export function SettingsNotificationsPage() {
               )}
             </button>
           )}
-          {enabled && (
-            <button
-              type="button"
-              onClick={() => void sub.sendTest()}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[12px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
-            >
-              <FiSend size={11} />
-              Send test notification
-            </button>
-          )}
         </div>
       </div>
 
@@ -181,6 +183,12 @@ export function SettingsNotificationsPage() {
           </div>
         </div>
       )}
+
+      {enabled && sub.thisDevice && (
+        <TestNotificationsCard prefs={sub.thisDevice.events} sendTest={sub.sendTest} />
+      )}
+
+      {enabled && <RecentDeliveriesPanel />}
 
       {sub.allDevices.length > 0 && (
         <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
@@ -211,11 +219,196 @@ export function SettingsNotificationsPage() {
       )}
 
       <p className="text-[10px] text-canvas-muted">
-        Notifications are suppressed automatically when this tab is focused — the in-app UI is
-        enough. The server stores subscriptions at{" "}
+        Notifications are suppressed automatically when this tab is focused — an in-app toast
+        appears instead. The server stores subscriptions at{" "}
         <code>/root/.config/push-subscriptions.json</code>; never sent to a third party.
       </p>
     </div>
+  );
+}
+
+interface ServiceWorkerStatusRowProps {
+  status: ReturnType<typeof useSwRegistrationStatus>["status"];
+  error: string | null;
+}
+
+function ServiceWorkerStatusRow({ status, error }: ServiceWorkerStatusRowProps) {
+  if (status === "active") {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 text-[11px] text-green-700 dark:text-green-300">
+        <span className="h-1.5 w-1.5 rounded-full bg-green-500" aria-hidden />
+        Service worker active — push delivery should be reliable.
+      </div>
+    );
+  }
+  if (status === "installing" || status === "idle") {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-canvas-border bg-canvas-surface px-3 py-2 text-[11px] text-canvas-muted">
+        <FiLoader size={11} className="animate-spin" />
+        Service worker installing…
+      </div>
+    );
+  }
+  if (status === "unsupported") {
+    return (
+      <div className="flex items-center gap-2 rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-[11px] text-yellow-700 dark:text-yellow-300">
+        <FiAlertTriangle size={11} />
+        Service workers aren&rsquo;t available in this browser — push notifications won&rsquo;t work.
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[11px] text-red-700 dark:text-red-300">
+      <FiAlertTriangle size={11} className="mt-0.5 shrink-0" />
+      <span>
+        Service worker {status === "redundant" ? "is redundant" : "registration failed"}.{" "}
+        {error || "Try a hard reload (Ctrl/Cmd-Shift-R) to recover."}
+      </span>
+    </div>
+  );
+}
+
+interface TestNotificationsCardProps {
+  prefs: EventPreferences;
+  sendTest: (kind: PushEventKind) => Promise<void>;
+}
+
+function TestNotificationsCard({ prefs, sendTest }: TestNotificationsCardProps) {
+  const [pending, setPending] = useState<PushEventKind | null>(null);
+  const handleTest = useCallback(
+    async (kind: PushEventKind) => {
+      setPending(kind);
+      try {
+        await sendTest(kind);
+        toast.success(`Test sent for ${EVENT_LABELS[kind].title}`);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Test send failed");
+      } finally {
+        setPending(null);
+      }
+    },
+    [sendTest],
+  );
+
+  return (
+    <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <FiSend size={14} className="text-canvas-muted" />
+        <span className="text-[13px] font-medium text-canvas-fg">Send a test notification</span>
+      </div>
+      <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
+        Picks the channel directly so you can verify each toggle independently. With this tab
+        focused, you&rsquo;ll see an in-app toast; switch to another tab first to see a system
+        notification.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {ALL_EVENT_KINDS.map((kind) => {
+          const enabled = prefs[kind];
+          return (
+            <button
+              key={kind}
+              type="button"
+              onClick={() => void handleTest(kind)}
+              disabled={!enabled || pending !== null}
+              title={enabled ? `Send a test for ${EVENT_LABELS[kind].title}` : "Channel disabled — toggle it on above first"}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-2.5 py-1.5 text-[11px] font-medium text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+            >
+              {pending === kind ? (
+                <FiLoader size={10} className="animate-spin" />
+              ) : (
+                <FiSend size={10} />
+              )}
+              {EVENT_LABELS[kind].title}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function RecentDeliveriesPanel() {
+  const [open, setOpen] = useState(false);
+  const diag = usePushDiagnostics();
+  return (
+    <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 text-left"
+        aria-expanded={open}
+      >
+        <span className="text-canvas-muted">
+          {open ? <FiChevronDown size={12} /> : <FiChevronRight size={12} />}
+        </span>
+        <FiActivity size={14} className="text-canvas-muted" />
+        <span className="text-[13px] font-medium text-canvas-fg">
+          Recent deliveries
+          {diag.entries.length > 0 && (
+            <span className="ml-2 text-[11px] text-canvas-muted">({diag.entries.length})</span>
+          )}
+        </span>
+        {open && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              void diag.refresh();
+            }}
+            className="ml-auto inline-flex items-center gap-1 text-[11px] text-canvas-muted hover:text-canvas-fg"
+          >
+            <FiRefreshCw size={10} className={diag.loading ? "animate-spin" : ""} />
+            Refresh
+          </button>
+        )}
+      </button>
+      {open && (
+        <div className="mt-3 space-y-1.5">
+          {diag.error && (
+            <p className="flex items-center gap-1 text-[11px] text-red-500">
+              <FiAlertTriangle size={11} />
+              {diag.error}
+            </p>
+          )}
+          {!diag.error && diag.entries.length === 0 && !diag.loading && (
+            <p className="text-[11px] text-canvas-muted">
+              No deliveries yet. Send a test notification to see one here.
+            </p>
+          )}
+          {diag.entries.map((e, i) => (
+            <div
+              key={`${e.ts}-${i}`}
+              className="flex items-center justify-between gap-2 rounded-md border border-canvas-border bg-canvas-bg px-2 py-1.5 text-[11px]"
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-2">
+                <OutcomeBadge outcome={e.outcome} />
+                <span className="truncate text-canvas-fg">{EVENT_LABELS[e.kind].title}</span>
+              </div>
+              <span className="shrink-0 truncate text-canvas-muted" title={e.device}>
+                {e.device}
+              </span>
+              <span className="shrink-0 text-canvas-muted">{relTime(e.ts)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function OutcomeBadge({ outcome }: { outcome: "sent" | "dropped" | "error" }) {
+  const cls =
+    outcome === "sent"
+      ? "bg-green-500/15 text-green-600 dark:text-green-400"
+      : outcome === "dropped"
+        ? "bg-yellow-500/15 text-yellow-600 dark:text-yellow-400"
+        : "bg-red-500/15 text-red-600 dark:text-red-400";
+  return (
+    <span
+      className={`inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${cls}`}
+    >
+      {outcome}
+    </span>
   );
 }
 

@@ -64,4 +64,16 @@ export interface PushPayload {
   kind: PushEventKind;
   /** Optional URL to open on click; defaults to "/chat". */
   url?: string;
+  /**
+   * Stable key (typically a session id or report slug) appended to the
+   * notification tag so independent events with the same kind don't
+   * collapse onto one another. Optional — falls back to the kind alone.
+   */
+  tagKey?: string;
+  /**
+   * When true, the SW finds any open notification with the matching tag
+   * and closes it without showing a new one. Used when a permission was
+   * resolved from another tab and the stale prompt should disappear.
+   */
+  closeOnly?: boolean;
 }

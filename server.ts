@@ -39,6 +39,7 @@ import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
+import { navUrls } from "./src/lib/nav-urls";
 import { sendToUser } from "./src/lib/push/send";
 import { ensureAuditTree } from "./src/lib/audit/paths";
 import { purgeOldAuditFiles } from "./src/lib/audit/retention";
@@ -261,6 +262,13 @@ interface ChatSession {
   };
   /** Authenticated email of the client that established this session, for audit. */
   actorEmail: string;
+  /**
+   * Short preview (first ~80 chars of the first user message) used as
+   * the chat's display name in notification titles. Set lazily on the
+   * first user message; never overwritten so refresh-resume keeps the
+   * stable label. Falls back to "Chat" when empty.
+   */
+  displayPreview: string;
 }
 
 /**
@@ -271,6 +279,19 @@ interface ChatSession {
  * UUID-shaped sessionId coming in over the WebSocket represents a real
  * resumable conversation or a brand-new chat the client just invented.
  */
+/**
+ * Short, notification-friendly label for a chat session. Falls back to
+ * a generic "Chat" when the session has not yet processed a user
+ * message (the displayPreview fills in lazily — see handleUserMessage).
+ */
+function chatLabelFor(session: ChatSession): string {
+  const preview = session.displayPreview?.trim();
+  if (preview) {
+    return preview.length > 60 ? `${preview.slice(0, 57)}…` : preview;
+  }
+  return "Chat";
+}
+
 function claudeSessionFileExists(sessionId: string): boolean {
   const projectsDir = join(homedir(), ".claude", "projects");
   if (!existsSync(projectsDir)) return false;
@@ -360,6 +381,7 @@ class SessionManager {
         cronAbortTimer: null,
         cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
         actorEmail: "anonymous",
+        displayPreview: "",
       };
       this.sessions.set(sessionId, session);
       setSessionStatus(sessionId, "idle");
@@ -440,6 +462,7 @@ class SessionManager {
       cronAbortTimer: null,
       cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
       actorEmail: "anonymous",
+      displayPreview: persisted.lastUserMessage ? persisted.lastUserMessage.slice(0, 80) : "",
     };
     this.sessions.set(session.id, session);
     setSessionStatus(session.id, "idle");
@@ -704,6 +727,21 @@ class SessionManager {
       // Broadcast a resolution marker so other open tabs watching the
       // same session can also drop the prompt from their UI state.
       this.broadcast(session, { type: "permission_resolved", id });
+      // Tell every subscribed device to close any stale system
+      // notification for this session — otherwise a permission
+      // approved from another tab leaves a dangling "needs approval"
+      // alert on the user's phone.
+      void sendToUser(
+        session.actorEmail,
+        {
+          title: "",
+          body: "",
+          kind: "permissionRequest",
+          tagKey: session.id,
+          closeOnly: true,
+        },
+        "permissionRequest",
+      );
       session.accumulatedText = "";
       return;
     }
@@ -728,6 +766,19 @@ class SessionManager {
             message: "Interrupted by user",
           });
           this.broadcast(session, { type: "permission_resolved", id });
+        }
+        if (session.pendingRequests.size > 0) {
+          void sendToUser(
+            session.actorEmail,
+            {
+              title: "",
+              body: "",
+              kind: "permissionRequest",
+              tagKey: session.id,
+              closeOnly: true,
+            },
+            "permissionRequest",
+          );
         }
         session.pendingRequests.clear();
 
@@ -810,6 +861,9 @@ class SessionManager {
   private async handleUserMessage(session: ChatSession, text: string) {
     session.isProcessing = true;
     session.accumulatedText = "";
+    if (!session.displayPreview && text.trim().length > 0) {
+      session.displayPreview = text.trim().slice(0, 80);
+    }
     const abortController = new AbortController();
     session.abortController = abortController;
     // Kick off the status machine for this turn — sidebar dot flips blue
@@ -1018,13 +1072,16 @@ class SessionManager {
         const description = getToolDescription(toolName, input);
         this.broadcast(session, { type: "permission_request", id, toolName, input, description });
         this.setStatus(session, "awaiting_permission");
+        const chatLabel = chatLabelFor(session);
+        const detail = description ? `${toolName}: ${description}` : `${toolName}`;
         void sendToUser(
           session.actorEmail,
           {
-            title: "Permission requested",
-            body: `Claude wants to run ${toolName}. Tap to approve or deny.`,
+            title: `${chatLabel} needs approval`,
+            body: detail.length > 100 ? `${detail.slice(0, 97)}…` : detail,
             kind: "permissionRequest",
-            url: `/chat?session=${session.id}`,
+            url: navUrls.chat(session.id),
+            tagKey: session.id,
           },
           "permissionRequest",
         );
@@ -1472,14 +1529,16 @@ class SessionManager {
           // Web Push: notify subscribed devices that the turn finished.
           // Errors fire on the "error" channel instead so users can opt
           // out of one without losing the other.
+          const chatLabel = chatLabelFor(session);
           if (msg.is_error) {
             void sendToUser(
               session.actorEmail,
               {
-                title: "Claude turn errored",
-                body: `Session ${session.id} hit an error.`,
+                title: `${chatLabel} — error`,
+                body: "The turn ended with an error. Open the chat to see details.",
                 kind: "error",
-                url: `/chat?session=${session.id}`,
+                url: navUrls.chat(session.id),
+                tagKey: session.id,
               },
               "error",
             );
@@ -1487,10 +1546,11 @@ class SessionManager {
             void sendToUser(
               session.actorEmail,
               {
-                title: "Claude finished",
-                body: `Session ${session.id} is ready for your next message.`,
+                title: `${chatLabel} — finished`,
+                body: "Ready for your next message.",
                 kind: "turnComplete",
-                url: `/chat?session=${session.id}`,
+                url: navUrls.chat(session.id),
+                tagKey: session.id,
               },
               "turnComplete",
             );
@@ -1639,13 +1699,14 @@ class SessionManager {
           session.actorEmail,
           {
             title: authError
-              ? "Claude needs to sign in again"
+              ? `${chatLabelFor(session)} — sign in again`
               : setupRequired
-                ? "Claude setup error"
-                : "Claude session error",
+                ? `${chatLabelFor(session)} — setup error`
+                : `${chatLabelFor(session)} — error`,
             body: rawMessage.slice(0, 120),
             kind: "error",
-            url: `/chat?session=${session.id}`,
+            url: navUrls.chat(session.id),
+            tagKey: session.id,
           },
           "error",
         );

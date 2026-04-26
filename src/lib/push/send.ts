@@ -1,5 +1,6 @@
 import webPush, { type WebPushError } from "web-push";
 import { getAuditWriter } from "../audit/writer";
+import { recordSend } from "./diagnostics";
 import { getPushStore } from "./store";
 import { getVapidKeys } from "./vapid";
 import type { DeviceRecord, PushEventKind, PushPayload } from "./types";
@@ -52,6 +53,7 @@ async function sendOne(email: string, device: DeviceRecord, payload: PushPayload
       // 24h TTL — if the device is offline that long, drop the message.
       { TTL: 24 * 60 * 60 },
     );
+    logSendResult(email, device, payload.kind, "sent");
   } catch (err) {
     const status = (err as WebPushError | null)?.statusCode;
     if (status === 404 || status === 410) {
@@ -77,6 +79,14 @@ function logSendResult(
   outcome: "sent" | "dropped" | "error",
   detail?: string,
 ): void {
+  recordSend({
+    ts: Date.now(),
+    email,
+    device: device.label,
+    kind,
+    outcome,
+    detail,
+  });
   getAuditWriter()
     .api({
       type: outcome === "error" ? "request_error" : "request_complete",

@@ -2,7 +2,12 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "@/lib/auth";
-import { DEFAULT_PREFERENCES, type DeviceSummary, type EventPreferences } from "./types";
+import {
+  DEFAULT_PREFERENCES,
+  type DeviceSummary,
+  type EventPreferences,
+  type PushEventKind,
+} from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -93,7 +98,8 @@ export interface UsePushSubscriptionResult {
   setDevicePrefs: (id: string, events: Partial<EventPreferences>) => Promise<void>;
   removeDevice: (id: string) => Promise<void>;
   clearAll: () => Promise<void>;
-  sendTest: () => Promise<void>;
+  /** Fire a test notification on the given event channel (defaults to turnComplete). */
+  sendTest: (kind?: PushEventKind) => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -193,14 +199,15 @@ export function usePushSubscription(): UsePushSubscriptionResult {
         "service worker registration lookup",
       );
       let endpoint: string | undefined;
+      let pushSub: PushSubscription | null = null;
       if (reg) {
         try {
-          const sub = await withTimeout(
+          pushSub = await withTimeout(
             reg.pushManager.getSubscription(),
             3000,
             "push subscription lookup",
           );
-          endpoint = sub?.endpoint;
+          endpoint = pushSub?.endpoint;
         } catch {
           /* leave endpoint undefined; server still returns the device list */
         }
@@ -208,6 +215,32 @@ export function usePushSubscription(): UsePushSubscriptionResult {
       const list = await fetchDevices(endpoint);
       setAllDevices(list.devices);
       setThisDevice(list.devices.find((d) => d.isThisDevice) ?? null);
+
+      // Heartbeat: when the browser thinks it has a live subscription
+      // but the server doesn't (or hasn't seen us in 24h), re-POST so
+      // lastSeenAt is fresh and stale records are pruned. Eliminates
+      // the "browser was reinstalled, server still thinks we're dead"
+      // class of silent failures.
+      if (pushSub && endpoint) {
+        const known = list.devices.find((d) => d.isThisDevice);
+        const stale = !known || Date.now() - known.lastSeenAt > 24 * 60 * 60 * 1000;
+        if (stale) {
+          const json = pushSub.toJSON();
+          try {
+            await authFetch(`${BASE}/api/push/subscriptions`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                subscription: { endpoint: pushSub.endpoint, keys: json.keys },
+                label: deriveLabel(),
+                events: known?.events ?? DEFAULT_PREFERENCES,
+              }),
+            });
+          } catch {
+            /* heartbeat is best-effort — don't surface as an error */
+          }
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load devices");
     } finally {
@@ -342,13 +375,18 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     }
   }, [refresh]);
 
-  const sendTest = useCallback(async () => {
+  const sendTest = useCallback(async (kind: PushEventKind = "turnComplete") => {
     setError(null);
     try {
-      const res = await authFetch(`${BASE}/api/push/test`, { method: "POST" });
+      const res = await authFetch(`${BASE}/api/push/test?kind=${encodeURIComponent(kind)}`, {
+        method: "POST",
+      });
       if (!res.ok) throw new Error(`Failed to send test (${res.status})`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send test notification");
+      // Re-throw so the caller (settings UI) can show a user-visible
+      // failure toast instead of silently appearing to succeed.
+      throw err;
     }
   }, []);
 

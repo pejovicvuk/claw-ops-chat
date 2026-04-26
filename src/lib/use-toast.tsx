@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore, useCallback } from "react";
+import { useSyncExternalStore } from "react";
 import { FiCheck, FiAlertTriangle, FiInfo, FiX } from "react-icons/fi";
 import { Z_INDEX } from "@/lib/z-index";
 
@@ -26,10 +26,20 @@ export interface ToastItem {
   id: string;
   kind: ToastKind;
   message: string;
+  /** Optional click action — wires the whole toast as a button when set. */
+  onClick?: () => void;
+}
+
+export interface ToastOptions {
+  /** Click action; the toast still auto-dismisses on its own timer. */
+  onClick?: () => void;
+  /** Override the default auto-dismiss in ms. Pass 0 to disable. */
+  durationMs?: number;
 }
 
 const MAX_VISIBLE = 4;
 const AUTO_DISMISS_MS = 3000;
+const NOTIFICATION_DISMISS_MS = 8000;
 
 let items: ToastItem[] = [];
 const listeners = new Set<() => void>();
@@ -52,9 +62,9 @@ function getServerSnapshot(): ToastItem[] {
   return [];
 }
 
-function push(kind: ToastKind, message: string): string {
+function push(kind: ToastKind, message: string, options?: ToastOptions): string {
   const id = `t${nextId++}`;
-  const item: ToastItem = { id, kind, message };
+  const item: ToastItem = { id, kind, message, onClick: options?.onClick };
   const next = [...items, item];
   if (next.length > MAX_VISIBLE) {
     next.splice(0, next.length - MAX_VISIBLE);
@@ -62,7 +72,10 @@ function push(kind: ToastKind, message: string): string {
   items = next;
   emit();
   if (typeof window !== "undefined") {
-    window.setTimeout(() => dismiss(id), AUTO_DISMISS_MS);
+    const ms = options?.durationMs ?? (options?.onClick ? NOTIFICATION_DISMISS_MS : AUTO_DISMISS_MS);
+    if (ms > 0) {
+      window.setTimeout(() => dismiss(id), ms);
+    }
   }
   return id;
 }
@@ -76,9 +89,9 @@ function dismiss(id: string): void {
 
 /** Public push API. Stable references so callers can drop into effect deps. */
 export const toast = {
-  success: (message: string) => push("success", message),
-  error: (message: string) => push("error", message),
-  info: (message: string) => push("info", message),
+  success: (message: string, options?: ToastOptions) => push("success", message, options),
+  error: (message: string, options?: ToastOptions) => push("error", message, options),
+  info: (message: string, options?: ToastOptions) => push("info", message, options),
   dismiss,
 };
 
@@ -92,7 +105,14 @@ export function useToastItems(): ToastItem[] {
 }
 
 function ToastRow({ item }: { item: ToastItem }) {
-  const onDismiss = useCallback(() => dismiss(item.id), [item.id]);
+  const onPrimary = () => {
+    if (item.onClick) item.onClick();
+    dismiss(item.id);
+  };
+  const onDismiss = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    dismiss(item.id);
+  };
 
   const color =
     item.kind === "error"
@@ -103,18 +123,27 @@ function ToastRow({ item }: { item: ToastItem }) {
   const Icon = item.kind === "error" ? FiAlertTriangle : item.kind === "success" ? FiCheck : FiInfo;
 
   return (
-    <button
-      type="button"
-      onClick={onDismiss}
-      className={`animate-menu-in flex min-w-0 max-w-[360px] items-center gap-2 rounded-full px-3 py-1.5 text-left shadow-lg ${color}`}
-      aria-label="Dismiss notification"
-    >
-      <Icon size={13} className="shrink-0 text-white" />
-      <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-white">
-        {item.message}
-      </span>
-      <FiX size={11} className="shrink-0 text-white/70" />
-    </button>
+    <div className={`animate-menu-in flex min-w-0 max-w-[360px] items-center rounded-full shadow-lg ${color}`}>
+      <button
+        type="button"
+        onClick={onPrimary}
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-l-full px-3 py-1.5 text-left"
+        aria-label={item.onClick ? "Open" : "Dismiss notification"}
+      >
+        <Icon size={13} className="shrink-0 text-white" />
+        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-white">
+          {item.message}
+        </span>
+      </button>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="rounded-r-full px-2 py-1.5 text-white/70 hover:text-white"
+        aria-label="Dismiss notification"
+      >
+        <FiX size={11} className="shrink-0" />
+      </button>
+    </div>
   );
 }
 

@@ -1,4 +1,7 @@
-const CACHE_NAME = "claw-chat-v1";
+// Bumped to v2 when the push handler was rewritten so older clients
+// re-install with the new logic (the activate handler below cleans up
+// stale caches).
+const CACHE_NAME = "claw-chat-v2";
 
 const PRECACHE_URLS = ["/chat", "/chat/login"];
 
@@ -68,6 +71,18 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+/**
+ * Build a stable per-event tag so independent permission requests /
+ * report completions don't collapse onto the same on-screen toast.
+ * Falls back to the kind alone (legacy behaviour) when no key is
+ * carried in the payload.
+ */
+function tagFor(data) {
+  const kind = data && data.kind ? String(data.kind) : "claw-chat";
+  const key = data && (data.tagKey || data.sessionId || data.reportSlug);
+  return key ? `${kind}:${key}` : kind;
+}
+
 /* ───────────────────────── Web Push ─────────────────────────
  * Handle a push payload from the server. If any window is
  * already focused on the chat, suppress the system notification
@@ -83,6 +98,41 @@ self.addEventListener("push", (event) => {
   }
   event.waitUntil(
     (async () => {
+      const tag = tagFor(data);
+
+      // closeOnly: the server tells us a previously fired notification
+      // is now stale (e.g. the user approved from another tab). Find
+      // any matching system notification and dismiss it. Never show a
+      // new one for closeOnly payloads.
+      if (data && data.closeOnly) {
+        try {
+          const open = await self.registration.getNotifications({ tag });
+          for (const n of open) {
+            try {
+              n.close();
+            } catch {
+              /* ignore */
+            }
+          }
+          // Mirror the close to any open client so the in-app toast
+          // (if any) also disappears.
+          const wins = await self.clients.matchAll({
+            type: "window",
+            includeUncontrolled: true,
+          });
+          for (const w of wins) {
+            try {
+              w.postMessage({ kind: "push-closed", tag, data });
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+
       const wins = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
@@ -104,9 +154,9 @@ self.addEventListener("push", (event) => {
         body,
         icon: "/chat/icons/icon-192.png",
         badge: "/chat/icons/icon-192.png",
-        tag: data.kind || "claw-chat",
+        tag,
         renotify: true,
-        data: { url: data.url || "/chat", kind: data.kind || null },
+        data: { url: data.url || "/chat", kind: data.kind || null, tagKey: data.tagKey || null },
       });
     })(),
   );
@@ -114,7 +164,8 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = (event.notification.data && event.notification.data.url) || "/chat";
+  const data = event.notification.data || {};
+  const target = data.url || "/chat";
   event.waitUntil(
     (async () => {
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
@@ -124,6 +175,15 @@ self.addEventListener("notificationclick", (event) => {
           await existing.focus();
         } catch {
           /* ignore */
+        }
+        // Prefer postMessage so the SPA can route in-app via
+        // `useUrlState` (no full page reload, no remount of state).
+        // The NotificationListener handles `notification-click`.
+        try {
+          existing.postMessage({ kind: "notification-click", url: target, data });
+          return;
+        } catch {
+          /* fall through to navigate */
         }
         try {
           if ("navigate" in existing) await existing.navigate(target);

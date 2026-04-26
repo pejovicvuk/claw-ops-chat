@@ -46,6 +46,16 @@ import { purgeOldAuditFiles } from "./src/lib/audit/retention";
 import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
 import { purgeOldImages } from "./src/lib/proxy/image-cache";
 import { logWsUpgrade } from "./src/lib/audit/api-wrap";
+import { bootstrapMonitoring } from "./src/lib/monitoring/bootstrap";
+import { getMonitoringBroadcaster } from "./src/lib/monitoring/ws-broadcast";
+import {
+  wsRecordIncoming,
+  wsRecordOutgoing,
+  wsRegisterSession,
+  wsRemoveSession,
+  wsUpdateSession,
+} from "./src/lib/monitoring/ws-session-store";
+import type { MonFrame } from "./src/lib/monitoring/types";
 import cron from "node-cron";
 
 // node-pty has a native binding — require it lazily so the server can still
@@ -533,10 +543,22 @@ class SessionManager {
     });
   }
 
-  connect(ws: WebSocket, sessionId: string, sessionCwd?: string, actorEmail?: string) {
+  connect(
+    ws: WebSocket,
+    sessionId: string,
+    sessionCwd?: string,
+    actorEmail?: string,
+    clientMeta?: { client?: string; ip?: string },
+  ) {
     const session = this.getOrCreateSession(sessionId);
     session.clients.add(ws);
     if (actorEmail) session.actorEmail = actorEmail;
+    wsRegisterSession({
+      id: sessionId,
+      client: clientMeta?.client,
+      ip: clientMeta?.ip,
+      clientCount: session.clients.size,
+    });
     getAuditWriter()
       .session({
         type: "connected",
@@ -628,7 +650,9 @@ class SessionManager {
           return;
         }
 
-        const msg = JSON.parse(data.toString());
+        const raw = data.toString();
+        wsRecordIncoming(sessionId, Buffer.byteLength(raw, "utf-8"));
+        const msg = JSON.parse(raw);
         this.handleMessage(session, ws, msg);
       } catch {
         console.warn(`[session=${sessionId}] Malformed WebSocket message`);
@@ -638,6 +662,15 @@ class SessionManager {
     ws.on("close", () => {
       clearInterval(heartbeat);
       session.clients.delete(ws);
+      wsUpdateSession(sessionId, {
+        clientCount: session.clients.size,
+        queueDepth: session.messageQueue.length,
+        pendingRequests: session.pendingRequests.size,
+        lastActivityAt: Date.now(),
+      });
+      if (session.clients.size === 0) {
+        wsRemoveSession(sessionId);
+      }
       getAuditWriter()
         .session({
           type: "disconnected",
@@ -1828,16 +1861,24 @@ class SessionManager {
     }
 
     const data = JSON.stringify(event);
+    const bytes = Buffer.byteLength(data, "utf-8");
     for (const client of session.clients) {
       if (client.readyState === WebSocket.OPEN) {
         client.send(data);
+        wsRecordOutgoing(session.id, bytes);
       }
     }
+    wsUpdateSession(session.id, {
+      queueDepth: session.messageQueue.length,
+      pendingRequests: session.pendingRequests.size,
+      lastActivityAt: Date.now(),
+    });
   }
 
   private send(ws: WebSocket, event: Record<string, unknown>) {
     if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(event));
+      const data = JSON.stringify(event);
+      ws.send(data);
     }
   }
 
@@ -1984,6 +2025,23 @@ class SessionManager {
       this.handleUserMessage(session, args.prompt);
     });
   }
+
+  /**
+   * Force-disconnect every WebSocket attached to a session. Used by the
+   * monitoring "Disconnect" admin action.
+   */
+  forceDisconnect(sessionId: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    for (const client of session.clients) {
+      try {
+        client.close(1000, "Force-disconnected by operator");
+      } catch {
+        /* already dead */
+      }
+    }
+    return true;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -2113,6 +2171,13 @@ const sessionManager = new SessionManager();
 // manual runs unrunnable.
 setSessionManager(sessionManager);
 
+// Expose force-disconnect for the monitoring admin API. Anchored on
+// globalThis so the bundled API route module can reach it across the
+// Next.js standalone module boundary.
+(
+  globalThis as { __clawForceDisconnectSession?: (id: string) => boolean }
+).__clawForceDisconnectSession = (id: string) => sessionManager.forceDisconnect(id);
+
 // Rehydrate session state from disk so a container restart doesn't
 // wipe every in-flight conversation. Runs synchronously (well, fire
 // and log) before we start listening — if it fails we still come up,
@@ -2166,6 +2231,16 @@ setSessionManager(sessionManager);
   }
 })();
 
+// Bootstrap monitoring subsystem (collectors, alert engine, /ws/monitoring
+// broadcaster). Independent of audit init; failures are non-fatal.
+(() => {
+  try {
+    bootstrapMonitoring();
+  } catch (err) {
+    console.warn(`!! Could not initialize monitoring: ${(err as Error).message}`);
+  }
+})();
+
 // Preview proxy caches (unfurl metadata + external images). Boot-time sweep
 // + recurring 12h trim so /root/.cache doesn't grow without bound.
 (async () => {
@@ -2205,8 +2280,9 @@ app.prepare().then(() => {
 
     const isChatWs = pathname === "/ws/chat" || pathname === "/chat/ws/chat";
     const isTerminalWs = pathname === "/ws/terminal" || pathname === "/chat/ws/terminal";
+    const isMonitoringWs = pathname === "/ws/monitoring" || pathname === "/chat/ws/monitoring";
 
-    if (!isChatWs && !isTerminalWs) {
+    if (!isChatWs && !isTerminalWs && !isMonitoringWs) {
       // Pass to Next.js for HMR and other internal WebSockets
       nextUpgradeHandler(req, socket, head);
       return;
@@ -2230,7 +2306,7 @@ app.prepare().then(() => {
 
     // Authenticate: try signed session cookie first (fast, local HMAC check),
     // then fall back to validating access token via the Spring backend.
-    const wsRoute = isTerminalWs ? "/ws/terminal" : "/ws/chat";
+    const wsRoute = isTerminalWs ? "/ws/terminal" : isMonitoringWs ? "/ws/monitoring" : "/ws/chat";
     const sessionPayload = extractSessionFromCookieHeader(req.headers.cookie);
     if (!sessionPayload) {
       const queryToken = qs.token as string | undefined;
@@ -2269,11 +2345,33 @@ app.prepare().then(() => {
       return;
     }
 
+    if (isMonitoringWs) {
+      const broadcaster = getMonitoringBroadcaster();
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        broadcaster.register(ws);
+        ws.on("message", (data) => {
+          try {
+            const frame = JSON.parse(data.toString()) as MonFrame;
+            broadcaster.handleFrame(ws, frame);
+          } catch {
+            /* ignore malformed frames */
+          }
+        });
+      });
+      logWsUpgrade({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => {});
+      return;
+    }
+
     const sessionId = (qs.session as string) || "default";
     const cwdParam = (qs.cwd as string) || undefined;
+    const ipHeader = (req.headers["x-forwarded-for"] as string) ?? req.socket.remoteAddress ?? "";
+    const userAgent = (req.headers["user-agent"] as string)?.slice(0, 80);
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      sessionManager.connect(ws, sessionId, cwdParam, actorEmail);
+      sessionManager.connect(ws, sessionId, cwdParam, actorEmail, {
+        client: userAgent,
+        ip: ipHeader.split(",")[0]?.trim(),
+      });
     });
     logWsUpgrade({
       route: wsRoute,

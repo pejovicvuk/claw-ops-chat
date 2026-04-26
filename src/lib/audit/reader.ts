@@ -48,7 +48,12 @@ function parseLine(line: string): AuditEvent | null {
   try {
     const obj = JSON.parse(line) as AuditEvent;
     if (!obj || typeof obj !== "object") return null;
-    if (obj.category !== "api" && obj.category !== "cron" && obj.category !== "session")
+    if (
+      obj.category !== "api" &&
+      obj.category !== "cron" &&
+      obj.category !== "session" &&
+      obj.category !== "alert"
+    )
       return null;
     return obj;
   } catch {
@@ -194,7 +199,7 @@ export async function getStats(range?: { from?: number; to?: number }): Promise<
   const meta = await readAuditMeta();
   const stats: AuditStats = {
     totalCount: 0,
-    byCategory: { api: 0, cron: 0, session: 0 },
+    byCategory: { api: 0, cron: 0, session: 0, alert: 0 },
     bySeverity: { info: 0, warn: 0, error: 0 },
     firstEventAt: null,
     lastEventAt: null,
@@ -223,7 +228,7 @@ export async function getStats(range?: { from?: number; to?: number }): Promise<
     for await (const { event } of iterateCategoryEvents(category)) {
       if (!matches(event, filter)) continue;
       stats.totalCount += 1;
-      stats.byCategory[category] += 1;
+      stats.byCategory[category] = (stats.byCategory[category] ?? 0) + 1;
       const severity: AuditSeverity = event.severity;
       stats.bySeverity[severity] += 1;
       if (stats.firstEventAt === null || event.at < stats.firstEventAt)

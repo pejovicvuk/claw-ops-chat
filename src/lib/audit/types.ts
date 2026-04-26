@@ -6,7 +6,7 @@
  * See src/lib/audit/paths.ts for the on-disk layout.
  */
 
-export type AuditCategory = "api" | "cron" | "session";
+export type AuditCategory = "api" | "cron" | "session" | "alert";
 
 export type AuditSeverity = "info" | "warn" | "error";
 
@@ -94,12 +94,33 @@ export type SessionAuditEvent = AuditBase & {
   isError?: boolean;
 };
 
-export type AuditEvent = ApiAuditEvent | CronAuditEvent | SessionAuditEvent;
+export type AlertAuditEventType =
+  | "rule_created"
+  | "rule_updated"
+  | "rule_deleted"
+  | "alert_fired"
+  | "alert_resolved"
+  | "alert_acked"
+  | "alert_snoozed"
+  | "notify_failed";
+
+export type AlertAuditEvent = AuditBase & {
+  category: "alert";
+  type: AlertAuditEventType;
+  ruleId: string;
+  ruleName?: string;
+  metric?: string;
+  thresholdValue?: number;
+  observedValue?: number;
+};
+
+export type AuditEvent = ApiAuditEvent | CronAuditEvent | SessionAuditEvent | AlertAuditEvent;
 
 /** Input to the writer — `v`, `category`, and `at` are filled in automatically. */
 export type ApiAuditEventInput = Omit<ApiAuditEvent, "v" | "category" | "at">;
 export type CronAuditEventInput = Omit<CronAuditEvent, "v" | "category" | "at">;
 export type SessionAuditEventInput = Omit<SessionAuditEvent, "v" | "category" | "at">;
+export type AlertAuditEventInput = Omit<AlertAuditEvent, "v" | "category" | "at">;
 
 /* --------------------------------- Reader types --------------------------------- */
 
@@ -124,7 +145,7 @@ export interface AuditEventPage {
 
 export interface AuditStats {
   totalCount: number;
-  byCategory: Record<AuditCategory, number>;
+  byCategory: Partial<Record<AuditCategory, number>>;
   bySeverity: Record<AuditSeverity, number>;
   firstEventAt: number | null;
   lastEventAt: number | null;

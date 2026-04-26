@@ -13,6 +13,22 @@ services:
       - /root:/root
       # Bitbucket skill (read-only)
       - ./skills/bitbucket:/opt/skills/bitbucket:ro
+      # Monitoring: Docker socket (read-only) — enables the Docker section.
+      # The monitoring API gates writes server-side via authenticated
+      # ConfirmActionDialog flows; the read-only mount blocks daemon-level
+      # mutations even if the container is compromised.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # Monitoring: host /proc and /sys for accurate system metrics.
+      # systeminformation reads HOST_PROC + HOST_SYS env vars to use these
+      # mount points instead of the container's narrow view.
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/os-release:/host/etc/os-release:ro
+    environment:
+      # Tell systeminformation to read host /proc + /sys (set above).
+      - HOST_PROC=/host/proc
+      - HOST_SYS=/host/sys
+      - HOST_ETC=/host/etc
     ports:
       - "${PORT:-3100}:${PORT:-3100}"
     init: true

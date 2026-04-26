@@ -4,7 +4,7 @@ import { purgeOldAuditFiles } from "@/lib/audit/retention";
 import type { AuditCategory, AuditFilter, AuditSeverity } from "@/lib/audit/types";
 import { getAuditWriter } from "@/lib/audit/writer";
 
-const VALID_CATEGORIES = new Set<AuditCategory>(["api", "cron", "session"]);
+const VALID_CATEGORIES = new Set<AuditCategory>(["api", "cron", "session", "alert"]);
 const VALID_SEVERITIES = new Set<AuditSeverity>(["info", "warn", "error"]);
 
 /**

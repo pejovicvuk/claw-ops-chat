@@ -122,7 +122,7 @@ export function useAuditStats(): {
 
 /** POST-like helper for the "purge" action. Returns freed bytes + deleted file names. */
 export async function purgeAuditEvents(opts: {
-  category?: "api" | "cron" | "session";
+  category?: "api" | "cron" | "session" | "alert";
   olderThan?: number;
 }): Promise<{ deleted: string[]; bytesFreed: number }> {
   const params = new URLSearchParams();

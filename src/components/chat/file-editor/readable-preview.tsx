@@ -43,8 +43,10 @@ export function ReadablePreview({
 
   if (kind === "markdown") {
     return (
-      <div className="prose prose-invert max-w-none px-4 py-3 text-[14px] sm:text-[13px]">
-        <MarkdownRenderer text={content} />
+      <div className="px-6 py-5">
+        <div className="mx-auto max-w-3xl">
+          <MarkdownRenderer text={content} variant="document" />
+        </div>
       </div>
     );
   }

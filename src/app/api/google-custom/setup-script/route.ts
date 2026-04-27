@@ -2,7 +2,11 @@ import { chmod, mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { extractSession, unauthorized } from "@/lib/auth-server";
-import { loadCredentials, registerMcpServer } from "@/lib/google-custom-config";
+import {
+  loadCredentials,
+  registerMcpServer,
+  WORKSPACE_MCP_TOOL_TIER,
+} from "@/lib/google-custom-config";
 
 /**
  * Generate a one-shot setup script the user runs in an in-browser terminal
@@ -97,7 +101,7 @@ to the chat, which forwards the code to this process. Watch for a
 
 BANNER
 
-exec uvx workspace-mcp --single-user --tool-tier core
+exec uvx workspace-mcp --single-user --tool-tier ${WORKSPACE_MCP_TOOL_TIER}
 `;
 
   try {

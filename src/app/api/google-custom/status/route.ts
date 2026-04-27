@@ -1,6 +1,10 @@
 import { spawn } from "child_process";
 import { extractSession, unauthorized } from "@/lib/auth-server";
-import { loadCredentials, isMcpServerRegistered } from "@/lib/google-custom-config";
+import {
+  loadCredentials,
+  isMcpServerRegistered,
+  migrateGoogleMcpTier,
+} from "@/lib/google-custom-config";
 import { hasWorkspaceMcpCredentials } from "@/lib/google-workspace-mcp-tokens";
 import {
   augmentPathWithLocalBin,
@@ -34,6 +38,12 @@ function checkUvx(): Promise<boolean> {
 
 export async function GET(request: Request) {
   if (!extractSession(request)) return unauthorized();
+
+  // Defense-in-depth: rewrite legacy `--tool-tier` values in ~/.claude.json
+  // for users who connected before the tier upgrade. Idempotent and silent;
+  // the boot-time migrator in server.ts is the load-bearing trigger, this
+  // covers users who hit Settings → Google without restarting the server.
+  await migrateGoogleMcpTier().catch(() => null);
 
   const [uvxInstalled, uvBinaryFound, creds, registered, powershell, downloader, hasTokens] =
     await Promise.all([

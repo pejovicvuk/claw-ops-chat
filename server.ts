@@ -45,6 +45,7 @@ import { ensureAuditTree } from "./src/lib/audit/paths";
 import { purgeOldAuditFiles } from "./src/lib/audit/retention";
 import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
 import { purgeOldImages } from "./src/lib/proxy/image-cache";
+import { migrateGoogleMcpTier } from "./src/lib/google-custom-config";
 import { logWsUpgrade } from "./src/lib/audit/api-wrap";
 import { bootstrapMonitoring } from "./src/lib/monitoring/bootstrap";
 import { getMonitoringBroadcaster } from "./src/lib/monitoring/ws-broadcast";
@@ -2238,6 +2239,20 @@ setSessionManager(sessionManager);
     bootstrapMonitoring();
   } catch (err) {
     console.warn(`!! Could not initialize monitoring: ${(err as Error).message}`);
+  }
+})();
+
+// One-shot migration: rewrite legacy `--tool-tier` args in ~/.claude.json
+// for users who connected the Google Workspace MCP before we expanded the
+// tool set. Idempotent; non-fatal on error.
+(async () => {
+  try {
+    const result = await migrateGoogleMcpTier();
+    if (result.migrated) {
+      console.log(`> Google MCP tier migrated: ${result.oldTier} → complete`);
+    }
+  } catch (err) {
+    console.warn(`!! Google MCP tier migration skipped: ${(err as Error).message}`);
   }
 })();
 

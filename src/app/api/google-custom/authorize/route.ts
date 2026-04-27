@@ -1,6 +1,10 @@
 import { spawn, type ChildProcess } from "child_process";
 import { extractSession, unauthorized } from "@/lib/auth-server";
-import { loadCredentials, registerMcpServer } from "@/lib/google-custom-config";
+import {
+  loadCredentials,
+  registerMcpServer,
+  WORKSPACE_MCP_TOOL_TIER,
+} from "@/lib/google-custom-config";
 import { augmentPathWithLocalBin } from "@/lib/platform-detect";
 
 /**
@@ -50,18 +54,22 @@ export async function POST(request: Request) {
 
       let child: ChildProcess;
       try {
-        child = spawn("uvx", ["workspace-mcp", "--tool-tier", "core"], {
-          stdio: ["pipe", "pipe", "pipe"],
-          shell: true,
-          windowsHide: true,
-          env: augmentPathWithLocalBin({
-            ...process.env,
-            GOOGLE_OAUTH_CLIENT_ID: creds.clientId,
-            GOOGLE_OAUTH_CLIENT_SECRET: creds.clientSecret,
-            PORT: MCP_PORT,
-            WORKSPACE_MCP_PORT: MCP_PORT,
-          }),
-        });
+        child = spawn(
+          "uvx",
+          ["workspace-mcp", "--single-user", "--tool-tier", WORKSPACE_MCP_TOOL_TIER],
+          {
+            stdio: ["pipe", "pipe", "pipe"],
+            shell: true,
+            windowsHide: true,
+            env: augmentPathWithLocalBin({
+              ...process.env,
+              GOOGLE_OAUTH_CLIENT_ID: creds.clientId,
+              GOOGLE_OAUTH_CLIENT_SECRET: creds.clientSecret,
+              PORT: MCP_PORT,
+              WORKSPACE_MCP_PORT: MCP_PORT,
+            }),
+          },
+        );
       } catch (err) {
         write({
           type: "done",

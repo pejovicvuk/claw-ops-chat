@@ -24,7 +24,6 @@ import { SettingsAgentSystemPromptPage } from "./pages/settings-agent-system-pro
 import { SettingsAgentRulesPage } from "./pages/settings-agent-rules-page";
 import { SettingsAgentSkillsPage } from "./pages/settings-agent-skills-page";
 import { SettingsAgentSubagentsPage } from "./pages/settings-agent-subagents-page";
-import { SettingsAuditPage } from "./pages/settings-audit-page";
 import { SettingsNotificationsPage } from "./pages/settings-notifications-page";
 import { SettingsMonitoringPage } from "@/components/monitoring/settings-monitoring-page";
 
@@ -49,7 +48,6 @@ type PageKey =
   | "agent/skills"
   | "agent/subagents"
   | "terminal"
-  | "audit"
   | "notifications"
   | "monitoring";
 
@@ -81,7 +79,6 @@ const PAGES: Record<PageKey, PageInfo> = {
   "agent/skills": { title: "Skills", parent: "agent" },
   "agent/subagents": { title: "Subagents", parent: "agent" },
   terminal: { title: "Terminal", parent: "main", wide: true },
-  audit: { title: "Audit Log", parent: "main", wide: true },
   notifications: { title: "Notifications", parent: "main" },
   monitoring: { title: "Monitoring", parent: "main", wide: true },
 };
@@ -94,6 +91,9 @@ function parsePage(raw: string | null): PageKey | null {
   if (raw === null) return null;
   // Back-compat: "1" was the original open flag.
   if (raw === "1") return "main";
+  // Back-compat: the standalone audit page used to live at ?settings=audit.
+  // It was folded into the Monitoring overlay; redirect old links there.
+  if (raw === "audit") return "monitoring";
   if (raw in PAGES) return raw as PageKey;
   // Unknown page → fall back to main (rather than close).
   return "main";
@@ -210,7 +210,6 @@ export function SettingsOverlay() {
           {page === "agent/skills" && <SettingsAgentSkillsPage />}
           {page === "agent/subagents" && <SettingsAgentSubagentsPage />}
           {page === "terminal" && <SettingsTerminalPage />}
-          {page === "audit" && <SettingsAuditPage />}
           {page === "notifications" && <SettingsNotificationsPage />}
           {page === "monitoring" && <SettingsMonitoringPage />}
         </div>

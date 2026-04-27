@@ -7,7 +7,6 @@ import {
   FiBell,
   FiChevronRight,
   FiCpu,
-  FiFileText,
   FiLink,
   FiMail,
   FiShield,
@@ -143,29 +142,6 @@ export function SettingsMainPage() {
             <p className="text-[13px] font-medium text-canvas-fg">Open monitoring dashboard</p>
             <p className="mt-0.5 text-[11px] text-canvas-muted">
               Server health, system metrics, processes, Docker, WebSockets, APM, alerts
-            </p>
-          </div>
-          <FiChevronRight size={14} className="shrink-0 text-canvas-muted" />
-        </button>
-      </SettingsSection>
-
-      {/* Audit log — server-side activity trail */}
-      <SettingsSection
-        title="Activity"
-        description="Audit log of API calls, cron runs, and chat sessions"
-      >
-        <button
-          type="button"
-          onClick={() => setParam("settings", "audit")}
-          className="flex w-full items-center gap-3 rounded-xl border border-canvas-border bg-canvas-bg px-4 py-3 text-left transition-colors hover:bg-canvas-surface-hover"
-        >
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-canvas-surface text-canvas-fg">
-            <FiFileText size={15} />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-medium text-canvas-fg">View audit log</p>
-            <p className="mt-0.5 text-[11px] text-canvas-muted">
-              Server-side history of every write, cron run, and session event
             </p>
           </div>
           <FiChevronRight size={14} className="shrink-0 text-canvas-muted" />

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { authFetch } from "@/lib/auth";
+import { ScopedAuditDrawer } from "@/components/audit/scoped-audit-drawer";
 import { useMonPoll } from "@/lib/monitoring/use-mon-poll";
 import { formatBytes, formatDurationMs, formatRate } from "@/lib/monitoring/format";
 
@@ -12,6 +13,7 @@ import type { WsSessionRow, WsSnapshot } from "@/lib/monitoring/types";
 import { useMonContext } from "../monitoring-context";
 import { ConfirmActionDialog } from "../primitives/confirm-action-dialog";
 import { DataTable } from "../primitives/data-table";
+import { DetailDrawer } from "../primitives/detail-drawer";
 import { MetricCard } from "../primitives/metric-card";
 import { SectionGrid } from "../primitives/section-grid";
 import { Sparkline } from "../primitives/sparkline";
@@ -26,6 +28,7 @@ export function WsSection() {
     paused,
   });
   const [confirmDisconnect, setConfirmDisconnect] = useState<WsSessionRow | null>(null);
+  const [activityFor, setActivityFor] = useState<WsSessionRow | null>(null);
 
   if (error && !data) {
     return <p className="p-4 text-[12px] text-[var(--mon-critical)]">Error: {error.message}</p>;
@@ -151,16 +154,28 @@ export function WsSection() {
             width: "100px",
             align: "right",
             cell: (s) => (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirmDisconnect(s);
-                }}
-                className="rounded-md border border-canvas-border px-2 py-1 text-[10.5px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
-              >
-                Disconnect
-              </button>
+              <div className="flex items-center justify-end gap-1">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActivityFor(s);
+                  }}
+                  className="rounded-md border border-canvas-border px-2 py-1 text-[10.5px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                >
+                  Activity
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmDisconnect(s);
+                  }}
+                  className="rounded-md border border-canvas-border px-2 py-1 text-[10.5px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                >
+                  Disconnect
+                </button>
+              </div>
             ),
           },
         ]}
@@ -170,6 +185,57 @@ export function WsSection() {
         empty="No active WebSocket connections"
         maxHeight={500}
       />
+
+      {activityFor ? (
+        <DetailDrawer
+          title={`Session ${activityFor.id.slice(0, 12)}`}
+          subtitle={activityFor.client ?? activityFor.ip}
+          status={
+            activityFor.state === "busy" || activityFor.state === "awaiting_permission"
+              ? "warning"
+              : activityFor.state === "idle"
+                ? "healthy"
+                : "unknown"
+          }
+          onClose={() => setActivityFor(null)}
+        >
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3 text-[11.5px]">
+              <div>
+                <p className="text-canvas-muted">Connected at</p>
+                <p className="font-mono text-canvas-fg">
+                  {activityFor.connectedAt
+                    ? new Date(activityFor.connectedAt).toLocaleString()
+                    : "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-canvas-muted">Last activity</p>
+                <p className="font-mono text-canvas-fg">
+                  {new Date(activityFor.lastActivityAt).toLocaleString()}
+                </p>
+              </div>
+              <div>
+                <p className="text-canvas-muted">Bytes in / out</p>
+                <p className="font-mono text-canvas-fg">
+                  {formatBytes(activityFor.bytesIn)} / {formatBytes(activityFor.bytesOut)}
+                </p>
+              </div>
+              <div>
+                <p className="text-canvas-muted">Messages in / out</p>
+                <p className="font-mono text-canvas-fg">
+                  {activityFor.msgsIn.toLocaleString()} / {activityFor.msgsOut.toLocaleString()}
+                </p>
+              </div>
+            </div>
+            <ScopedAuditDrawer
+              filter={{ q: activityFor.id, category: ["session", "api"] }}
+              description="Audit events scoped to this WebSocket session id."
+              limit={50}
+            />
+          </div>
+        </DetailDrawer>
+      ) : null}
 
       {confirmDisconnect ? (
         <ConfirmActionDialog

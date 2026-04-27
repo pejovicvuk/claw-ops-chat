@@ -1,14 +1,33 @@
 import { monitorEventLoopDelay, performance, PerformanceObserver } from "perf_hooks";
 import { RingBuffer } from "../ring-buffer";
+import { TimeSeriesBuffer } from "../timeseries-buffer";
 import type { HealthSnapshot } from "../types";
 
 const SERIES_LEN = 60;
+/** 1h × 1Hz at the health tick cadence. ~58KB per buffer. */
+const LONG_SERIES_LEN = 3600;
+
+export type HealthLongMetric =
+  | "rssBytes"
+  | "heapUsedBytes"
+  | "heapTotalBytes"
+  | "externalBytes"
+  | "loopP50Ms"
+  | "loopP95Ms"
+  | "loopP99Ms"
+  | "gcPausesPerMin"
+  | "gcTimePerMin";
 
 export interface HealthCollector {
   rssSeries: RingBuffer;
   heapSeries: RingBuffer;
   loopP95Series: RingBuffer;
   gcPauseSeries: RingBuffer;
+  /**
+   * Long-term timestamped buffers used by the multi-series chart in the
+   * Health section (1h history at 1Hz tick cadence).
+   */
+  longSeries: Record<HealthLongMetric, TimeSeriesBuffer>;
   monitor: ReturnType<typeof monitorEventLoopDelay>;
   startedAtIso: string;
   /** Tracks GC events fired in the trailing 60s. */
@@ -30,6 +49,17 @@ export function createHealthCollector(): HealthCollector {
     heapSeries: new RingBuffer(SERIES_LEN),
     loopP95Series: new RingBuffer(SERIES_LEN),
     gcPauseSeries: new RingBuffer(SERIES_LEN),
+    longSeries: {
+      rssBytes: new TimeSeriesBuffer(LONG_SERIES_LEN),
+      heapUsedBytes: new TimeSeriesBuffer(LONG_SERIES_LEN),
+      heapTotalBytes: new TimeSeriesBuffer(LONG_SERIES_LEN),
+      externalBytes: new TimeSeriesBuffer(LONG_SERIES_LEN),
+      loopP50Ms: new TimeSeriesBuffer(LONG_SERIES_LEN),
+      loopP95Ms: new TimeSeriesBuffer(LONG_SERIES_LEN),
+      loopP99Ms: new TimeSeriesBuffer(LONG_SERIES_LEN),
+      gcPausesPerMin: new TimeSeriesBuffer(LONG_SERIES_LEN),
+      gcTimePerMin: new TimeSeriesBuffer(LONG_SERIES_LEN),
+    },
     monitor,
     startedAtIso: new Date(Date.now() - process.uptime() * 1000).toISOString(),
     gcWindow: [],
@@ -86,6 +116,17 @@ export async function collectHealth(c: HealthCollector): Promise<HealthSnapshot>
   const pausesPerMin = c.gcWindow.length;
   const totalPauseMs = c.gcDurationWindow.reduce((sum, g) => sum + g.durationMs, 0);
   c.gcPauseSeries.push(pausesPerMin);
+
+  // Long-buffer pushes for chart history.
+  c.longSeries.rssBytes.push(now, mem.rss);
+  c.longSeries.heapUsedBytes.push(now, mem.heapUsed);
+  c.longSeries.heapTotalBytes.push(now, mem.heapTotal);
+  c.longSeries.externalBytes.push(now, mem.external);
+  c.longSeries.loopP50Ms.push(now, lagP50);
+  c.longSeries.loopP95Ms.push(now, lagP95);
+  c.longSeries.loopP99Ms.push(now, lagP99);
+  c.longSeries.gcPausesPerMin.push(now, pausesPerMin);
+  c.longSeries.gcTimePerMin.push(now, totalPauseMs);
 
   const startedAt = c.startedAtIso;
 

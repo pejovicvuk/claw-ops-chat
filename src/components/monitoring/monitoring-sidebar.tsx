@@ -11,6 +11,7 @@ import {
   FiHardDrive,
   FiList,
   FiServer,
+  FiTool,
   FiWifi,
 } from "react-icons/fi";
 import type { MonStatus } from "@/lib/monitoring/types";
@@ -35,6 +36,7 @@ const ITEMS: ReadonlyArray<SidebarItem> = [
   { key: "apm", label: "Performance", icon: FiBarChart2 },
   { key: "logs", label: "Logs & Errors", icon: FiHardDrive },
   { key: "alerts", label: "Alerts", icon: FiAlertCircle },
+  { key: "automation", label: "Automation", icon: FiTool },
 ];
 
 interface MonitoringSidebarProps {

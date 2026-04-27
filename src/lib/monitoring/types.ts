@@ -348,15 +348,27 @@ export interface AlertRule {
   id: string;
   name: string;
   enabled: boolean;
-  /** Dotted metric path, e.g. "health.eventLoop.lagP95Ms" */
+  /**
+   * Dotted metric path, e.g. "health.eventLoop.lagP95Ms".
+   * Special form: `audit.count(category=...,severity=...,window=Ns)` to
+   * fire on audit-event patterns rather than gauge metrics.
+   */
   metric: string;
   operator: AlertOperator;
   threshold: number;
   /** Sustained duration before firing. */
   forMs: number;
   severity: AlertSeverity;
-  /** Channels are pluggable; v1 only honors `webPush`. */
-  notify: { webPush?: boolean };
+  /**
+   * Channels are pluggable. v1 honours `webPush` and `webhook`. Email
+   * + SMS land in a follow-up PR.
+   */
+  notify: {
+    webPush?: boolean;
+    webhook?: { url: string };
+  };
+  /** Optional URL to a runbook explaining what to do when this fires. */
+  runbookUrl?: string;
   snoozedUntil?: number;
   createdAt: number;
   updatedAt: number;
@@ -375,6 +387,26 @@ export interface AlertEvent {
   threshold: number;
   ackedAt?: number;
   ackedBy?: string;
+  /** Copied from the rule when fired so the UI can link without a re-fetch. */
+  runbookUrl?: string;
+}
+
+export interface MaintenanceWindow {
+  id: string;
+  name: string;
+  /** Start / end ms-epoch. For recurring windows these are the next occurrence. */
+  startsAt: number;
+  endsAt: number;
+  /** Optional cron expression; when set, `startsAt`/`endsAt` are recomputed. */
+  recurringCron?: string;
+  /** Duration in ms for recurring windows. */
+  recurringDurationMs?: number;
+  /** If non-empty, only suppress these specific rule ids. Otherwise suppresses all. */
+  ruleIds?: string[];
+  reason?: string;
+  createdAt: number;
+  updatedAt: number;
+  createdBy?: string;
 }
 
 export interface AlertsSnapshot {

@@ -1,0 +1,63 @@
+import { extractSession, unauthorized } from "@/lib/auth-server";
+import { getAuditWriter } from "@/lib/audit/writer";
+import { getAutomationEngine } from "@/lib/monitoring/automation/engine";
+import { deleteRule, getRule, updateRule } from "@/lib/monitoring/automation/store";
+
+export async function GET(_request: Request, ctx: { params: Promise<{ id: string }> }) {
+  if (!extractSession(_request)) return unauthorized();
+  const { id } = await ctx.params;
+  const rule = await getRule(id);
+  if (!rule) return Response.json({ error: "Not found" }, { status: 404 });
+  return Response.json(rule);
+}
+
+export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {
+  const session = extractSession(request);
+  if (!session) return unauthorized();
+  const { id } = await ctx.params;
+  let body: Record<string, unknown>;
+  try {
+    body = (await request.json()) as Record<string, unknown>;
+  } catch {
+    return Response.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+  const updated = await updateRule(id, body);
+  if (!updated) return Response.json({ error: "Not found" }, { status: 404 });
+  await getAutomationEngine().reconcileRules();
+  await getAuditWriter()
+    .alert({
+      type: "rule_updated",
+      severity: "info",
+      actor: session.email,
+      subject: `Automation rule updated: ${updated.name}`,
+      durationMs: null,
+      ruleId: updated.id,
+      ruleName: updated.name,
+      details: { fields: Object.keys(body) },
+    })
+    .catch(() => {});
+  return Response.json(updated);
+}
+
+export async function DELETE(request: Request, ctx: { params: Promise<{ id: string }> }) {
+  const session = extractSession(request);
+  if (!session) return unauthorized();
+  const { id } = await ctx.params;
+  const existing = await getRule(id);
+  const ok = await deleteRule(id);
+  if (!ok) return Response.json({ error: "Not found" }, { status: 404 });
+  await getAutomationEngine().reconcileRules();
+  await getAuditWriter()
+    .alert({
+      type: "rule_deleted",
+      severity: "info",
+      actor: session.email,
+      subject: `Automation rule deleted: ${existing?.name ?? id}`,
+      durationMs: null,
+      ruleId: id,
+      ruleName: existing?.name,
+      details: {},
+    })
+    .catch(() => {});
+  return Response.json({ ok: true });
+}

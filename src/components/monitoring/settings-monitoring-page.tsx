@@ -16,6 +16,7 @@ import { CronSection } from "./sections/cron-section";
 import { ApmSection } from "./sections/apm-section";
 import { LogsSection } from "./sections/logs-section";
 import { AlertsSection } from "./sections/alerts-section";
+import { AutomationSection } from "./sections/automation-section";
 
 export function SettingsMonitoringPage() {
   return (
@@ -58,6 +59,7 @@ function MonitoringPageInner() {
           {tab === "apm" && <ApmSection />}
           {tab === "logs" && <LogsSection />}
           {tab === "alerts" && <AlertsSection />}
+          {tab === "automation" && <AutomationSection />}
         </div>
       </div>
     </div>

@@ -7,9 +7,17 @@ import type { MetricsCollector } from "../collector";
  *
  * Returns `null` for unknown / non-numeric paths so the evaluator can
  * skip the rule cleanly.
+ *
+ * A handful of derived percentages aren't exposed as raw fields by the
+ * collectors but are useful for thresholds — we compute them here so
+ * users can reference e.g. `health.memory.heapUsedPct` directly.
  */
 export function metricLookup(collector: MetricsCollector): (path: string) => number | null {
   return (path: string) => {
+    // Derived metrics first.
+    const derived = lookupDerived(collector, path);
+    if (derived !== undefined) return derived;
+
     const [section, ...rest] = path.split(".");
     let snapshot: unknown;
     switch (section) {
@@ -53,6 +61,44 @@ export function metricLookup(collector: MetricsCollector): (path: string) => num
   };
 }
 
+function lookupDerived(collector: MetricsCollector, path: string): number | null | undefined {
+  switch (path) {
+    case "health.memory.heapUsedPct": {
+      const h = collector.getHealth();
+      if (!h || h.memory.heapTotalBytes <= 0) return null;
+      return (h.memory.heapUsedBytes / h.memory.heapTotalBytes) * 100;
+    }
+    case "system.memory.usedPct": {
+      const s = collector.getSystem();
+      if (!s || s.memory.totalBytes <= 0) return null;
+      return (s.memory.usedBytes / s.memory.totalBytes) * 100;
+    }
+    case "system.swap.usedPct": {
+      const s = collector.getSystem();
+      if (!s || s.swap.totalBytes <= 0) return null;
+      return (s.swap.usedBytes / s.swap.totalBytes) * 100;
+    }
+    case "system.disk.maxUsedPct": {
+      const s = collector.getSystem();
+      if (!s) return null;
+      let max = 0;
+      for (const d of s.disks) {
+        if (d.totalBytes <= 0) continue;
+        const pct = (d.usedBytes / d.totalBytes) * 100;
+        if (pct > max) max = pct;
+      }
+      return max;
+    }
+    case "docker.unhealthyCount": {
+      const d = collector.getDocker();
+      if (!d?.available) return null;
+      return d.containers.filter((c) => c.health === "unhealthy").length;
+    }
+    default:
+      return undefined;
+  }
+}
+
 /**
  * The list of known metric paths surfaced in the alert rule editor's
  * autocomplete. Kept here (not in the React component) so the server
@@ -63,6 +109,7 @@ export const KNOWN_METRICS: string[] = [
   "health.memory.rssBytes",
   "health.memory.heapUsedBytes",
   "health.memory.heapTotalBytes",
+  "health.memory.heapUsedPct",
   "health.eventLoop.lagP50Ms",
   "health.eventLoop.lagP95Ms",
   "health.eventLoop.lagP99Ms",
@@ -73,8 +120,13 @@ export const KNOWN_METRICS: string[] = [
   "system.cpu.aggregatePct",
   "system.cpu.load1",
   "system.memory.usedBytes",
+  "system.memory.usedPct",
   "system.swap.usedBytes",
+  "system.swap.usedPct",
+  "system.disk.maxUsedPct",
   "system.fileDescriptors.open",
+  // Docker
+  "docker.unhealthyCount",
   // APM
   "apm.summary.rpm",
   "apm.summary.errorRate",

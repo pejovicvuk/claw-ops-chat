@@ -1,4 +1,4 @@
-import { collectHealth, type HealthCollector } from "./collectors/health";
+import { collectHealth, type HealthCollector, type HealthLongMetric } from "./collectors/health";
 import { collectSystem, type SystemCollector } from "./collectors/system";
 import { collectProcesses } from "./collectors/processes";
 import { collectDocker, type DockerCollector } from "./collectors/docker";
@@ -198,6 +198,20 @@ export class MetricsCollector {
   }
   getLogs(): LogsSnapshot | null {
     return this.read<LogsSnapshot>("logs");
+  }
+
+  /**
+   * Long-term health series accessor. Returns up to 1h of `(t, v)` pairs
+   * for the named metric, optionally clipped to `[fromMs, toMs]`.
+   */
+  getHealthSeries(
+    metric: HealthLongMetric,
+    fromMs?: number,
+    toMs?: number,
+  ): Array<{ t: number; v: number }> {
+    const buf = this.health.longSeries[metric];
+    if (!buf) return [];
+    return buf.toRange(fromMs, toMs);
   }
 
   /** Last-known-error message for diagnostics. */

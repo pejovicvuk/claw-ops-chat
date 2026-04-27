@@ -7,6 +7,7 @@ import { createSystemCollector } from "./collectors/system";
 import { setMetricsCollector } from "./singleton";
 import { getMonitoringBroadcaster } from "./ws-broadcast";
 import { getAlertEngine } from "./alerts/engine";
+import { getAutomationEngine } from "./automation/engine";
 
 /**
  * Initialize the monitoring subsystem at server startup. Must be called
@@ -31,6 +32,15 @@ export function bootstrapMonitoring(): MetricsCollector {
 
   // Start alert engine (reads rules + ticks evaluator + dispatches).
   getAlertEngine().start();
+
+  // Start automation engine (cron + trigger-driven cleanup actions).
+  void getAutomationEngine()
+    .start()
+    .catch((err: unknown) => {
+      console.warn(
+        `[automation] engine bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    });
 
   console.log("> Monitoring subsystem initialized");
   return collector;

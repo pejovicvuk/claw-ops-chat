@@ -16,7 +16,8 @@ interface RuleInput {
   threshold?: unknown;
   forMs?: unknown;
   severity?: unknown;
-  notify?: { webPush?: unknown };
+  notify?: { webPush?: unknown; webhook?: { url?: unknown } };
+  runbookUrl?: unknown;
 }
 
 export async function GET(request: Request) {
@@ -79,8 +80,13 @@ function validate(
     return { ok: false, error: "name required" };
   if (typeof body.metric !== "string" || !body.metric.trim())
     return { ok: false, error: "metric required" };
-  if (!KNOWN_METRICS.includes(body.metric as string))
-    return { ok: false, error: `metric must be one of: ${KNOWN_METRICS.join(", ")}` };
+  // Allow either a known dotted-path metric OR the special audit.count() form.
+  const isAuditCount = /^audit\.count\(.+\)$/.test(body.metric);
+  if (!isAuditCount && !KNOWN_METRICS.includes(body.metric as string))
+    return {
+      ok: false,
+      error: `metric must be one of: ${KNOWN_METRICS.join(", ")} or audit.count(...)`,
+    };
   if (
     typeof body.operator !== "string" ||
     !VALID_OPERATORS.includes(body.operator as AlertOperator)
@@ -102,7 +108,14 @@ function validate(
       threshold: body.threshold,
       forMs: Math.min(body.forMs, 24 * 60 * 60 * 1000),
       severity: body.severity as AlertSeverity,
-      notify: { webPush: Boolean(body.notify?.webPush ?? true) },
+      notify: {
+        webPush: Boolean(body.notify?.webPush ?? true),
+        webhook:
+          typeof body.notify?.webhook?.url === "string" && body.notify.webhook.url.trim()
+            ? { url: (body.notify.webhook.url as string).trim() }
+            : undefined,
+      },
+      runbookUrl: typeof body.runbookUrl === "string" ? body.runbookUrl.slice(0, 500) : undefined,
     },
   };
 }

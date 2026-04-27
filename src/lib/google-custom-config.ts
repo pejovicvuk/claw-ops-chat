@@ -14,6 +14,15 @@ import { homedir } from "os";
 
 export const MCP_SERVER_ID = "google-workspace-custom";
 
+/**
+ * workspace-mcp tool tier. "complete" exposes every Gmail / Drive / Calendar /
+ * Docs / Sheets / Slides / Forms / Tasks / Contacts tool the server ships
+ * (drafts, label/filter management, permission management, batch ops, …).
+ * Any args entry pinning a different tier in ~/.claude.json is treated as
+ * legacy and rewritten by `migrateGoogleMcpTier()`.
+ */
+export const WORKSPACE_MCP_TOOL_TIER = "complete" as const;
+
 const CREDENTIALS_DIR = join(homedir(), ".claude", "custom-google-workspace");
 const CREDENTIALS_FILE = join(CREDENTIALS_DIR, "credentials.json");
 const CLAUDE_JSON = join(homedir(), ".claude.json");
@@ -117,7 +126,7 @@ export async function registerMcpServer(creds: Credentials): Promise<void> {
   servers[MCP_SERVER_ID] = {
     type: "stdio",
     command: "uvx",
-    args: ["workspace-mcp", "--single-user", "--tool-tier", "core"],
+    args: ["workspace-mcp", "--single-user", "--tool-tier", WORKSPACE_MCP_TOOL_TIER],
     env: {
       GOOGLE_OAUTH_CLIENT_ID: creds.clientId,
       GOOGLE_OAUTH_CLIENT_SECRET: creds.clientSecret,
@@ -144,4 +153,36 @@ export async function isMcpServerRegistered(): Promise<boolean> {
   const data = await readClaudeJson();
   const servers = data.mcpServers as Record<string, unknown> | undefined;
   return !!servers && MCP_SERVER_ID in servers;
+}
+
+/**
+ * Rewrite the `--tool-tier` arg of an existing google-workspace-custom entry
+ * so users who connected before the tier upgrade pick up the broader tool set
+ * without disconnecting. Tokens (in `env`) are preserved untouched.
+ *
+ * Idempotent and silent: missing entry, missing flag, already-current tier,
+ * or unreadable claude.json all return `{ migrated: false }` without throwing.
+ * Safe to call on every server boot and every settings-page open.
+ */
+export async function migrateGoogleMcpTier(): Promise<{
+  migrated: boolean;
+  oldTier?: string;
+}> {
+  const data = await readClaudeJson();
+  const servers = data.mcpServers as Record<string, unknown> | undefined;
+  if (!servers || !(MCP_SERVER_ID in servers)) return { migrated: false };
+
+  const entry = servers[MCP_SERVER_ID] as { args?: unknown } | undefined;
+  if (!entry || !Array.isArray(entry.args)) return { migrated: false };
+
+  const args = entry.args as unknown[];
+  const flagIndex = args.indexOf("--tool-tier");
+  if (flagIndex < 0 || flagIndex + 1 >= args.length) return { migrated: false };
+
+  const current = args[flagIndex + 1];
+  if (current === WORKSPACE_MCP_TOOL_TIER) return { migrated: false };
+
+  args[flagIndex + 1] = WORKSPACE_MCP_TOOL_TIER;
+  await writeClaudeJson(data);
+  return { migrated: true, oldTier: typeof current === "string" ? current : undefined };
 }

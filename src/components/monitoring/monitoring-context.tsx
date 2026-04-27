@@ -17,7 +17,8 @@ export type MonTabKey =
   | "cron"
   | "apm"
   | "logs"
-  | "alerts";
+  | "alerts"
+  | "automation";
 
 const REFRESH_TO_MS: Record<MonRefreshOption, number | null> = {
   "2s": 2000,
@@ -57,6 +58,7 @@ const VALID_TABS: MonTabKey[] = [
   "apm",
   "logs",
   "alerts",
+  "automation",
 ];
 
 const VALID_REFRESH: MonRefreshOption[] = ["2s", "5s", "10s", "30s", "off"];

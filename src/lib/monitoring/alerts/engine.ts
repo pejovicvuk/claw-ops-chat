@@ -1,9 +1,11 @@
 import { listRules } from "./store";
 import { AlertEvaluator } from "./evaluator";
-import { AlertDispatcher, WebPushChannel } from "./dispatcher";
+import { AlertDispatcher } from "./dispatcher";
 import { metricLookup } from "./metric-lookup";
+import { auditCountLookup } from "./audit-count-lookup";
+import { isInMaintenanceWindow } from "../maintenance/store";
 import { getMetricsCollector } from "../singleton";
-import type { AlertEvent } from "../types";
+import type { AlertEvent, AlertRule } from "../types";
 
 const TICK_MS = 5_000;
 const HISTORY_SIZE = 100;
@@ -16,7 +18,7 @@ export class AlertEngine {
   private history: AlertEvent[] = [];
 
   constructor() {
-    this.dispatcher = new AlertDispatcher([new WebPushChannel()]);
+    this.dispatcher = new AlertDispatcher();
   }
 
   start(): void {
@@ -25,15 +27,35 @@ export class AlertEngine {
       try {
         const collector = getMetricsCollector();
         if (!collector) return;
-        const rules = await listRules();
-        const lookup = metricLookup(collector);
-        const transitions = this.evaluator.tick(rules, lookup);
+        const allRules = await listRules();
+        // Filter out rules currently in a maintenance window — they
+        // skip evaluation entirely, mirroring snoozedUntil semantics.
+        const ruleIsActive = await Promise.all(
+          allRules.map((r) => isInMaintenanceWindow(r.id).then((m) => !m)),
+        );
+        const activeRules = allRules.filter((_, i) => ruleIsActive[i]);
+        const baseLookup = metricLookup(collector);
+        const auditLookup = auditCountLookup();
+        const lookup = (path: string) => {
+          if (path.startsWith("audit.count(")) return auditLookup(path);
+          return baseLookup(path);
+        };
+        const transitions = this.evaluator.tick(activeRules, lookup);
         if (transitions.fired.length > 0 || transitions.resolved.length > 0) {
           this.history.unshift(...transitions.fired, ...transitions.resolved);
           if (this.history.length > HISTORY_SIZE) {
             this.history.length = HISTORY_SIZE;
           }
-          await this.dispatcher.dispatch(transitions);
+          // Look up the rule for each transition (events carry id only).
+          const ruleById = new Map<string, AlertRule>(allRules.map((r) => [r.id, r]));
+          const envelopes = [...transitions.fired, ...transitions.resolved]
+            .map((event) => {
+              const rule = ruleById.get(event.ruleId);
+              if (!rule) return null;
+              return { event, rule };
+            })
+            .filter((e): e is { event: AlertEvent; rule: AlertRule } => e !== null);
+          await this.dispatcher.dispatch(envelopes);
         }
       } catch (err) {
         console.warn(

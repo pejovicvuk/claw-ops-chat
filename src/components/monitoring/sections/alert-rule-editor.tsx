@@ -25,8 +25,15 @@ export function AlertRuleEditor({ rule, knownMetrics, onClose, onSaved }: AlertR
   const [forMin, setForMin] = useState(String(rule ? rule.forMs / 60_000 : 5));
   const [severity, setSeverity] = useState<AlertSeverity>(rule?.severity ?? "warning");
   const [webPush, setWebPush] = useState(rule?.notify.webPush ?? true);
+  const [webhookUrl, setWebhookUrl] = useState(rule?.notify.webhook?.url ?? "");
+  const [runbookUrl, setRunbookUrl] = useState(rule?.runbookUrl ?? "");
+  const [customMetric, setCustomMetric] = useState(
+    rule?.metric && !knownMetrics.includes(rule.metric) ? rule.metric : "",
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const effectiveMetric = customMetric.trim() || metric;
 
   async function save() {
     setBusy(true);
@@ -34,12 +41,16 @@ export function AlertRuleEditor({ rule, knownMetrics, onClose, onSaved }: AlertR
     const body = {
       name: name.trim(),
       enabled,
-      metric,
+      metric: effectiveMetric,
       operator,
       threshold: Number(threshold),
       forMs: Math.round(Number(forMin) * 60_000),
       severity,
-      notify: { webPush },
+      notify: {
+        webPush,
+        webhook: webhookUrl.trim() ? { url: webhookUrl.trim() } : undefined,
+      },
+      runbookUrl: runbookUrl.trim() || undefined,
     };
     if (!body.name) {
       setError("Name required");
@@ -112,8 +123,12 @@ export function AlertRuleEditor({ rule, knownMetrics, onClose, onSaved }: AlertR
         <Field label="Metric">
           <select
             value={metric}
-            onChange={(e) => setMetric(e.target.value)}
-            className="block w-full rounded-md border border-canvas-border bg-canvas-bg px-3 py-2 font-mono text-[12px] text-canvas-fg outline-none focus:border-accent"
+            onChange={(e) => {
+              setMetric(e.target.value);
+              setCustomMetric("");
+            }}
+            disabled={Boolean(customMetric.trim())}
+            className="block w-full rounded-md border border-canvas-border bg-canvas-bg px-3 py-2 font-mono text-[12px] text-canvas-fg outline-none focus:border-accent disabled:opacity-50"
           >
             {knownMetrics.map((m) => (
               <option key={m} value={m}>
@@ -121,6 +136,17 @@ export function AlertRuleEditor({ rule, knownMetrics, onClose, onSaved }: AlertR
               </option>
             ))}
           </select>
+          <input
+            type="text"
+            value={customMetric}
+            onChange={(e) => setCustomMetric(e.target.value)}
+            placeholder="…or type custom metric (e.g. audit.count(category=api,severity=error,window=60s))"
+            className="mt-1 block w-full rounded-md border border-canvas-border bg-canvas-bg px-3 py-2 font-mono text-[11px] text-canvas-fg outline-none focus:border-accent"
+          />
+          <p className="mt-1 text-[10.5px] text-canvas-muted">
+            Use <code>audit.count(...)</code> to fire on patterns like &ldquo;5 errors /
+            minute&rdquo;.
+          </p>
         </Field>
         <div className="grid grid-cols-2 gap-3">
           <Field label="Operator">
@@ -184,6 +210,27 @@ export function AlertRuleEditor({ rule, knownMetrics, onClose, onSaved }: AlertR
             />
             Web Push (sends to all subscribed devices)
           </label>
+        </Field>
+        <Field label="Webhook URL (optional)">
+          <input
+            type="url"
+            value={webhookUrl}
+            onChange={(e) => setWebhookUrl(e.target.value)}
+            placeholder="https://hooks.slack.com/services/... or https://events.pagerduty.com/v2/enqueue"
+            className="block w-full rounded-md border border-canvas-border bg-canvas-bg px-3 py-2 font-mono text-[11.5px] text-canvas-fg outline-none focus:border-accent"
+          />
+          <p className="mt-1 text-[10.5px] text-canvas-muted">
+            POSTs JSON envelope to this URL on fire / resolve. SSRF-guarded against private IPs.
+          </p>
+        </Field>
+        <Field label="Runbook URL (optional)">
+          <input
+            type="url"
+            value={runbookUrl}
+            onChange={(e) => setRunbookUrl(e.target.value)}
+            placeholder="https://wiki.example.com/runbooks/cpu-saturation"
+            className="block w-full rounded-md border border-canvas-border bg-canvas-bg px-3 py-2 text-[12px] text-canvas-fg outline-none focus:border-accent"
+          />
         </Field>
         {error ? <p className="text-[11.5px] text-[var(--mon-critical)]">{error}</p> : null}
       </div>

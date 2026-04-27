@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FiArrowRight } from "react-icons/fi";
 import { useUrlState } from "@/lib/use-url-state";
 import { AuditDetailDrawer } from "@/components/audit/audit-detail-drawer";
@@ -11,18 +11,29 @@ import { useAuditEvents } from "@/lib/use-audit";
 import { useMonContext } from "../monitoring-context";
 
 export function AuditLiveSection() {
-  const { refreshMs, paused } = useMonContext();
+  const { paused } = useMonContext();
   const { setParam } = useUrlState();
   const [filter, setFilter] = useState<AuditFilter>({ limit: 100 });
   const [selected, setSelected] = useState<AuditEvent | null>(null);
+  const [autoRefreshSec, setAutoRefreshSec] = useState<number | null>(10);
   const { events, hasMore, loading, error, loadMore, refresh } = useAuditEvents(filter);
 
-  // Lightweight refresh on the user-selected interval.
-  const interval = paused ? null : refreshMs;
-  if (interval) {
-    // Schedule refresh on the next tick (declarative side-effect suffices via hook).
-    void interval;
-  }
+  // Auto-refresh on the user-selected cadence, paused when the global
+  // pause flag is on or when the tab is hidden.
+  useEffect(() => {
+    if (paused || !autoRefreshSec) return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = setInterval(() => {
+      if (document.visibilityState !== "hidden") refresh();
+    }, autoRefreshSec * 1000);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [autoRefreshSec, paused, refresh]);
 
   return (
     <div className="space-y-3 p-4">
@@ -39,7 +50,12 @@ export function AuditLiveSection() {
           <FiArrowRight size={11} />
         </button>
       </div>
-      <AuditFilterBar filter={filter} onChange={setFilter} />
+      <AuditFilterBar
+        filter={filter}
+        onChange={setFilter}
+        autoRefreshSec={autoRefreshSec}
+        onAutoRefreshChange={setAutoRefreshSec}
+      />
       {error ? (
         <p className="text-[11px] text-[var(--mon-critical)]">Error: {error.message}</p>
       ) : null}

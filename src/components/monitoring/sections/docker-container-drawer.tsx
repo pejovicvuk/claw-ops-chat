@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { authFetch } from "@/lib/auth";
+import { ScopedAuditDrawer } from "@/components/audit/scoped-audit-drawer";
 import { formatBytes, formatDurationMs, formatPercent } from "@/lib/monitoring/format";
 import type { DockerContainerRow } from "@/lib/monitoring/types";
 import { useMonContext } from "../monitoring-context";
@@ -24,7 +25,7 @@ interface DockerContainerDrawerProps {
 
 export function DockerContainerDrawer({ container, onClose }: DockerContainerDrawerProps) {
   const { subTab, setSubTab } = useMonContext();
-  const tab = (subTab ?? "metrics") as "metrics" | "logs" | "inspect";
+  const tab = (subTab ?? "metrics") as "metrics" | "logs" | "inspect" | "activity";
   const [logsState, setLogsState] = useState<{
     lines: string[];
     loading: boolean;
@@ -80,6 +81,7 @@ export function DockerContainerDrawer({ container, onClose }: DockerContainerDra
           { key: "metrics", label: "Metrics" },
           { key: "logs", label: "Logs" },
           { key: "inspect", label: "Inspect" },
+          { key: "activity", label: "Activity" },
         ]}
         activeTab={tab}
         onTabChange={(k) => setSubTab(k)}
@@ -174,6 +176,14 @@ export function DockerContainerDrawer({ container, onClose }: DockerContainerDra
               {logsState.lines.join("\n")}
             </pre>
           </div>
+        ) : null}
+
+        {tab === "activity" ? (
+          <ScopedAuditDrawer
+            filter={{ q: container.id.slice(0, 12), category: ["api", "alert"] }}
+            description={`Audit events touching ${container.name} (matched against container id).`}
+            limit={50}
+          />
         ) : null}
 
         {tab === "inspect" ? (

@@ -1,5 +1,6 @@
 "use client";
 
+import { actionColorClass } from "@/lib/audit/action-color";
 import type { AuditEvent, AuditSeverity } from "@/lib/audit/types";
 
 interface AuditRowProps {
@@ -29,6 +30,7 @@ function severityDotClass(sev: AuditSeverity): string {
 function categoryPillClass(cat: AuditEvent["category"]): string {
   if (cat === "api") return "bg-blue-500/10 text-blue-500";
   if (cat === "cron") return "bg-purple-500/10 text-purple-500";
+  if (cat === "alert") return "bg-orange-500/10 text-orange-500";
   return "bg-green-500/10 text-green-500";
 }
 
@@ -54,7 +56,9 @@ export function AuditRow({ event, onSelect }: AuditRowProps) {
         className={`h-2 w-2 shrink-0 rounded-full ${severityDotClass(event.severity)}`}
         aria-label={event.severity}
       />
-      <span className="min-w-0 flex-1 truncate text-[12px] text-canvas-fg">{event.subject}</span>
+      <span className={`min-w-0 flex-1 truncate text-[12px] ${actionColorClass(event.subject)}`}>
+        {event.subject}
+      </span>
       {event.durationMs !== null && (
         <span className="shrink-0 font-mono text-[10.5px] text-canvas-muted">
           {event.durationMs}ms

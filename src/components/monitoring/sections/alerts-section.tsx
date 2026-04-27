@@ -30,6 +30,7 @@ export function AlertsSection() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<AlertRule | "new" | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<AlertRule | null>(null);
+  const [selectedFiring, setSelectedFiring] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +59,21 @@ export function AlertsSection() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ forMs: 60 * 60 * 1000 }),
     });
+  }
+
+  async function handleBulk(action: "ack" | "snooze") {
+    if (selectedFiring.size === 0) return;
+    const ruleIds = [...selectedFiring];
+    await authFetch(`${BASE}/api/monitoring/alerts/bulk-ack`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ruleIds,
+        action,
+        forMs: action === "snooze" ? 60 * 60 * 1000 : undefined,
+      }),
+    });
+    setSelectedFiring(new Set());
   }
 
   async function handleDelete(id: string) {
@@ -91,34 +107,93 @@ export function AlertsSection() {
 
       {data?.firing.length ? (
         <div className="space-y-2">
-          {data.firing.map((event) => (
-            <div
-              key={event.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-[var(--mon-critical)]/30 bg-[var(--mon-critical)]/5 p-3"
-            >
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <FiBell className="text-[var(--mon-critical)]" />
-                  <span className="font-medium text-canvas-fg">{event.ruleName}</span>
-                  <StatusBadge
-                    status={event.severity === "critical" ? "critical" : "warning"}
-                    size="xs"
-                  />
-                </div>
-                <p className="mt-0.5 text-[11.5px] text-canvas-muted">
-                  Observed {event.observedValue.toFixed(1)} (threshold {event.threshold}) · firing{" "}
-                  {firingForLabel(event.firedAt)}
-                </p>
+          {selectedFiring.size > 0 ? (
+            <div className="flex items-center justify-between gap-2 rounded-md border border-canvas-border bg-canvas-surface-hover/50 px-3 py-2 text-[11.5px]">
+              <span className="text-canvas-muted">{selectedFiring.size} selected</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleBulk("snooze")}
+                  className="inline-flex items-center gap-1 rounded-md border border-canvas-border px-2 py-1 text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                >
+                  <FiPause size={10} /> Snooze 1h
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleBulk("ack")}
+                  className="rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white hover:bg-accent-hover"
+                >
+                  Acknowledge
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedFiring(new Set())}
+                  className="text-canvas-muted hover:text-canvas-fg"
+                >
+                  Clear
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => handleSnooze(event.ruleId)}
-                className="inline-flex items-center gap-1 rounded-md border border-canvas-border px-2 py-1 text-[11px] text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-              >
-                <FiPause size={10} /> Snooze 1h
-              </button>
             </div>
-          ))}
+          ) : null}
+          {data.firing.map((event) => {
+            const isSelected = selectedFiring.has(event.ruleId);
+            return (
+              <div
+                key={event.id}
+                className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 transition-colors ${
+                  isSelected
+                    ? "border-[var(--mon-critical)]/50 bg-[var(--mon-critical)]/10"
+                    : "border-[var(--mon-critical)]/30 bg-[var(--mon-critical)]/5"
+                }`}
+              >
+                <div className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={(e) => {
+                      const next = new Set(selectedFiring);
+                      if (e.target.checked) next.add(event.ruleId);
+                      else next.delete(event.ruleId);
+                      setSelectedFiring(next);
+                    }}
+                    className="mt-0.5"
+                    aria-label={`Select ${event.ruleName}`}
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <FiBell className="text-[var(--mon-critical)]" />
+                      <span className="font-medium text-canvas-fg">{event.ruleName}</span>
+                      <StatusBadge
+                        status={event.severity === "critical" ? "critical" : "warning"}
+                        size="xs"
+                      />
+                    </div>
+                    <p className="mt-0.5 text-[11.5px] text-canvas-muted">
+                      Observed {event.observedValue.toFixed(1)} (threshold {event.threshold}) ·
+                      firing {firingForLabel(event.firedAt)}
+                    </p>
+                    {event.runbookUrl ? (
+                      <a
+                        href={event.runbookUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-0.5 inline-block text-[11px] font-medium text-[var(--mon-info)] hover:underline"
+                      >
+                        Open runbook →
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleSnooze(event.ruleId)}
+                  className="inline-flex items-center gap-1 rounded-md border border-canvas-border px-2 py-1 text-[11px] text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                >
+                  <FiPause size={10} /> Snooze 1h
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : null}
 

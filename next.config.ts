@@ -11,6 +11,19 @@ const nextConfig: NextConfig = {
   basePath: "/chat",
   reactStrictMode: true,
   poweredByHeader: false,
+  // Native / CJS-only packages that Turbopack can't bundle into ESM chunks.
+  // Listed here so Next.js leaves them as runtime `require()` calls in the
+  // server bundle. dockerode → docker-modem → ssh2 → crypto.js is the
+  // transitive chain that breaks the production build (PR #84 surfaced
+  // it as "non-ecmascript placeable asset"). systeminformation also
+  // pokes /proc + spawns child processes at module load time.
+  serverExternalPackages: [
+    "dockerode",
+    "docker-modem",
+    "ssh2",
+    "cpu-features",
+    "systeminformation",
+  ],
   // Disable the client-side router cache so refreshes always show the latest code.
   experimental: {
     staleTimes: { dynamic: 0, static: 30 },

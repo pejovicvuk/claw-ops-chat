@@ -24,6 +24,11 @@ export interface PersistedSession {
   effort: string | null;
   claudeSessionId: string | null;
   sessionCwd: string | null;
+  /**
+   * Last known git branch of `sessionCwd`. Optional so older session
+   * files load without a migration; absent means "not yet detected".
+   */
+  branchName?: string | null;
   eventHistory: Record<string, unknown>[];
   sessionAllowedTools: string[];
   accumulatedText: string;

@@ -59,10 +59,18 @@ interface FileBrowserProps {
   initialPath?: string;
   /** Called when the user navigates to a different directory. */
   onPathChange?: (path: string) => void;
+  /**
+   * Id of the chat currently selected in the UI. Threaded through to
+   * the git branch list so it can highlight the branch this chat is on.
+   */
+  selectedSessionId?: string | null;
 }
 
 const VIRTUALIZE_THRESHOLD = 500;
 const ROW_HEIGHT = 36;
+// Window allowed for a desktop double-click to cancel the single-click
+// open. Browsers typically fire `dblclick` 200–250 ms after `click`.
+const DBLCLICK_DELAY_MS = 220;
 
 function mapError(err: unknown): string {
   if (err instanceof FileApiError) {
@@ -156,7 +164,7 @@ function ClampedMenu({ x, y, className, children, onClick }: ClampedMenuProps) {
 }
 
 export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(function FileBrowser(
-  { onFileClick, onFileOpen, onCopyPath, initialPath, onPathChange },
+  { onFileClick, onFileOpen, onCopyPath, initialPath, onPathChange, selectedSessionId },
   ref,
 ) {
   const { toast } = useToast();
@@ -226,31 +234,59 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
     prevErrorRef.current = error;
   }, [error, entries.length, toast]);
 
+  // Pending desktop single-click timers, keyed by entry path. Lets a
+  // double-click cancel the single-click open before it fires. Mobile
+  // ignores this map and acts immediately on tap.
+  const pendingClickRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  useEffect(() => {
+    const timers = pendingClickRef.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
+
   const handleEntryClick = useCallback(
     (entry: FileEntry) => {
       if (entry.directory) {
         navigateTo(entry.path);
         return;
       }
-      // Mobile: a single tap on a file opens it (the desktop "tap inserts
-      // @path into the chat" affordance is replaced by the long-press menu's
-      // Copy path item, which is more discoverable on touch). Desktop keeps
-      // its prior single-click → onFileClick behavior.
+      // Mobile: a single tap opens the file directly. Long-press exposes
+      // "Copy path" via the context menu for the @path workflow.
       if (isMobile) {
         if (onFileOpen) onFileOpen(entry);
         else onFileClick?.(entry.path);
-      } else {
-        onFileClick?.(entry.path);
+        return;
       }
+      // Desktop: defer the open so a follow-up double-click can cancel it
+      // and insert @path instead.
+      const timers = pendingClickRef.current;
+      const prev = timers.get(entry.path);
+      if (prev) clearTimeout(prev);
+      const t = setTimeout(() => {
+        timers.delete(entry.path);
+        onFileOpen?.(entry);
+      }, DBLCLICK_DELAY_MS);
+      timers.set(entry.path, t);
     },
     [navigateTo, onFileClick, onFileOpen, isMobile],
   );
 
   const handleEntryDoubleClick = useCallback(
     (entry: FileEntry) => {
-      if (!entry.directory) onFileOpen?.(entry);
+      if (entry.directory) return;
+      // Cancel the pending single-click open so we don't both open AND
+      // insert @path.
+      const timers = pendingClickRef.current;
+      const pending = timers.get(entry.path);
+      if (pending) {
+        clearTimeout(pending);
+        timers.delete(entry.path);
+      }
+      onFileClick?.(entry.path);
     },
-    [onFileOpen],
+    [onFileClick],
   );
 
   const handleEntryContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
@@ -608,7 +644,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           </div>
         ) : git.repoRoot ? (
           <div key="git" className="flex-1 min-h-0 animate-panel-in">
-            <GitPanelView git={git} repoRoot={git.repoRoot} />
+            <GitPanelView git={git} repoRoot={git.repoRoot} selectedSessionId={selectedSessionId} />
           </div>
         ) : null}
 

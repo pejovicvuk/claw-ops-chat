@@ -356,6 +356,7 @@ export function ChatLayout({
           onPathChange={setCurrentBrowserPath}
           onCopyPath={handleCopyPath}
           onFileOpen={handleFileOpen}
+          selectedSessionId={selectedSessionId}
         />
 
         {fileEditors}
@@ -478,6 +479,7 @@ export function ChatLayout({
                     onFileOpen={handleFileOpen}
                     hideRunOption
                     onCopyPath={handleCopyPath}
+                    selectedSessionId={selectedSessionId}
                   />
                 </ErrorBoundary>
               </div>

@@ -9,11 +9,13 @@ import { CommitList } from "./commit-list";
 interface GitPanelViewProps {
   git: GitStatusResult;
   repoRoot: string;
+  /** Threaded down to BranchList so it can highlight the current chat's branch. */
+  selectedSessionId?: string | null;
 }
 
 type Tab = "branches" | "commits";
 
-export function GitPanelView({ git, repoRoot }: GitPanelViewProps) {
+export function GitPanelView({ git, repoRoot, selectedSessionId }: GitPanelViewProps) {
   const [tab, setTab] = useState<Tab>("branches");
   const [activeBranch, setActiveBranch] = useState<string | null>(null);
 
@@ -47,7 +49,11 @@ export function GitPanelView({ git, repoRoot }: GitPanelViewProps) {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === "branches" ? (
-          <BranchList repoRoot={repoRoot} onSelectBranch={handleSelectBranch} />
+          <BranchList
+            repoRoot={repoRoot}
+            onSelectBranch={handleSelectBranch}
+            selectedSessionId={selectedSessionId}
+          />
         ) : (
           <>
             {activeBranch && activeBranch !== git.branch && (

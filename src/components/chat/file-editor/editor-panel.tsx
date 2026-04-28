@@ -5,25 +5,33 @@ import { FiAlertTriangle, FiLoader, FiX } from "react-icons/fi";
 import { readFile, writeFile, FileApiError } from "@/lib/api";
 import { isEditableKind, pickRenderer, type PreviewKind } from "@/lib/file-preview/pick-renderer";
 import { useDownload } from "@/lib/use-download";
+import { useGitDiff } from "@/lib/use-git-diff";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useToast } from "@/lib/use-toast";
 import { Z_INDEX } from "@/lib/z-index";
 import { clampRectToViewport } from "@/lib/clamp-to-viewport";
+import type { DiffAgainst } from "@/lib/git/types";
 import type { FileEntry } from "@/lib/types";
 import { BinaryPlaceholder } from "./binary-placeholder";
 import { CodeMirror } from "./code-mirror";
+import { DiffView } from "./diff-view";
 import { DownloadProgress } from "./download-progress";
-import { EditorHeader } from "./header";
+import { EditorHeader, type EditorMode } from "./header";
 import { getPanelLayout, setPanelLayout } from "./layout-store";
 import { ReadablePreview } from "./readable-preview";
 
-type Mode = "view" | "edit";
+type Mode = EditorMode;
 
 /**
- * Session-scoped memory of the last view/edit mode chosen per file path.
- * Reopening the same file mid-session restores the user's last choice.
+ * Session-scoped memory of the last mode + diff target chosen per file
+ * path. Reopening the same file mid-session restores the user's last
+ * choice for both axes.
  */
-const lastModeByPath = new Map<string, Mode>();
+interface ModeMemo {
+  mode: Mode;
+  against: DiffAgainst;
+}
+const lastModeByPath = new Map<string, ModeMemo>();
 
 export interface FileEditorPanelProps {
   file: FileEntry;
@@ -124,11 +132,27 @@ export function FileEditorPanel({
 
   const [mode, setMode] = useState<Mode>(() => {
     const saved = lastModeByPath.get(file.path);
-    if (saved) return saved;
+    if (saved) return saved.mode;
     return "view";
   });
+  const [against, setAgainst] = useState<DiffAgainst>(() => {
+    const saved = lastModeByPath.get(file.path);
+    return saved?.against ?? "working";
+  });
+  // Probe whether this file is tracked by git. We always query the
+  // working diff once so the Diff segment can show/hide based on real
+  // tracking state, not a guess.
+  const trackedProbe = useGitDiff(editable ? file.path : "", "working");
+  const diffAvailable = editable && trackedProbe.tracked;
+  // Bumped after a successful save so DiffView refetches.
+  const [diffRefreshKey, setDiffRefreshKey] = useState(0);
   // Force view mode for non-editable kinds (image / pdf / video / audio / binary).
-  const effectiveMode: Mode = editable ? mode : "view";
+  // Force out of diff mode if the file isn't diffable any more.
+  const effectiveMode: Mode = editable
+    ? mode === "diff" && !diffAvailable
+      ? "view"
+      : mode
+    : "view";
 
   // Wrap long lines in code/text view. Defaults: on for mobile readability,
   // off on desktop where horizontal scroll is fine. Persist per-session.
@@ -173,6 +197,8 @@ export function FileEditorPanel({
     try {
       await writeFile(file.path, content);
       setOriginal(content);
+      // Invalidate any cached diff so re-entering Diff mode re-fetches.
+      setDiffRefreshKey((n) => n + 1);
     } catch (err) {
       setError(mapError(err));
     } finally {
@@ -184,7 +210,7 @@ export function FileEditorPanel({
   // edit, restore the scrollTop of the inner container so they don't lose
   // their place in a long file.
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
-  const savedScrollByMode = useRef<Record<Mode, number>>({ view: 0, edit: 0 });
+  const savedScrollByMode = useRef<Record<Mode, number>>({ view: 0, diff: 0, edit: 0 });
   const lastModeRef = useRef<Mode>(effectiveMode);
   useEffect(() => {
     const prev = lastModeRef.current;
@@ -201,14 +227,23 @@ export function FileEditorPanel({
     }
   }, [effectiveMode]);
 
-  const handleToggleMode = useCallback(() => {
-    if (!editable) return;
-    setMode((m) => {
-      const next: Mode = m === "view" ? "edit" : "view";
-      lastModeByPath.set(file.path, next);
-      return next;
-    });
-  }, [editable, file.path]);
+  const handleChangeMode = useCallback(
+    (next: Mode) => {
+      if (!editable) return;
+      setMode(next);
+      lastModeByPath.set(file.path, { mode: next, against });
+    },
+    [editable, file.path, against],
+  );
+
+  const handleChangeAgainst = useCallback(
+    (next: DiffAgainst) => {
+      setAgainst(next);
+      const memo = lastModeByPath.get(file.path);
+      lastModeByPath.set(file.path, { mode: memo?.mode ?? mode, against: next });
+    },
+    [file.path, mode],
+  );
 
   const [copyAllOk, setCopyAllOk] = useState(false);
   const handleCopyAll = useCallback(async () => {
@@ -462,7 +497,10 @@ export function FileEditorPanel({
         onDragStart={onDragStart}
         showModeToggle={editable}
         mode={effectiveMode}
-        onToggleMode={editable ? handleToggleMode : undefined}
+        onChangeMode={editable ? handleChangeMode : undefined}
+        diffAvailable={diffAvailable}
+        against={against}
+        onChangeAgainst={handleChangeAgainst}
         showWrapToggle={effectiveMode === "view" && (kind === "code" || kind === "text")}
         wrap={wrap}
         onToggleWrap={() => setWrap((w) => !w)}
@@ -522,6 +560,9 @@ export function FileEditorPanel({
             content={content}
             wrap={wrap}
           />
+        )}
+        {!loading && !error && editable && effectiveMode === "diff" && (
+          <DiffView file={file} against={against} refreshKey={diffRefreshKey} />
         )}
         {!loading && !error && editable && effectiveMode === "edit" && (
           <CodeMirror value={content} onChange={setContent} path={file.path} onSave={handleSave} />

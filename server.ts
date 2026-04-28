@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import sdk from "./sdk-loader.js";
 const { query } = sdk as typeof import("@anthropic-ai/claude-agent-sdk");
 import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
+import { execGit, GitExecError } from "./src/lib/git/exec";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
 import { loadCredentialsSync as loadJiraCredentials } from "./src/lib/jira-custom-config";
@@ -228,6 +229,13 @@ interface ChatSession {
   /** Original cwd for resume (the cwd where this session was first created). */
   sessionCwd: string | null;
   /**
+   * Current git branch of `sessionCwd`. Refreshed on connect and at each
+   * turn_complete. Null when the cwd isn't a git repo or HEAD is detached.
+   * Surfaced to the UI so the branch list can mark which branches have
+   * active chats.
+   */
+  branchName: string | null;
+  /**
    * Current high-level status of this session. Mirrored into the shared
    * session-status-store so the REST /api/sessions/status endpoint can
    * surface it to the sidebar without going through a WebSocket.
@@ -383,6 +391,7 @@ class SessionManager {
         currentQuery: null,
         userAborted: false,
         sessionCwd: null,
+        branchName: null,
         status: "idle",
         lastUserMessage: "",
         wasInterrupted: false,
@@ -461,6 +470,7 @@ class SessionManager {
       currentQuery: null,
       userAborted: false,
       sessionCwd: persisted.sessionCwd ?? null,
+      branchName: persisted.branchName ?? null,
       // Status is always reset to "idle" on boot — whatever was in
       // flight is gone. The wasInterrupted flag is what tells the
       // client something was cut short.
@@ -535,6 +545,7 @@ class SessionManager {
       effort: session.effort,
       claudeSessionId: session.claudeSessionId,
       sessionCwd: session.sessionCwd,
+      branchName: session.branchName,
       eventHistory: session.eventHistory,
       sessionAllowedTools: Array.from(session.sessionAllowedTools),
       accumulatedText: session.accumulatedText,
@@ -542,6 +553,71 @@ class SessionManager {
       lastUserMessage: session.lastUserMessage,
       wasInterrupted: session.wasInterrupted,
     });
+  }
+
+  /**
+   * Probe the git branch of the session's cwd. Empty stdout means
+   * detached HEAD or non-repo — both stored as null. GitExecError is
+   * swallowed to keep the existing branchName value (e.g. transient
+   * filesystem hiccups shouldn't blank the chip).
+   */
+  private async refreshBranchName(session: ChatSession): Promise<void> {
+    if (!session.sessionCwd) return;
+    try {
+      const result = await execGit(["branch", "--show-current"], {
+        cwd: session.sessionCwd,
+        timeoutMs: 2000,
+      });
+      if (result.code !== 0) return;
+      const next = result.stdout.toString("utf-8").trim() || null;
+      if (next !== session.branchName) {
+        session.branchName = next;
+        this.queuePersist(session);
+      }
+    } catch (err) {
+      if (err instanceof GitExecError) return;
+      // Anything else: log but don't surface — branch detection is
+      // advisory, not load-bearing.
+      console.warn(`[session=${session.id}] refreshBranchName failed:`, (err as Error).message);
+    }
+  }
+
+  /**
+   * Slim per-session view used by the /api/sessions/branches route to
+   * mark active chats in the branch list. Mirrors the shape returned by
+   * the disk-fallback walk in that route so the client only needs one
+   * type.
+   */
+  listBranchSnapshots(): Array<{
+    sessionId: string;
+    claudeSessionId: string | null;
+    branchName: string | null;
+    sessionCwd: string | null;
+    status: SessionStatus;
+    display: string;
+  }> {
+    const out: Array<{
+      sessionId: string;
+      claudeSessionId: string | null;
+      branchName: string | null;
+      sessionCwd: string | null;
+      status: SessionStatus;
+      display: string;
+    }> = [];
+    const seen = new Set<ChatSession>();
+    for (const session of this.sessions.values()) {
+      if (seen.has(session)) continue;
+      seen.add(session);
+      out.push({
+        sessionId: session.id,
+        claudeSessionId: session.claudeSessionId,
+        branchName: session.branchName,
+        sessionCwd: session.sessionCwd,
+        status: session.status,
+        display: session.displayPreview || session.lastUserMessage.slice(0, 80) || "Chat",
+      });
+    }
+    return out;
   }
 
   connect(
@@ -594,6 +670,10 @@ class SessionManager {
     if (sessionCwd && !session.sessionCwd) {
       session.sessionCwd = sessionCwd;
     }
+
+    // Detect the current git branch in the background — informs the
+    // branch-list UI which chats are on which branch.
+    void this.refreshBranchName(session);
 
     // Send current state to the new client
     this.send(ws, { type: "ready" });
@@ -1543,6 +1623,9 @@ class SessionManager {
             subtype: msg.subtype,
             permissionDenials: msg.permission_denials || [],
           });
+          // Re-detect the branch in case the agent's run included a
+          // checkout — keeps the branch-list chip accurate.
+          void this.refreshBranchName(session);
           getAuditWriter()
             .session({
               type: "turn_complete",
@@ -2178,6 +2261,14 @@ setSessionManager(sessionManager);
 (
   globalThis as { __clawForceDisconnectSession?: (id: string) => boolean }
 ).__clawForceDisconnectSession = (id: string) => sessionManager.forceDisconnect(id);
+
+// Expose a slim per-session view (with branchName) so the
+// /api/sessions/branches route can mark active chats in the branch list.
+(
+  globalThis as {
+    __clawListSessionBranches?: () => ReturnType<typeof sessionManager.listBranchSnapshots>;
+  }
+).__clawListSessionBranches = () => sessionManager.listBranchSnapshots();
 
 // Rehydrate session state from disk so a container restart doesn't
 // wipe every in-flight conversation. Runs synchronously (well, fire

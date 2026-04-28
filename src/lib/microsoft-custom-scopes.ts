@@ -10,12 +10,10 @@ export const MS365_SCOPES = [
   "Contacts.ReadWrite",
   "Files.ReadWrite.All",
   "Tasks.ReadWrite",
-  // Teams scopes require admin consent in org tenants; included so the
-  // consent screen prompts for them. @softeria/ms-365-mcp-server degrades
-  // gracefully when they are absent (personal accounts, no admin consent).
-  "Teams.ReadBasic.All",
-  "ChannelMessage.Read.All",
-  "Chat.ReadWrite",
+  // Teams scopes (Teams.ReadBasic.All, ChannelMessage.Read.All, Chat.ReadWrite)
+  // require admin consent in every tenant and cannot be requested without it.
+  // Firm deployments can grant admin consent via Azure Portal after connecting,
+  // which makes Teams tools available automatically on the next sign-in.
 ];
 
 export const MS365_SCOPE_STRING = MS365_SCOPES.join(" ");

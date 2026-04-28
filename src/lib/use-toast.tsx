@@ -72,7 +72,8 @@ function push(kind: ToastKind, message: string, options?: ToastOptions): string 
   items = next;
   emit();
   if (typeof window !== "undefined") {
-    const ms = options?.durationMs ?? (options?.onClick ? NOTIFICATION_DISMISS_MS : AUTO_DISMISS_MS);
+    const ms =
+      options?.durationMs ?? (options?.onClick ? NOTIFICATION_DISMISS_MS : AUTO_DISMISS_MS);
     if (ms > 0) {
       window.setTimeout(() => dismiss(id), ms);
     }
@@ -123,7 +124,9 @@ function ToastRow({ item }: { item: ToastItem }) {
   const Icon = item.kind === "error" ? FiAlertTriangle : item.kind === "success" ? FiCheck : FiInfo;
 
   return (
-    <div className={`animate-menu-in flex min-w-0 max-w-[360px] items-center rounded-full shadow-lg ${color}`}>
+    <div
+      className={`animate-menu-in flex min-w-0 max-w-[360px] items-center rounded-full shadow-lg ${color}`}
+    >
       <button
         type="button"
         onClick={onPrimary}
@@ -155,8 +158,8 @@ export function ToastStack(): React.ReactElement | null {
   if (list.length === 0) return null;
   return (
     <div
-      className="pointer-events-none fixed left-1/2 top-20 flex -translate-x-1/2 flex-col items-center gap-2"
-      style={{ zIndex: Z_INDEX.TOAST }}
+      className="pointer-events-none fixed left-1/2 flex -translate-x-1/2 flex-col items-center gap-2"
+      style={{ zIndex: Z_INDEX.TOAST, top: "max(env(safe-area-inset-top, 0px), 80px)" }}
       aria-live="polite"
       aria-atomic="false"
     >

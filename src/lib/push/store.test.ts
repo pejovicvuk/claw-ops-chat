@@ -86,6 +86,25 @@ describe("PushStore", () => {
     expect(await store.list("a@x.com")).toHaveLength(0);
   });
 
+  it("clearAllAcrossUsers() drops every device for every user", async () => {
+    const path = join(dir, "subs.json");
+    const store = createPushStore({ path });
+    await store.upsert("a@x.com", sub("https://push/aa"), "A");
+    await store.upsert("a@x.com", sub("https://push/bb"), "B");
+    await store.upsert("c@x.com", sub("https://push/cc"), "C");
+    expect(await store.clearAllAcrossUsers()).toBe(3);
+    expect(await store.list("a@x.com")).toHaveLength(0);
+    expect(await store.list("c@x.com")).toHaveLength(0);
+    // Persists the empty state so the next instance also sees zero.
+    const fresh = createPushStore({ path });
+    expect(await fresh.list("a@x.com")).toHaveLength(0);
+  });
+
+  it("clearAllAcrossUsers() returns 0 when there is nothing to clear", async () => {
+    const store = createPushStore({ path: join(dir, "subs.json") });
+    expect(await store.clearAllAcrossUsers()).toBe(0);
+  });
+
   it("persists across instances", async () => {
     const path = join(dir, "subs.json");
     const a = createPushStore({ path });

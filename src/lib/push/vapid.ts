@@ -1,16 +1,31 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import webPush from "web-push";
+import { getPushStore } from "./store";
+import { getVapidStore } from "./vapid-store";
 
 /**
- * VAPID keypair management. Mirrors the SESSION_SECRET pattern in
- * `auth-server.ts`: read from env if present, otherwise generate fresh
- * and persist to `.env.local` (dev only — production is expected to
- * provision the keys via the container env).
+ * VAPID keypair management.
  *
- * The public key is shipped to clients (via /api/push/vapid-key) so
- * they can call `pushManager.subscribe({ applicationServerKey })`. The
- * private key never leaves the server.
+ * Resolution order:
+ *   1. `VAPID_PUBLIC_KEY` + `VAPID_PRIVATE_KEY` env (operator override).
+ *      Also written through to the persistent file so a later env-less
+ *      start still recovers the same pair.
+ *   2. `/root/.config/vapid-keys.json` via `vapid-store` (survives
+ *      container restarts via the bind-mounted /root volume).
+ *   3. Generate fresh, persist to the file, and **clear all existing
+ *      push subscriptions** — those were issued against a now-lost
+ *      keypair and every send would 401/403 from the upstream push
+ *      service ("Received unexpected response code"). The user must
+ *      re-enable on each device after this branch fires.
+ *
+ * Previously this function only checked env and held generated keys in
+ * `process.env`, so every container restart silently broke push
+ * delivery for every device. The file backing makes the keypair
+ * lifetime independent of the process lifetime.
+ *
+ * `getVapidKeys()` is now async (it has to read/write the file). All
+ * callers are already in async contexts.
  */
 
 interface VapidKeys {
@@ -21,7 +36,13 @@ interface VapidKeys {
 
 const IS_PRODUCTION = process.env.NODE_ENV === "production";
 
-function persistGeneratedKeys(keys: { publicKey: string; privateKey: string }): void {
+/**
+ * Best-effort write to `.env.local` so a `npm run dev` user sees the
+ * generated keys in their env file (matches the SESSION_SECRET pattern
+ * in `auth-server.ts`). Production loads from the file store, not
+ * `.env.local`, so this is a dev-only convenience.
+ */
+function persistGeneratedKeysToEnvFile(keys: { publicKey: string; privateKey: string }): void {
   if (IS_PRODUCTION) return;
   try {
     const envPath = join(process.cwd(), ".env.local");
@@ -43,35 +64,83 @@ function persistGeneratedKeys(keys: { publicKey: string; privateKey: string }): 
     }
     console.log("[push] Generated VAPID keypair and persisted to .env.local");
   } catch (err) {
-    console.warn("[push] Failed to persist VAPID keys:", err);
+    console.warn("[push] Failed to persist VAPID keys to .env.local:", err);
   }
 }
 
-let _cached: VapidKeys | null = null;
+let _cachedPromise: Promise<VapidKeys> | null = null;
 
-export function getVapidKeys(): VapidKeys {
-  if (_cached) return _cached;
+export function getVapidKeys(): Promise<VapidKeys> {
+  if (!_cachedPromise) _cachedPromise = init();
+  return _cachedPromise;
+}
+
+async function init(): Promise<VapidKeys> {
   let publicKey = process.env.VAPID_PUBLIC_KEY?.trim() || "";
   let privateKey = process.env.VAPID_PRIVATE_KEY?.trim() || "";
+  let source: "env" | "file" | "generated" = "env";
+
+  if (!publicKey || !privateKey) {
+    const stored = await getVapidStore().load();
+    if (stored) {
+      publicKey = stored.publicKey;
+      privateKey = stored.privateKey;
+      source = "file";
+    }
+  }
+
   if (!publicKey || !privateKey) {
     const generated = webPush.generateVAPIDKeys();
     publicKey = generated.publicKey;
     privateKey = generated.privateKey;
-    persistGeneratedKeys(generated);
-    process.env.VAPID_PUBLIC_KEY = publicKey;
-    process.env.VAPID_PRIVATE_KEY = privateKey;
+    source = "generated";
+    try {
+      await getVapidStore().save(generated);
+    } catch (err) {
+      console.warn("[push] failed to persist generated VAPID keys:", err);
+    }
+    persistGeneratedKeysToEnvFile(generated);
+    // Existing subscriptions reference an unrecoverable old keypair.
+    // Drop them so users re-enable and bind the new public key. No-op
+    // when the file is empty (first-ever start).
+    try {
+      const dropped = await getPushStore().clearAllAcrossUsers();
+      if (dropped > 0) {
+        console.warn(
+          `[push] Generated fresh VAPID keypair; cleared ${dropped} stale subscription(s). Users must re-enable notifications on each device.`,
+        );
+      }
+    } catch (err) {
+      console.warn("[push] failed to clear stale subscriptions on key generation:", err);
+    }
+  } else if (source === "env") {
+    // Defense-in-depth: when env supplies the keys, mirror them into the
+    // file so a future env-less start (a deploy without the var) still
+    // recovers the same keypair instead of silently regenerating.
+    try {
+      const stored = await getVapidStore().load();
+      if (!stored || stored.publicKey !== publicKey) {
+        await getVapidStore().save({ publicKey, privateKey });
+      }
+    } catch (err) {
+      console.warn("[push] failed to mirror env VAPID keys to file:", err);
+    }
   }
-  // Subject is required by Web Push spec — must be a mailto: or https:// URL
-  // identifying the app operator. We use a sane default that the user can
-  // override via env without re-generating keys.
+
+  process.env.VAPID_PUBLIC_KEY = publicKey;
+  process.env.VAPID_PRIVATE_KEY = privateKey;
+
   const subject =
     process.env.VAPID_SUBJECT?.trim() ||
     `mailto:${process.env.ALLOWED_EMAIL?.trim() || "admin@example.com"}`;
-  _cached = { publicKey, privateKey, subject };
+
   webPush.setVapidDetails(subject, publicKey, privateKey);
-  return _cached;
+  console.log(`[push] VAPID keys initialised (source=${source})`);
+
+  return { publicKey, privateKey, subject };
 }
 
-export function getVapidPublicKey(): string {
-  return getVapidKeys().publicKey;
+export async function getVapidPublicKey(): Promise<string> {
+  const keys = await getVapidKeys();
+  return keys.publicKey;
 }

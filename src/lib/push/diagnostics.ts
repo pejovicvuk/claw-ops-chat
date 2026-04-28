@@ -19,6 +19,14 @@ export interface DiagnosticsEntry {
   device: string;
   kind: PushEventKind;
   outcome: "sent" | "dropped" | "error";
+  /**
+   * HTTP status returned by the upstream push service. Set whenever the
+   * web-push call produced a `WebPushError` (success cases leave this
+   * undefined). Surfaced in the diagnostics panel so a 401 vs a 410
+   * vs a 5xx is visually distinguishable instead of all being labelled
+   * "error".
+   */
+  statusCode?: number;
   detail?: string;
 }
 

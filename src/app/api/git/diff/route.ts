@@ -1,4 +1,4 @@
-import { relative } from "path";
+import { dirname, relative } from "path";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { withAudit } from "@/lib/audit/api-wrap";
 import { execGit, GitExecError } from "@/lib/git/exec";
@@ -36,7 +36,7 @@ async function getHandler(request: Request): Promise<Response> {
 
   let repoRoot: string;
   try {
-    const top = await execGit(["rev-parse", "--show-toplevel"], { cwd: filePath });
+    const top = await execGit(["rev-parse", "--show-toplevel"], { cwd: dirname(filePath) });
     if (top.code !== 0) return Response.json(NOT_A_REPO);
     repoRoot = top.stdout.toString("utf-8").trim();
     if (!repoRoot) return Response.json(NOT_A_REPO);

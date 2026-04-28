@@ -59,6 +59,11 @@ interface FileBrowserProps {
   initialPath?: string;
   /** Called when the user navigates to a different directory. */
   onPathChange?: (path: string) => void;
+  /**
+   * Id of the chat currently selected in the UI. Threaded through to
+   * the git branch list so it can highlight the branch this chat is on.
+   */
+  selectedSessionId?: string | null;
 }
 
 const VIRTUALIZE_THRESHOLD = 500;
@@ -159,7 +164,7 @@ function ClampedMenu({ x, y, className, children, onClick }: ClampedMenuProps) {
 }
 
 export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(function FileBrowser(
-  { onFileClick, onFileOpen, onCopyPath, initialPath, onPathChange },
+  { onFileClick, onFileOpen, onCopyPath, initialPath, onPathChange, selectedSessionId },
   ref,
 ) {
   const { toast } = useToast();
@@ -639,7 +644,11 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           </div>
         ) : git.repoRoot ? (
           <div key="git" className="flex-1 min-h-0 animate-panel-in">
-            <GitPanelView git={git} repoRoot={git.repoRoot} />
+            <GitPanelView
+              git={git}
+              repoRoot={git.repoRoot}
+              selectedSessionId={selectedSessionId}
+            />
           </div>
         ) : null}
 

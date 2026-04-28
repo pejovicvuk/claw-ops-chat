@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -114,5 +114,72 @@ describe("PushStore", () => {
     expect(summary[0].isThisDevice).toBe(true);
     expect(JSON.stringify(summary[0])).not.toContain("https://push/secret");
     expect(JSON.stringify(summary[0])).not.toContain("p_");
+  });
+
+  it("upsert applies smartChat as the default focus behavior", async () => {
+    const store = createPushStore({ path: join(dir, "subs.json") });
+    const rec = await store.upsert("a@x.com", sub("https://push/x"), "Mac");
+    expect(rec.behavior.focusBehavior).toBe("smartChat");
+  });
+
+  it("upsert accepts and merges partial behavior", async () => {
+    const store = createPushStore({ path: join(dir, "subs.json") });
+    const rec = await store.upsert("a@x.com", sub("https://push/x"), "Mac", undefined, {
+      focusBehavior: "alwaysShow",
+    });
+    expect(rec.behavior.focusBehavior).toBe("alwaysShow");
+    const re = await store.upsert("a@x.com", sub("https://push/x"), "Mac");
+    expect(re.behavior.focusBehavior).toBe("alwaysShow");
+  });
+
+  it("updatePreferences patches behavior without disturbing events", async () => {
+    const store = createPushStore({ path: join(dir, "subs.json") });
+    const rec = await store.upsert("a@x.com", sub("https://push/x"), "Mac");
+    const updated = await store.updatePreferences("a@x.com", rec.id, {
+      behavior: { focusBehavior: "suppress" },
+    });
+    expect(updated?.behavior.focusBehavior).toBe("suppress");
+    expect(updated?.events.turnComplete).toBe(true);
+  });
+
+  it("listSummary exposes behavior", async () => {
+    const store = createPushStore({ path: join(dir, "subs.json") });
+    await store.upsert("a@x.com", sub("https://push/x"), "Mac", undefined, {
+      focusBehavior: "alwaysShow",
+    });
+    const summary = await store.listSummary("a@x.com");
+    expect(summary[0].behavior.focusBehavior).toBe("alwaysShow");
+  });
+
+  it("backfills missing behavior when loading a legacy JSON file and persists", async () => {
+    const path = join(dir, "subs.json");
+    await writeFile(
+      path,
+      JSON.stringify({
+        "a@x.com": [
+          {
+            id: "abc1234567890def",
+            endpoint: "https://push/x",
+            keys: { p256dh: "p", auth: "a" },
+            label: "Legacy Chrome",
+            createdAt: 1,
+            lastSeenAt: 1,
+            events: {
+              turnComplete: true,
+              permissionRequest: true,
+              error: true,
+              cronComplete: true,
+              monitoringAlert: true,
+            },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+    const store = createPushStore({ path });
+    const list = await store.list("a@x.com");
+    expect(list[0].behavior.focusBehavior).toBe("smartChat");
+    const onDisk = JSON.parse(await readFile(path, "utf-8"));
+    expect(onDisk["a@x.com"][0].behavior.focusBehavior).toBe("smartChat");
   });
 });

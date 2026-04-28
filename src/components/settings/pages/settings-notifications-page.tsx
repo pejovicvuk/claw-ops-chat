@@ -16,12 +16,39 @@ import {
   FiSmartphone,
   FiTrash2,
 } from "react-icons/fi";
-import { ALL_EVENT_KINDS, type EventPreferences, type PushEventKind } from "@/lib/push/types";
+import {
+  ALL_EVENT_KINDS,
+  type BehaviorPreferences,
+  type EventPreferences,
+  type FocusBehavior,
+  type PushEventKind,
+} from "@/lib/push/types";
 import { usePushDiagnostics } from "@/lib/push/use-push-diagnostics";
 import { usePushSubscription } from "@/lib/push/use-push-subscription";
 import { useSwRegistrationStatus } from "@/lib/push/use-sw-registration";
 import { toast } from "@/lib/use-toast";
 import type { DeviceSummary } from "@/lib/push/types";
+
+const FOCUS_BEHAVIOR_LABELS: Record<FocusBehavior, { title: string; description: string }> = {
+  smartChat: {
+    title: "Smart per-chat (recommended)",
+    description:
+      "Show a system notification unless the focused tab is on the same chat the alert is for. " +
+      "Notifications for other chats reach you even with the app open.",
+  },
+  alwaysShow: {
+    title: "Always show",
+    description:
+      "Always fire a system notification — even when this tab is focused on the same chat.",
+  },
+  suppress: {
+    title: "Quiet when tab focused",
+    description:
+      "When any tab is focused, only show an in-app toast — no system notification. The previous default.",
+  },
+};
+
+const STALE_DEVICE_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 
 const EVENT_LABELS: Record<PushEventKind, { title: string; description: string }> = {
   turnComplete: {
@@ -181,6 +208,18 @@ export function SettingsNotificationsPage() {
               />
             ))}
           </div>
+          <div className="mt-4 border-t border-canvas-border pt-3">
+            <span className="mb-2 block text-[11px] font-medium uppercase tracking-wide text-canvas-muted">
+              When tab is focused
+            </span>
+            <FocusBehaviorRadio
+              groupId={`focus-this-${sub.thisDevice.id}`}
+              value={sub.thisDevice.behavior.focusBehavior}
+              onChange={(v) =>
+                void sub.setBehavior({ focusBehavior: v } as Partial<BehaviorPreferences>)
+              }
+            />
+          </div>
         </div>
       )}
 
@@ -212,6 +251,11 @@ export function SettingsNotificationsPage() {
                 onTogglePref={(kind, value) =>
                   void sub.setDevicePrefs(d.id, { [kind]: value } as Partial<EventPreferences>)
                 }
+                onChangeFocusBehavior={(v) =>
+                  void sub.setDeviceBehavior(d.id, {
+                    focusBehavior: v,
+                  } as Partial<BehaviorPreferences>)
+                }
               />
             ))}
           </div>
@@ -219,9 +263,10 @@ export function SettingsNotificationsPage() {
       )}
 
       <p className="text-[10px] text-canvas-muted">
-        Notifications are suppressed automatically when this tab is focused — an in-app toast
-        appears instead. The server stores subscriptions at{" "}
-        <code>/root/.config/push-subscriptions.json</code>; never sent to a third party.
+        Default behavior: when this tab is focused on a different chat than the one the notification
+        is for, a system notification still fires; only same-chat alerts degrade to an in-app toast.
+        Each device can override this in its own preferences. Subscriptions live at{" "}
+        <code>/root/.config/push-subscriptions.json</code>; nothing is sent to a third party.
       </p>
     </div>
   );
@@ -445,11 +490,18 @@ interface DeviceRowProps {
   device: DeviceSummary;
   onRemove: () => void;
   onTogglePref: (kind: PushEventKind, value: boolean) => void;
+  onChangeFocusBehavior: (value: FocusBehavior) => void;
 }
 
-function DeviceRow({ device, onRemove, onTogglePref }: DeviceRowProps) {
+function DeviceRow({ device, onRemove, onTogglePref, onChangeFocusBehavior }: DeviceRowProps) {
   const [expanded, setExpanded] = useState(false);
+  // Capture render-time "now" once so the staleness check stays a pure
+  // expression (react-hooks/purity disallows Date.now() in render). Good
+  // enough for an at-a-glance UI hint — the user can re-open settings to
+  // get a fresh read.
+  const [renderedAt] = useState(() => Date.now());
   const enabledCount = ALL_EVENT_KINDS.filter((k) => device.events[k]).length;
+  const isStale = renderedAt - device.lastSeenAt > STALE_DEVICE_AFTER_MS;
 
   return (
     <div className="overflow-hidden rounded-lg border border-canvas-border bg-canvas-bg">
@@ -473,6 +525,15 @@ function DeviceRow({ device, onRemove, onTogglePref }: DeviceRowProps) {
                 <span className="inline-flex items-center gap-0.5 rounded bg-accent/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-accent">
                   <FiCheck size={8} />
                   this
+                </span>
+              )}
+              {isStale && !device.isThisDevice && (
+                <span
+                  className="inline-flex items-center gap-0.5 rounded bg-yellow-500/15 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wide text-yellow-700 dark:text-yellow-400"
+                  title="This device hasn't checked in for over a week. Open the app on that device to refresh, or remove it if it's gone."
+                >
+                  <FiAlertTriangle size={8} />
+                  stale
                 </span>
               )}
             </div>
@@ -502,8 +563,58 @@ function DeviceRow({ device, onRemove, onTogglePref }: DeviceRowProps) {
               onChange={(v) => onTogglePref(kind, v)}
             />
           ))}
+          <div className="mt-2 border-t border-canvas-border pt-2">
+            <span className="mb-1.5 block text-[10px] font-medium uppercase tracking-wide text-canvas-muted">
+              When tab is focused
+            </span>
+            <FocusBehaviorRadio
+              groupId={`focus-${device.id}`}
+              value={device.behavior.focusBehavior}
+              onChange={onChangeFocusBehavior}
+            />
+          </div>
         </div>
       )}
+    </div>
+  );
+}
+
+interface FocusBehaviorRadioProps {
+  groupId: string;
+  value: FocusBehavior;
+  onChange: (next: FocusBehavior) => void;
+}
+
+function FocusBehaviorRadio({ groupId, value, onChange }: FocusBehaviorRadioProps) {
+  return (
+    <div className="space-y-1.5">
+      {(Object.keys(FOCUS_BEHAVIOR_LABELS) as FocusBehavior[]).map((behavior) => {
+        const meta = FOCUS_BEHAVIOR_LABELS[behavior];
+        const id = `${groupId}-${behavior}`;
+        return (
+          <label
+            key={behavior}
+            htmlFor={id}
+            className="flex cursor-pointer items-start gap-3 rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 hover:bg-canvas-surface-hover"
+          >
+            <input
+              id={id}
+              type="radio"
+              name={groupId}
+              value={behavior}
+              checked={value === behavior}
+              onChange={() => onChange(behavior)}
+              className="mt-0.5 h-4 w-4 cursor-pointer accent-accent"
+            />
+            <div className="min-w-0 flex-1">
+              <span className="block text-[12px] font-medium text-canvas-fg">{meta.title}</span>
+              <span className="block text-[10px] leading-relaxed text-canvas-muted">
+                {meta.description}
+              </span>
+            </div>
+          </label>
+        );
+      })}
     </div>
   );
 }

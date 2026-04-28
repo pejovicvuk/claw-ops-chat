@@ -1,7 +1,9 @@
-// Bumped to v3 when the push handler learned about `forceShow` (so the
-// test button can produce a system notification even on a focused tab).
-// The activate handler below cleans up stale caches on every bump.
-const CACHE_NAME = "claw-chat-v3";
+// Bumped to v4 when the push handler learned about `focusBehavior`
+// ("alwaysShow" | "smartChat" | "suppress") and per-tab "active chat"
+// so a focused tab on chat A still gets a system notification for
+// chat B. The activate handler below cleans up stale caches on every
+// bump.
+const CACHE_NAME = "claw-chat-v4";
 
 const PRECACHE_URLS = ["/chat", "/chat/login"];
 
@@ -71,6 +73,176 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
+/* ───────────────────────── Active-chat tracking ─────────────────────────
+ *
+ * The push handler needs to know which chat each focused tab is viewing
+ * so `focusBehavior: "smartChat"` can suppress only when the focused tab
+ * is on the same chat as the push. Clients post their current chat via
+ * `postMessage({kind:"set-active-chat", chatId})`.
+ *
+ * Service-worker module scope is wiped on idle eviction (Chrome ~30 s),
+ * so the map is mirrored to IndexedDB. On push wake, we lazy-load from
+ * IDB and prune entries whose client.id is no longer alive (closed tab).
+ * If no client has reported its chat yet (cold push before any tab
+ * reconnected), `smartChat` falls open to "show" — better than silently
+ * suppressing.
+ */
+
+const IDB_NAME = "claw-chat-sw";
+const IDB_STORE = "activeChats";
+const activeChatByClientId = new Map();
+let activeChatLoaded = false;
+
+function openIdb() {
+  return new Promise((resolve, reject) => {
+    let req;
+    try {
+      req = indexedDB.open(IDB_NAME, 1);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    req.onupgradeneeded = () => {
+      try {
+        req.result.createObjectStore(IDB_STORE);
+      } catch {
+        /* ignore — already exists */
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function idbReadAll() {
+  let db;
+  try {
+    db = await openIdb();
+  } catch {
+    return new Map();
+  }
+  return new Promise((resolve) => {
+    const out = new Map();
+    let tx;
+    try {
+      tx = db.transaction(IDB_STORE, "readonly");
+    } catch {
+      resolve(out);
+      return;
+    }
+    const store = tx.objectStore(IDB_STORE);
+    const req = store.openCursor();
+    req.onsuccess = () => {
+      const cursor = req.result;
+      if (cursor) {
+        out.set(String(cursor.key), cursor.value);
+        cursor.continue();
+      } else {
+        resolve(out);
+      }
+    };
+    req.onerror = () => resolve(out);
+  });
+}
+
+async function idbWrite(clientId, chatId) {
+  let db;
+  try {
+    db = await openIdb();
+  } catch {
+    return;
+  }
+  await new Promise((resolve) => {
+    let tx;
+    try {
+      tx = db.transaction(IDB_STORE, "readwrite");
+    } catch {
+      resolve();
+      return;
+    }
+    const store = tx.objectStore(IDB_STORE);
+    if (chatId === null || chatId === undefined) {
+      store.delete(clientId);
+    } else {
+      store.put(chatId, clientId);
+    }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.onabort = () => resolve();
+  });
+}
+
+async function idbDeleteMany(clientIds) {
+  if (!clientIds.length) return;
+  let db;
+  try {
+    db = await openIdb();
+  } catch {
+    return;
+  }
+  await new Promise((resolve) => {
+    let tx;
+    try {
+      tx = db.transaction(IDB_STORE, "readwrite");
+    } catch {
+      resolve();
+      return;
+    }
+    const store = tx.objectStore(IDB_STORE);
+    for (const id of clientIds) store.delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.onabort = () => resolve();
+  });
+}
+
+async function ensureActiveChatLoaded() {
+  if (activeChatLoaded) return;
+  const fromIdb = await idbReadAll();
+  for (const [k, v] of fromIdb) {
+    if (!activeChatByClientId.has(k)) activeChatByClientId.set(k, v);
+  }
+  activeChatLoaded = true;
+}
+
+/**
+ * Drop entries whose clientId is no longer in the live window list.
+ * Called inside the push handler after `clients.matchAll()` so stale
+ * tabs (closed without sending a chatId:null) can't keep suppressing
+ * forever.
+ */
+async function pruneActiveChats(liveWins) {
+  const live = new Set(liveWins.map((w) => w.id));
+  const dead = [];
+  for (const id of activeChatByClientId.keys()) {
+    if (!live.has(id)) dead.push(id);
+  }
+  for (const id of dead) activeChatByClientId.delete(id);
+  if (dead.length) await idbDeleteMany(dead);
+}
+
+self.addEventListener("message", (event) => {
+  const data = event && event.data;
+  if (!data || typeof data.kind !== "string") return;
+  if (data.kind === "set-active-chat") {
+    const sourceId = event.source && event.source.id;
+    if (!sourceId) return;
+    const chatId = data.chatId;
+    event.waitUntil(
+      (async () => {
+        await ensureActiveChatLoaded();
+        if (chatId === null || chatId === undefined || chatId === "") {
+          activeChatByClientId.delete(sourceId);
+          await idbWrite(sourceId, null);
+        } else {
+          activeChatByClientId.set(sourceId, String(chatId));
+          await idbWrite(sourceId, String(chatId));
+        }
+      })(),
+    );
+  }
+});
+
 /**
  * Build a stable per-event tag so independent permission requests /
  * report completions don't collapse onto the same on-screen toast.
@@ -83,11 +255,34 @@ function tagFor(data) {
   return key ? `${kind}:${key}` : kind;
 }
 
+/**
+ * Decide whether the SW should suppress the system notification given
+ * the focused windows and the requested focus behavior.
+ *
+ *  - alwaysShow → never suppress.
+ *  - suppress   → suppress whenever any window is focused.
+ *  - smartChat  → suppress only when at least one focused window is
+ *                 viewing the same chatId the push is for. Falls open
+ *                 to "show" when no chatId is supplied (e.g. cron) or
+ *                 when no focused tab has reported its active chat.
+ *
+ * Returns true to suppress (in-app toast), false to show.
+ */
+function shouldSuppress(focusBehavior, wins, chatId) {
+  if (focusBehavior === "alwaysShow") return false;
+  const focused = wins.filter((w) => w.visibilityState === "visible" && w.focused);
+  if (focused.length === 0) return false;
+  if (focusBehavior === "suppress") return true;
+  // smartChat (default)
+  if (!chatId) return false;
+  return focused.some((w) => activeChatByClientId.get(w.id) === chatId);
+}
+
 /* ───────────────────────── Web Push ─────────────────────────
- * Handle a push payload from the server. If any window is
- * already focused on the chat, suppress the system notification
- * and forward the data to the page so it can show an in-app
- * toast instead — the user is already looking at the app.
+ * Handle a push payload from the server. Decision tree:
+ *   1. closeOnly → dismiss matching notification, never show.
+ *   2. forceShow → bypass suppression (used by test endpoint).
+ *   3. focusBehavior → alwaysShow / smartChat / suppress.
  */
 self.addEventListener("push", (event) => {
   let data = {};
@@ -137,13 +332,22 @@ self.addEventListener("push", (event) => {
         type: "window",
         includeUncontrolled: true,
       });
-      const focused = wins.some((w) => w.visibilityState === "visible" && w.focused);
+      await ensureActiveChatLoaded();
+      await pruneActiveChats(wins);
+
+      const focusBehavior =
+        typeof data.focusBehavior === "string" ? data.focusBehavior : "smartChat";
+
       // forceShow bypasses the focused-tab suppression entirely. Used by
       // the test endpoint so a user clicking "Send test" while looking
       // at the settings page actually sees a system notification —
       // otherwise the test path silently degrades to an in-app toast and
       // the user can't tell whether their OS-level notifications work.
-      if (focused && !data.forceShow) {
+      const suppress =
+        !data.forceShow &&
+        shouldSuppress(focusBehavior, wins, data.chatId ? String(data.chatId) : null);
+
+      if (suppress) {
         for (const w of wins) {
           try {
             w.postMessage({ kind: "push-suppressed", data });
@@ -153,6 +357,7 @@ self.addEventListener("push", (event) => {
         }
         return;
       }
+
       const title = data.title || "Claw Chat";
       const body = data.body || "";
       await self.registration.showNotification(title, {

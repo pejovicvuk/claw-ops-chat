@@ -1196,6 +1196,7 @@ class SessionManager {
             kind: "permissionRequest",
             url: navUrls.chat(session.id),
             tagKey: session.id,
+            chatId: session.id,
           },
           "permissionRequest",
         );
@@ -1656,6 +1657,7 @@ class SessionManager {
                 kind: "error",
                 url: navUrls.chat(session.id),
                 tagKey: session.id,
+                chatId: session.id,
               },
               "error",
             );
@@ -1668,6 +1670,7 @@ class SessionManager {
                 kind: "turnComplete",
                 url: navUrls.chat(session.id),
                 tagKey: session.id,
+                chatId: session.id,
               },
               "turnComplete",
             );
@@ -1824,6 +1827,7 @@ class SessionManager {
             kind: "error",
             url: navUrls.chat(session.id),
             tagKey: session.id,
+            chatId: session.id,
           },
           "error",
         );

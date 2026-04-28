@@ -1,6 +1,7 @@
 "use client";
 
 import { ThemeProvider } from "next-themes";
+import { ActiveChatBroadcaster } from "@/components/notifications/active-chat-broadcaster";
 import { NotificationListener } from "@/components/notifications/notification-listener";
 import { useRegisterServiceWorker } from "@/lib/push/use-sw-registration";
 import { ToastStack } from "@/lib/use-toast";
@@ -17,6 +18,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <ServiceWorkerBoot />
       <NotificationListener />
+      <ActiveChatBroadcaster />
       {children}
       <ToastStack />
     </ThemeProvider>

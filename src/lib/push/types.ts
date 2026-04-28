@@ -29,6 +29,30 @@ export const DEFAULT_PREFERENCES: EventPreferences = {
   monitoringAlert: true,
 };
 
+/**
+ * How the SW should behave when a push arrives and the tab is focused.
+ *
+ * - `alwaysShow`  — system notification fires every time, even when the
+ *                   focused tab is on the same chat the push is for.
+ * - `smartChat`   — system notification fires when no tab is focused OR
+ *                   when the focused tab is viewing a different chat.
+ *                   In-app toast only when focused on the same chat.
+ *                   This is the default.
+ * - `suppress`    — system notification only when no tab is focused.
+ *                   Any focused tab degrades to an in-app toast.
+ */
+export type FocusBehavior = "alwaysShow" | "smartChat" | "suppress";
+
+export const ALL_FOCUS_BEHAVIORS: FocusBehavior[] = ["alwaysShow", "smartChat", "suppress"];
+
+export interface BehaviorPreferences {
+  focusBehavior: FocusBehavior;
+}
+
+export const DEFAULT_BEHAVIOR: BehaviorPreferences = {
+  focusBehavior: "smartChat",
+};
+
 export interface PushKeys {
   p256dh: string;
   auth: string;
@@ -49,6 +73,7 @@ export interface DeviceRecord {
   createdAt: number;
   lastSeenAt: number;
   events: EventPreferences;
+  behavior: BehaviorPreferences;
 }
 
 /**
@@ -61,6 +86,7 @@ export interface DeviceSummary {
   createdAt: number;
   lastSeenAt: number;
   events: EventPreferences;
+  behavior: BehaviorPreferences;
   /** Whether this is the calling browser (matches the supplied endpoint). */
   isThisDevice?: boolean;
 }
@@ -91,4 +117,17 @@ export interface PushPayload {
    * their OS-level notifications work without alt-tabbing first.
    */
   forceShow?: boolean;
+  /**
+   * The chat session this notification is about. Used by the SW with
+   * `focusBehavior: "smartChat"` to decide whether the focused tab is
+   * viewing the same chat (suppress) or a different one (show). Absent
+   * for non-chat events (cron, monitoring) — those fall through to "show".
+   */
+  chatId?: string;
+  /**
+   * Per-device focus behavior, injected by the server from the device's
+   * stored `BehaviorPreferences` so the SW doesn't need to read IndexedDB
+   * on the push critical path. Defaults to `smartChat` when missing.
+   */
+  focusBehavior?: FocusBehavior;
 }

@@ -3,7 +3,9 @@ import { existsSync, mkdirSync } from "fs";
 import { readFile, rename, writeFile } from "fs/promises";
 import { dirname } from "path";
 import {
+  DEFAULT_BEHAVIOR,
   DEFAULT_PREFERENCES,
+  type BehaviorPreferences,
   type DeviceRecord,
   type DeviceSummary,
   type EventPreferences,
@@ -35,11 +37,16 @@ interface PushStore {
     sub: PushSubscriptionInput,
     label: string,
     events?: Partial<EventPreferences>,
+    behavior?: Partial<BehaviorPreferences>,
   ): Promise<DeviceRecord>;
   updatePreferences(
     email: string,
     id: string,
-    patch: { label?: string; events?: Partial<EventPreferences> },
+    patch: {
+      label?: string;
+      events?: Partial<EventPreferences>;
+      behavior?: Partial<BehaviorPreferences>;
+    },
   ): Promise<DeviceRecord | null>;
   remove(email: string, id: string): Promise<boolean>;
   removeByEndpoint(endpoint: string): Promise<void>;
@@ -77,6 +84,7 @@ export function toSummary(record: DeviceRecord, currentEndpoint?: string): Devic
     createdAt: record.createdAt,
     lastSeenAt: record.lastSeenAt,
     events: record.events,
+    behavior: record.behavior,
     isThisDevice: currentEndpoint ? record.endpoint === currentEndpoint : undefined,
   };
 }
@@ -97,6 +105,7 @@ export function createPushStore(opts: PushStoreOptions = {}): PushStore {
     if (state.loaded) return;
     if (state.loadingPromise) return state.loadingPromise;
     state.loadingPromise = (async () => {
+      let needsPersist = false;
       try {
         if (!existsSync(path)) {
           state.loaded = true;
@@ -105,13 +114,29 @@ export function createPushStore(opts: PushStoreOptions = {}): PushStore {
         const raw = await readFile(path, "utf-8");
         const parsed = JSON.parse(raw) as StoredShape;
         for (const [email, devices] of Object.entries(parsed)) {
-          state.byEmail.set(email, devices);
+          // Backfill `behavior` on devices written before the field
+          // existed so the in-memory shape matches `DeviceRecord`. Track
+          // whether anything changed so we can converge the JSON file
+          // once instead of re-applying defaults on every load.
+          const filled = devices.map((d) => {
+            if (d.behavior) return d;
+            needsPersist = true;
+            return { ...d, behavior: { ...DEFAULT_BEHAVIOR } };
+          });
+          state.byEmail.set(email, filled);
         }
       } catch (err) {
         console.warn("[push] failed to load subscriptions, starting empty:", err);
       } finally {
         state.loaded = true;
         state.loadingPromise = null;
+      }
+      if (needsPersist) {
+        try {
+          await persist();
+        } catch (err) {
+          console.warn("[push] failed to persist behavior backfill:", err);
+        }
       }
     })();
     return state.loadingPromise;
@@ -151,7 +176,7 @@ export function createPushStore(opts: PushStoreOptions = {}): PushStore {
       return devices.find((d) => d.id === id) ?? null;
     },
 
-    async upsert(email, sub, label, events) {
+    async upsert(email, sub, label, events, behavior) {
       await ensureLoaded();
       const id = deviceIdFor(sub.endpoint);
       const now = Date.now();
@@ -168,6 +193,11 @@ export function createPushStore(opts: PushStoreOptions = {}): PushStore {
           ...DEFAULT_PREFERENCES,
           ...(idx >= 0 ? existing[idx].events : {}),
           ...(events ?? {}),
+        },
+        behavior: {
+          ...DEFAULT_BEHAVIOR,
+          ...(idx >= 0 ? existing[idx].behavior : {}),
+          ...(behavior ?? {}),
         },
       };
       if (idx >= 0) existing[idx] = merged;
@@ -187,6 +217,7 @@ export function createPushStore(opts: PushStoreOptions = {}): PushStore {
         ...devices[idx],
         label: patch.label ?? devices[idx].label,
         events: { ...devices[idx].events, ...(patch.events ?? {}) },
+        behavior: { ...devices[idx].behavior, ...(patch.behavior ?? {}) },
         lastSeenAt: Date.now(),
       };
       devices[idx] = updated;

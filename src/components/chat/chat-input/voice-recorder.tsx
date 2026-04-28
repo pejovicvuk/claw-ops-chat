@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiLoader, FiMic, FiSquare } from "react-icons/fi";
 import { authFetch } from "@/lib/auth";
+import { VoiceWave } from "./voice-wave";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -16,6 +17,12 @@ interface VoiceRecorderProps {
    * textarea.
    */
   onTranscribed: (text: string) => void;
+  /**
+   * Fires when the recorder enters / leaves the active recording state.
+   * The parent uses this to hide the textarea while recording (the wave
+   * pill takes its place) and to lock other affordances.
+   */
+  onRecordingChange?: (isRecording: boolean) => void;
   /** Disable the button while the host (e.g. ChatInput) is offline. */
   disabled?: boolean;
 }
@@ -52,34 +59,55 @@ function pickMimeType(): string | undefined {
 }
 
 /**
- * Mic button for the chat composer. Renders nothing unless STT is
- * enabled in settings AND a key for the configured provider is saved.
+ * Mic button + recording UI for the chat composer. Renders nothing
+ * unless STT is enabled in settings AND a key for the configured
+ * provider is saved.
  *
  * Lifecycle:
  *   1. Mount → GET /api/stt/settings → decide whether to render at all.
- *   2. Click idle → getUserMedia + start MediaRecorder.
- *   3. Click recording → stop, gather blob, POST to /api/stt/transcribe.
+ *   2. Click idle → getUserMedia + start MediaRecorder. Replace the
+ *      mic button with a wide pill containing the live wave + timer +
+ *      stop button; emit onRecordingChange(true) so the parent can
+ *      hide the textarea.
+ *   3. Click stop → finalise blob, POST to /api/stt/transcribe.
  *   4. On success → onTranscribed(transcript [+ summary]).
- *
- * No persistent storage, no waveform — the source dictaphone's full UX
- * is overkill for an inline chat input.
  */
-export function VoiceRecorder({ onTranscribed, disabled = false }: VoiceRecorderProps) {
+export function VoiceRecorder({
+  onTranscribed,
+  onRecordingChange,
+  disabled = false,
+}: VoiceRecorderProps) {
   const [settings, setSettings] = useState<PublicSettings | null>(null);
   const [state, setState] = useState<RecorderState>("idle");
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const recorderRef = useRef<MediaRecorder | null>(null);
+  // Stream is state (not just ref) because the VoiceWave child reacts
+  // to it — the analyser tears down when the stream changes to null.
+  const [stream, setStream] = useState<MediaStream | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const mimeRef = useRef<string | undefined>(undefined);
   const tickRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const startedAtRef = useRef<number>(0);
 
-  // Fetch settings on mount + whenever the settings overlay closes (we
-  // listen for visibilitychange + a window 'focus' event to cheaply
-  // refresh after the user changes settings without exposing a global
-  // settings store).
+  // Keep the ref in sync with state so cleanup paths can stop tracks
+  // without taking `stream` as a dep (which would re-create callbacks
+  // on every state-flip).
+  useEffect(() => {
+    streamRef.current = stream;
+  }, [stream]);
+
+  // Notify parent on recording start/stop so it can collapse the textarea.
+  const wasRecordingRef = useRef(false);
+  useEffect(() => {
+    const isRecording = state === "recording";
+    if (isRecording !== wasRecordingRef.current) {
+      wasRecordingRef.current = isRecording;
+      onRecordingChange?.(isRecording);
+    }
+  }, [state, onRecordingChange]);
+
   const refresh = useCallback(async () => {
     try {
       const res = await authFetch(`${BASE}/api/stt/settings`);
@@ -109,7 +137,7 @@ export function VoiceRecorder({ onTranscribed, disabled = false }: VoiceRecorder
       tickRef.current = null;
     }
     streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
+    setStream(null);
     recorderRef.current = null;
     chunksRef.current = [];
   }, []);
@@ -123,18 +151,16 @@ export function VoiceRecorder({ onTranscribed, disabled = false }: VoiceRecorder
     setError(null);
     setState("starting");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const next = await navigator.mediaDevices.getUserMedia({
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
         },
       });
-      streamRef.current = stream;
+      setStream(next);
       const mime = pickMimeType();
       mimeRef.current = mime;
-      const recorder = mime
-        ? new MediaRecorder(stream, { mimeType: mime })
-        : new MediaRecorder(stream);
+      const recorder = mime ? new MediaRecorder(next, { mimeType: mime }) : new MediaRecorder(next);
       recorderRef.current = recorder;
       chunksRef.current = [];
 
@@ -177,7 +203,6 @@ export function VoiceRecorder({ onTranscribed, disabled = false }: VoiceRecorder
       tickRef.current = null;
     }
 
-    // Wait for the final chunk before assembling the blob.
     await new Promise<void>((resolve) => {
       recorder.addEventListener(
         "stop",
@@ -194,7 +219,7 @@ export function VoiceRecorder({ onTranscribed, disabled = false }: VoiceRecorder
     });
 
     streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
+    setStream(null);
 
     const blob = new Blob(chunksRef.current, {
       type: mimeRef.current ?? "audio/webm",
@@ -247,10 +272,28 @@ export function VoiceRecorder({ onTranscribed, disabled = false }: VoiceRecorder
   const isBusy = state === "starting" || state === "transcribing";
   const isDisabled = disabled || isBusy;
 
-  const onClick = () => {
-    if (isRecording) void stopAndTranscribe();
-    else void start();
-  };
+  if (isRecording) {
+    // Wide pill: stretches to fill the space the textarea vacated.
+    return (
+      <div className="mb-0.5 flex h-9 min-w-0 flex-1 items-center gap-2 rounded-full border border-canvas-border bg-canvas-surface px-2.5">
+        <VoiceWave stream={stream} className="min-w-0 flex-1" />
+        <span aria-live="polite" className="shrink-0 font-mono text-[11px] text-canvas-fg/80">
+          {formatElapsed(elapsed)}
+        </span>
+        <button
+          type="button"
+          onClick={() => void stopAndTranscribe()}
+          title="Stop & transcribe"
+          aria-label="Stop recording"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-red-500 text-white transition-colors hover:bg-red-600"
+        >
+          <FiSquare size={9} fill="currentColor" />
+        </button>
+      </div>
+    );
+  }
+
+  const onClick = () => void start();
 
   return (
     <div className="relative flex shrink-0 items-center">
@@ -258,36 +301,16 @@ export function VoiceRecorder({ onTranscribed, disabled = false }: VoiceRecorder
         type="button"
         onClick={onClick}
         disabled={isDisabled}
-        title={
-          isRecording
-            ? `Stop & transcribe (${formatElapsed(elapsed)})`
-            : isBusy
-              ? "Working…"
-              : "Record voice message"
-        }
-        aria-label={isRecording ? "Stop recording" : "Record voice message"}
-        className={`mb-0.5 flex h-8 w-8 items-center justify-center rounded-full transition-colors duration-150 ${
-          isRecording
-            ? "bg-red-500 text-white hover:bg-red-600"
-            : "text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-        } disabled:opacity-40`}
+        title={isBusy ? "Working…" : "Record voice message"}
+        aria-label="Record voice message"
+        className="mb-0.5 flex h-8 w-8 items-center justify-center rounded-full text-canvas-muted transition-colors duration-150 hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
       >
         {state === "transcribing" ? (
           <FiLoader size={14} className="animate-spin" />
-        ) : isRecording ? (
-          <FiSquare size={11} fill="currentColor" />
         ) : (
           <FiMic size={15} />
         )}
       </button>
-      {isRecording && (
-        <span
-          aria-live="polite"
-          className="pointer-events-none absolute right-9 top-1/2 -translate-y-1/2 whitespace-nowrap rounded-md bg-red-500 px-1.5 py-0.5 font-mono text-[10px] text-white"
-        >
-          {formatElapsed(elapsed)}
-        </span>
-      )}
       {error && state === "idle" && (
         <span
           role="alert"

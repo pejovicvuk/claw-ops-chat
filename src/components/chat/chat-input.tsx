@@ -35,6 +35,10 @@ const ACTIVE_STATUSES = new Set<ClaudeStatus>([
   "awaiting_input",
 ]);
 
+/** Auto-grow ceiling for the textarea, in pixels. */
+const DEFAULT_COMPOSER_MAX_HEIGHT = 120;
+const EXPANDED_COMPOSER_MAX_HEIGHT = 240;
+
 export function ChatInput({
   status,
   onSend,
@@ -48,6 +52,15 @@ export function ChatInput({
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState<number | null>(null);
+  // While recording, the wave pill takes the textarea's slot. We hide
+  // (not unmount) the textarea so the user's draft + caret position
+  // survive the round-trip.
+  const [isRecording, setIsRecording] = useState(false);
+  // Auto-grow ceiling for the textarea. Default 120px keeps the
+  // composer compact for typed messages; when a voice transcript is
+  // inserted we bump it to 240px so the user can read + edit longer
+  // dictated text without scrolling. Reset on send.
+  const [composerMaxHeight, setComposerMaxHeight] = useState(DEFAULT_COMPOSER_MAX_HEIGHT);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<MentionPopoverHandle>(null);
@@ -79,7 +92,7 @@ export function ChatInput({
     const el = textareaRef.current;
     if (el) {
       el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+      el.style.height = `${Math.min(el.scrollHeight, composerMaxHeight)}px`;
       el.focus();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -103,14 +116,16 @@ export function ChatInput({
 
   // Append (not replace) transcribed voice text into the composer. Joins
   // with a single space when the textarea already has content so the user
-  // can dictate in chunks. Resyncs the auto-grow height on the next tick.
+  // can dictate in chunks. Bumps the auto-grow ceiling to 240px so longer
+  // dictated text is readable without scrolling; reset on send.
   const handleTranscribed = useCallback((transcript: string) => {
     setText((prev) => (prev.trim().length > 0 ? `${prev.trimEnd()} ${transcript}` : transcript));
+    setComposerMaxHeight(EXPANDED_COMPOSER_MAX_HEIGHT);
     queueMicrotask(() => {
       const el = textareaRef.current;
       if (!el) return;
       el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+      el.style.height = `${Math.min(el.scrollHeight, EXPANDED_COMPOSER_MAX_HEIGHT)}px`;
       el.focus();
       const end = el.value.length;
       el.selectionStart = end;
@@ -129,6 +144,7 @@ export function ChatInput({
     onSend(final);
     onClearAttachments();
     setText("");
+    setComposerMaxHeight(DEFAULT_COMPOSER_MAX_HEIGHT);
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -184,8 +200,8 @@ export function ChatInput({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
-  }, []);
+    el.style.height = `${Math.min(el.scrollHeight, composerMaxHeight)}px`;
+  }, [composerMaxHeight]);
 
   // Native textarea cancels external file drops by default. preventDefault
   // on dragover + drop lets the outer dropzone handle it. We do NOT handle
@@ -266,11 +282,14 @@ export function ChatInput({
               }
               disabled={status === "disconnected" || status === "connecting"}
               rows={1}
-              className="flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] leading-normal text-canvas-fg placeholder:text-canvas-muted/50 focus:outline-none disabled:opacity-50"
+              className={`flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] leading-normal text-canvas-fg placeholder:text-canvas-muted/50 focus:outline-none disabled:opacity-50 ${
+                isRecording ? "hidden" : ""
+              }`}
               style={{ fontSize: "16px" }}
             />
             <VoiceRecorder
               onTranscribed={handleTranscribed}
+              onRecordingChange={setIsRecording}
               disabled={status === "disconnected" || status === "connecting"}
             />
             {isActive ? (

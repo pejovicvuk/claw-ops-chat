@@ -3,7 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "@/lib/auth";
 import {
+  DEFAULT_BEHAVIOR,
   DEFAULT_PREFERENCES,
+  type BehaviorPreferences,
   type DeviceSummary,
   type EventPreferences,
   type PushEventKind,
@@ -96,6 +98,10 @@ export interface UsePushSubscriptionResult {
   setPrefs: (events: Partial<EventPreferences>) => Promise<void>;
   /** Update event preferences for any registered device by id. */
   setDevicePrefs: (id: string, events: Partial<EventPreferences>) => Promise<void>;
+  /** Update focus behavior for THIS device. */
+  setBehavior: (behavior: Partial<BehaviorPreferences>) => Promise<void>;
+  /** Update focus behavior for any registered device by id. */
+  setDeviceBehavior: (id: string, behavior: Partial<BehaviorPreferences>) => Promise<void>;
   removeDevice: (id: string) => Promise<void>;
   clearAll: () => Promise<void>;
   /** Fire a test notification on the given event channel (defaults to turnComplete). */
@@ -234,6 +240,7 @@ export function usePushSubscription(): UsePushSubscriptionResult {
                 subscription: { endpoint: pushSub.endpoint, keys: json.keys },
                 label: deriveLabel(),
                 events: known?.events ?? DEFAULT_PREFERENCES,
+                behavior: known?.behavior ?? DEFAULT_BEHAVIOR,
               }),
             });
           } catch {
@@ -287,6 +294,7 @@ export function usePushSubscription(): UsePushSubscriptionResult {
           subscription: { endpoint: sub.endpoint, keys: json.keys },
           label: deriveLabel(),
           events: DEFAULT_PREFERENCES,
+          behavior: DEFAULT_BEHAVIOR,
         }),
       });
       if (!res.ok) throw new Error(`Failed to register device (${res.status})`);
@@ -338,6 +346,32 @@ export function usePushSubscription(): UsePushSubscriptionResult {
       await setDevicePrefs(thisDevice.id, events);
     },
     [thisDevice, setDevicePrefs],
+  );
+
+  const setDeviceBehavior = useCallback(
+    async (id: string, behavior: Partial<BehaviorPreferences>) => {
+      setError(null);
+      try {
+        const res = await authFetch(`${BASE}/api/push/subscriptions/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ behavior }),
+        });
+        if (!res.ok) throw new Error(`Failed to update focus behavior (${res.status})`);
+        await refresh();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to update focus behavior");
+      }
+    },
+    [refresh],
+  );
+
+  const setBehavior = useCallback(
+    async (behavior: Partial<BehaviorPreferences>) => {
+      if (!thisDevice) return;
+      await setDeviceBehavior(thisDevice.id, behavior);
+    },
+    [thisDevice, setDeviceBehavior],
   );
 
   const removeDevice = useCallback(
@@ -402,6 +436,8 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     disable,
     setPrefs,
     setDevicePrefs,
+    setBehavior,
+    setDeviceBehavior,
     removeDevice,
     clearAll,
     sendTest,

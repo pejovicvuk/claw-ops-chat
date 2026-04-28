@@ -2,7 +2,13 @@ import { extractSession, unauthorized } from "@/lib/auth-server";
 import { withAudit } from "@/lib/audit/api-wrap";
 import { navUrls } from "@/lib/nav-urls";
 import { sendToUser } from "@/lib/push/send";
-import { ALL_EVENT_KINDS, type PushEventKind, type PushPayload } from "@/lib/push/types";
+import {
+  ALL_EVENT_KINDS,
+  ALL_FOCUS_BEHAVIORS,
+  type FocusBehavior,
+  type PushEventKind,
+  type PushPayload,
+} from "@/lib/push/types";
 
 const TEST_PAYLOADS: Record<PushEventKind, Omit<PushPayload, "kind">> = {
   turnComplete: {
@@ -42,12 +48,30 @@ async function postHandler(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const kindParam = url.searchParams.get("kind");
   const kind: PushEventKind = isPushEventKind(kindParam) ? kindParam : "turnComplete";
-  // forceShow: tests must produce a visible system notification even
-  // when the user is sitting on the settings page (i.e. the tab is
-  // focused). Real notifications keep the in-app-toast suppression
-  // because the user is already looking at the app — but the whole
-  // point of "Send test" is to verify the OS-level path.
-  const payload: PushPayload = { ...TEST_PAYLOADS[kind], kind, forceShow: true };
+  // chatId / behavior overrides let the user exercise the smartChat
+  // decision tree end-to-end (focused tab on the same chat → in-app
+  // toast; different chat → system notification). When chatId is
+  // supplied we drop forceShow so the SW actually consults focus +
+  // active-chat instead of bypassing the suppression check.
+  const chatId = url.searchParams.get("chatId") ?? undefined;
+  const behaviorParam = url.searchParams.get("focusBehavior");
+  const focusBehavior: FocusBehavior | undefined =
+    behaviorParam && (ALL_FOCUS_BEHAVIORS as string[]).includes(behaviorParam)
+      ? (behaviorParam as FocusBehavior)
+      : undefined;
+  const exercising = !!(chatId || focusBehavior);
+  // forceShow: when the request is just "send a test", we keep the old
+  // behavior of bypassing focus suppression so the user on the settings
+  // page can verify OS-level delivery without alt-tabbing. When the
+  // caller explicitly asks for a chat-aware test, defer to the real
+  // path so smartChat / suppress can be observed.
+  const payload: PushPayload = {
+    ...TEST_PAYLOADS[kind],
+    kind,
+    chatId,
+    focusBehavior,
+    forceShow: !exercising,
+  };
   // Awaited so the UI can show a real success/failure toast — fire-and-
   // forget would always look successful even when zero devices delivered.
   await sendToUser(session.email, payload, kind);

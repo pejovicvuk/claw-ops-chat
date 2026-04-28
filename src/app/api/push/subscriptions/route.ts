@@ -3,7 +3,10 @@ import { withAudit } from "@/lib/audit/api-wrap";
 import { getPushStore } from "@/lib/push/store";
 import {
   ALL_EVENT_KINDS,
+  ALL_FOCUS_BEHAVIORS,
+  type BehaviorPreferences,
   type EventPreferences,
+  type FocusBehavior,
   type PushSubscriptionInput,
 } from "@/lib/push/types";
 
@@ -11,6 +14,7 @@ interface PostBody {
   subscription?: PushSubscriptionInput;
   label?: string;
   events?: Partial<EventPreferences>;
+  behavior?: Partial<BehaviorPreferences>;
 }
 
 function isValidSubscription(s: unknown): s is PushSubscriptionInput {
@@ -28,6 +32,16 @@ function sanitizeEvents(raw: unknown): Partial<EventPreferences> {
   for (const k of ALL_EVENT_KINDS) {
     const v = (raw as Record<string, unknown>)[k];
     if (typeof v === "boolean") out[k] = v;
+  }
+  return out;
+}
+
+function sanitizeBehavior(raw: unknown): Partial<BehaviorPreferences> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Partial<BehaviorPreferences> = {};
+  const v = (raw as Record<string, unknown>).focusBehavior;
+  if (typeof v === "string" && (ALL_FOCUS_BEHAVIORS as string[]).includes(v)) {
+    out.focusBehavior = v as FocusBehavior;
   }
   return out;
 }
@@ -59,13 +73,21 @@ async function postHandler(request: Request): Promise<Response> {
       ? body.label.trim().slice(0, 80)
       : "Unknown device";
   const events = sanitizeEvents(body.events);
-  const record = await getPushStore().upsert(session.email, body.subscription, label, events);
+  const behavior = sanitizeBehavior(body.behavior);
+  const record = await getPushStore().upsert(
+    session.email,
+    body.subscription,
+    label,
+    events,
+    behavior,
+  );
   return Response.json({
     id: record.id,
     label: record.label,
     createdAt: record.createdAt,
     lastSeenAt: record.lastSeenAt,
     events: record.events,
+    behavior: record.behavior,
   });
 }
 

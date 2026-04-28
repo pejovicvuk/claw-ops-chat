@@ -43,13 +43,21 @@ export async function sendToAll(payload: PushPayload, eventKind: PushEventKind):
 }
 
 async function sendOne(email: string, device: DeviceRecord, payload: PushPayload): Promise<void> {
+  // Inject the per-device focus behavior so the SW can decide locally
+  // without an IndexedDB read on the push critical path. Caller-supplied
+  // focusBehavior on the payload (e.g. test endpoint forcing a value)
+  // wins over the device default.
+  const enriched: PushPayload = {
+    ...payload,
+    focusBehavior: payload.focusBehavior ?? device.behavior.focusBehavior,
+  };
   try {
     await webPush.sendNotification(
       {
         endpoint: device.endpoint,
         keys: device.keys,
       },
-      JSON.stringify(payload),
+      JSON.stringify(enriched),
       // 24h TTL — if the device is offline that long, drop the message.
       { TTL: 24 * 60 * 60 },
     );

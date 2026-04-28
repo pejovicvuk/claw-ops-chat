@@ -9,8 +9,6 @@ import {
   FiCopy,
   FiCornerUpLeft,
   FiDownload,
-  FiEdit2,
-  FiEye,
   FiHome,
   FiMaximize2,
   FiMinimize2,
@@ -18,6 +16,9 @@ import {
   FiSave,
   FiX,
 } from "react-icons/fi";
+import type { DiffAgainst } from "@/lib/git/types";
+
+export type EditorMode = "view" | "diff" | "edit";
 
 interface HeaderProps {
   path: string;
@@ -33,10 +34,15 @@ interface HeaderProps {
   onReveal?: () => void;
   /** Invoked by pointerDown on the drag-handle region (desktop). */
   onDragStart?: (e: React.PointerEvent) => void;
-  /** Show the View / Edit toggle button. */
+  /** Show the View / Diff / Edit segmented toggle. */
   showModeToggle?: boolean;
-  mode?: "view" | "edit";
-  onToggleMode?: () => void;
+  mode?: EditorMode;
+  onChangeMode?: (mode: EditorMode) => void;
+  /** When false, the Diff segment is hidden (file isn't tracked by git). */
+  diffAvailable?: boolean;
+  /** Active "against" choice for diff mode. */
+  against?: DiffAgainst;
+  onChangeAgainst?: (against: DiffAgainst) => void;
   /** Show the line-wrap toggle (only useful in code/text view). */
   showWrapToggle?: boolean;
   wrap?: boolean;
@@ -74,6 +80,53 @@ const SEG_CLS =
   "hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-[0.97] active:bg-canvas-surface-hover " +
   "transition-colors sm:h-6 sm:px-1.5 sm:text-[10px]";
 
+interface ModeSegmentedProps {
+  mode: EditorMode;
+  onChangeMode: (m: EditorMode) => void;
+  diffAvailable: boolean;
+}
+
+const SEG_BTN =
+  "flex h-7 items-center justify-center px-2 text-[10px] font-medium first:rounded-l last:rounded-r " +
+  "transition-colors sm:h-6 sm:px-1.5";
+
+function ModeSegmented({ mode, onChangeMode, diffAvailable }: ModeSegmentedProps) {
+  const segs: { key: EditorMode; label: string }[] = diffAvailable
+    ? [
+        { key: "view", label: "Content" },
+        { key: "diff", label: "Diff" },
+        { key: "edit", label: "Edit" },
+      ]
+    : [
+        { key: "view", label: "Content" },
+        { key: "edit", label: "Edit" },
+      ];
+  return (
+    <div
+      role="tablist"
+      aria-label="Editor mode"
+      className="flex items-center overflow-hidden rounded border border-canvas-border bg-canvas-bg/40"
+    >
+      {segs.map((s) => (
+        <button
+          key={s.key}
+          type="button"
+          role="tab"
+          aria-selected={mode === s.key}
+          onClick={() => onChangeMode(s.key)}
+          className={`${SEG_BTN} ${
+            mode === s.key
+              ? "bg-canvas-surface-hover text-canvas-fg"
+              : "text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+          }`}
+        >
+          {s.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /**
  * Editor panel header. On desktop the entire title row (minus the
  * action buttons and breadcrumb chips) is the drag handle — pointerDown
@@ -95,7 +148,10 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
     onDragStart,
     showModeToggle,
     mode,
-    onToggleMode,
+    onChangeMode,
+    diffAvailable,
+    against,
+    onChangeAgainst,
     showWrapToggle,
     wrap,
     onToggleWrap,
@@ -219,19 +275,25 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             <FiDownload size={12} />
           </button>
         )}
-        {showModeToggle && onToggleMode && (
-          <button
-            type="button"
-            onClick={onToggleMode}
-            title={mode === "view" ? "Edit" : "View"}
-            aria-label={mode === "view" ? "Switch to edit" : "Switch to view"}
-            aria-pressed={mode === "edit"}
-            className={`flex h-7 w-7 items-center justify-center rounded hover:bg-canvas-surface-hover sm:h-6 sm:w-6 ${
-              mode === "edit" ? "text-accent" : "text-canvas-muted hover:text-canvas-fg"
-            }`}
+        {showModeToggle && onChangeMode && (
+          <ModeSegmented
+            mode={mode ?? "view"}
+            onChangeMode={onChangeMode}
+            diffAvailable={diffAvailable ?? false}
+          />
+        )}
+        {showModeToggle && mode === "diff" && onChangeAgainst && (
+          <select
+            value={against ?? "working"}
+            onChange={(e) => onChangeAgainst(e.target.value as DiffAgainst)}
+            title="Compare against"
+            aria-label="Diff target"
+            className="ml-1 h-7 rounded border border-canvas-border bg-canvas-bg px-1 text-[10px] text-canvas-fg focus:outline-none sm:h-6"
           >
-            {mode === "view" ? <FiEdit2 size={12} /> : <FiEye size={12} />}
-          </button>
+            <option value="working">Working</option>
+            <option value="staged">Staged</option>
+            <option value="head">HEAD</option>
+          </select>
         )}
         <button
           type="button"

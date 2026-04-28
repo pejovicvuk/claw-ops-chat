@@ -51,7 +51,7 @@ async function callGet(path: string, against?: string): Promise<Response> {
   const url = new URL("http://localhost/api/git/diff");
   url.searchParams.set("path", path);
   if (against) url.searchParams.set("against", against);
-  return GET(new Request(url.toString()));
+  return GET(new Request(url.toString()), {});
 }
 
 describe("/api/git/diff GET", () => {

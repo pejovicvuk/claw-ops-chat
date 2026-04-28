@@ -56,7 +56,9 @@ export function CommitDiffPanel({ repoRoot, sha }: CommitDiffPanelProps) {
   }
 
   if (!diff) {
-    return <p className="px-3 py-3 text-[11px] text-canvas-muted">No file changes in this commit.</p>;
+    return (
+      <p className="px-3 py-3 text-[11px] text-canvas-muted">No file changes in this commit.</p>
+    );
   }
 
   return (

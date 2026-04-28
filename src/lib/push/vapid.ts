@@ -49,12 +49,8 @@ function persistGeneratedKeysToEnvFile(keys: { publicKey: string; privateKey: st
     let existing = "";
     if (existsSync(envPath)) existing = readFileSync(envPath, "utf-8");
     const lines: string[] = [];
-    if (!/^VAPID_PUBLIC_KEY=/m.test(existing)) {
-      lines.push(`VAPID_PUBLIC_KEY=${keys.publicKey}`);
-    }
-    if (!/^VAPID_PRIVATE_KEY=/m.test(existing)) {
-      lines.push(`VAPID_PRIVATE_KEY=${keys.privateKey}`);
-    }
+    if (!/^VAPID_PUBLIC_KEY=/m.test(existing)) lines.push(`VAPID_PUBLIC_KEY=${keys.publicKey}`);
+    if (!/^VAPID_PRIVATE_KEY=/m.test(existing)) lines.push(`VAPID_PRIVATE_KEY=${keys.privateKey}`);
     if (lines.length === 0) return;
     if (existsSync(envPath)) {
       const prefix = existing.length === 0 || existing.endsWith("\n") ? "" : "\n";
@@ -62,7 +58,6 @@ function persistGeneratedKeysToEnvFile(keys: { publicKey: string; privateKey: st
     } else {
       writeFileSync(envPath, `${lines.join("\n")}\n`);
     }
-    console.log("[push] Generated VAPID keypair and persisted to .env.local");
   } catch (err) {
     console.warn("[push] Failed to persist VAPID keys to .env.local:", err);
   }

@@ -42,7 +42,7 @@ import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
 import { navUrls } from "./src/lib/nav-urls";
-import { sendToUser } from "./src/lib/push/send";
+import { onNotificationDispatched, sendToUser } from "./src/lib/push/send";
 import { ensureAuditTree } from "./src/lib/audit/paths";
 import { purgeOldAuditFiles } from "./src/lib/audit/retention";
 import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
@@ -836,20 +836,22 @@ class SessionManager {
       // Broadcast a resolution marker so other open tabs watching the
       // same session can also drop the prompt from their UI state.
       this.broadcast(session, { type: "permission_resolved", id });
-      // Tell every subscribed device to close any stale system
-      // notification for this session — otherwise a permission
-      // approved from another tab leaves a dangling "needs approval"
-      // alert on the user's phone.
+      // Dismiss stale system notifications on all devices when the user
+      // responds from any tab. Covers permission, ask, and plan prompts.
       void sendToUser(
         session.actorEmail,
-        {
-          title: "",
-          body: "",
-          kind: "permissionRequest",
-          tagKey: session.id,
-          closeOnly: true,
-        },
+        { title: "", body: "", kind: "permissionRequest", tagKey: session.id, closeOnly: true },
         "permissionRequest",
+      );
+      void sendToUser(
+        session.actorEmail,
+        { title: "", body: "", kind: "askQuestion", tagKey: session.id, closeOnly: true },
+        "askQuestion",
+      );
+      void sendToUser(
+        session.actorEmail,
+        { title: "", body: "", kind: "planProposal", tagKey: session.id, closeOnly: true },
+        "planProposal",
       );
       session.accumulatedText = "";
       return;
@@ -877,17 +879,14 @@ class SessionManager {
           this.broadcast(session, { type: "permission_resolved", id });
         }
         if (session.pendingRequests.size > 0) {
-          void sendToUser(
-            session.actorEmail,
-            {
-              title: "",
-              body: "",
-              kind: "permissionRequest",
-              tagKey: session.id,
-              closeOnly: true,
-            },
-            "permissionRequest",
-          );
+          // Close all pending prompt notifications on every device.
+          for (const kind of ["permissionRequest", "askQuestion", "planProposal"] as const) {
+            void sendToUser(
+              session.actorEmail,
+              { title: "", body: "", kind, tagKey: session.id, closeOnly: true },
+              kind,
+            );
+          }
         }
         session.pendingRequests.clear();
 
@@ -1095,6 +1094,21 @@ class SessionManager {
           const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
           this.broadcast(session, { type: "ask_question", id, questions: input.questions || [] });
           this.setStatus(session, "awaiting_input");
+          const chatLabel = chatLabelFor(session);
+          const firstQ = Array.isArray(input.questions) ? String(input.questions[0] ?? "") : "";
+          const qBody = firstQ.length > 100 ? `${firstQ.slice(0, 97)}…` : firstQ;
+          void sendToUser(
+            session.actorEmail,
+            {
+              title: `${chatLabel} has a question`,
+              body: qBody || "Claude is waiting for your input.",
+              kind: "askQuestion",
+              url: navUrls.chat(session.id),
+              tagKey: session.id,
+              chatId: session.id,
+            },
+            "askQuestion",
+          );
           const response = await this.waitForResponse(session, id);
           this.setStatus(session, "thinking");
           return {
@@ -1116,6 +1130,20 @@ class SessionManager {
           const planText = typeof input.plan === "string" ? input.plan : JSON.stringify(input);
           this.broadcast(session, { type: "plan_proposal", id, plan: planText });
           this.setStatus(session, "awaiting_permission");
+          const planChatLabel = chatLabelFor(session);
+          const planBody = planText.length > 100 ? `${planText.slice(0, 97)}…` : planText;
+          void sendToUser(
+            session.actorEmail,
+            {
+              title: `${planChatLabel} — plan ready for review`,
+              body: planBody,
+              kind: "planProposal",
+              url: navUrls.chat(session.id),
+              tagKey: session.id,
+              chatId: session.id,
+            },
+            "planProposal",
+          );
           const response = await this.waitForResponse(session, id);
           this.setStatus(session, "thinking");
 
@@ -2407,6 +2435,29 @@ app.prepare().then(() => {
 
   const wss = new WebSocketServer({ noServer: true });
 
+  // Global in-app notification channel. Every authenticated client that
+  // connects to /ws/notifications is added here and receives a JSON frame
+  // for every dispatched push event so the frontend can show in-app toasts
+  // regardless of which chat the user has open or whether the OS delivers
+  // the system notification.
+  const notificationClients = new Set<WebSocket>();
+
+  onNotificationDispatched((payload) => {
+    if (notificationClients.size === 0) return;
+    const frame = JSON.stringify({ type: "notification", payload });
+    for (const ws of notificationClients) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send(frame);
+        } catch {
+          /* ignore */
+        }
+      } else {
+        notificationClients.delete(ws);
+      }
+    }
+  });
+
   // Let Next.js handle its own upgrade requests (HMR etc.)
   const nextUpgradeHandler = app.getUpgradeHandler();
 
@@ -2416,8 +2467,10 @@ app.prepare().then(() => {
     const isChatWs = pathname === "/ws/chat" || pathname === "/chat/ws/chat";
     const isTerminalWs = pathname === "/ws/terminal" || pathname === "/chat/ws/terminal";
     const isMonitoringWs = pathname === "/ws/monitoring" || pathname === "/chat/ws/monitoring";
+    const isNotificationsWs =
+      pathname === "/ws/notifications" || pathname === "/chat/ws/notifications";
 
-    if (!isChatWs && !isTerminalWs && !isMonitoringWs) {
+    if (!isChatWs && !isTerminalWs && !isMonitoringWs && !isNotificationsWs) {
       // Pass to Next.js for HMR and other internal WebSockets
       nextUpgradeHandler(req, socket, head);
       return;
@@ -2443,7 +2496,13 @@ app.prepare().then(() => {
     // then fall back to a short-lived WS ticket (?ticket=<uuid>) issued by
     // POST /api/auth/ws-ticket. Bearer tokens in URLs are intentionally NOT
     // supported here — they appear in server logs and browser history.
-    const wsRoute = isTerminalWs ? "/ws/terminal" : isMonitoringWs ? "/ws/monitoring" : "/ws/chat";
+    const wsRoute = isTerminalWs
+      ? "/ws/terminal"
+      : isMonitoringWs
+        ? "/ws/monitoring"
+        : isNotificationsWs
+          ? "/ws/notifications"
+          : "/ws/chat";
     const sessionPayload = extractSessionFromCookieHeader(req.headers.cookie);
     let actorEmail: string;
     if (sessionPayload) {
@@ -2496,6 +2555,16 @@ app.prepare().then(() => {
             /* ignore malformed frames */
           }
         });
+      });
+      logWsUpgrade({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => {});
+      return;
+    }
+
+    if (isNotificationsWs) {
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        notificationClients.add(ws);
+        ws.on("close", () => notificationClients.delete(ws));
+        ws.on("error", () => notificationClients.delete(ws));
       });
       logWsUpgrade({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => {});
       return;

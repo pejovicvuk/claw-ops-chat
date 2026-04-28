@@ -19,6 +19,24 @@ export interface SendResult {
 }
 
 /**
+ * In-process event hook fired whenever a notification is dispatched,
+ * regardless of push delivery outcome. Used by the global WebSocket
+ * notification channel in server.ts so connected clients always receive
+ * an in-app toast even when the OS suppresses the system notification.
+ */
+type DispatchListener = (payload: PushPayload) => void;
+const dispatchListeners = new Set<DispatchListener>();
+
+export function onNotificationDispatched(fn: DispatchListener): () => void {
+  dispatchListeners.add(fn);
+  return () => dispatchListeners.delete(fn);
+}
+
+function fireDispatch(payload: PushPayload): void {
+  dispatchListeners.forEach((fn) => fn(payload));
+}
+
+/**
  * Send a Web Push notification to every device a user has registered
  * for `eventKind`. Per-device failure is isolated; 4xx responses from
  * the upstream push service drop the dead/stale subscription.
@@ -32,10 +50,7 @@ export async function sendToUser(
   payload: PushPayload,
   eventKind: PushEventKind,
 ): Promise<SendResult[]> {
-  // Awaited so VAPID keys are loaded (env / file / generated) before any
-  // sendNotification call. Previously this was fire-and-forget which
-  // meant the very first push of a process lifetime could race with
-  // VAPID initialisation.
+  if (!payload.closeOnly) fireDispatch(payload);
   await getVapidKeys();
   const store = getPushStore();
   const targets: DeviceRecord[] = [];
@@ -53,6 +68,7 @@ export async function sendToAll(
   payload: PushPayload,
   eventKind: PushEventKind,
 ): Promise<SendResult[]> {
+  if (!payload.closeOnly) fireDispatch(payload);
   await getVapidKeys();
   const store = getPushStore();
   const targets: { email: string; device: DeviceRecord }[] = [];
@@ -111,6 +127,15 @@ async function sendOne(
     ...payload,
     focusBehavior: payload.focusBehavior ?? device.behavior.focusBehavior,
   };
+  return sendOneAttempt(email, device, enriched, 0);
+}
+
+async function sendOneAttempt(
+  email: string,
+  device: DeviceRecord,
+  enriched: PushPayload,
+  attempt: number,
+): Promise<SendResult> {
   try {
     await webPush.sendNotification(
       { endpoint: device.endpoint, keys: device.keys },
@@ -118,7 +143,7 @@ async function sendOne(
       // 24h TTL — if the device is offline that long, drop the message.
       { TTL: 24 * 60 * 60 },
     );
-    return finalize(email, device, payload.kind, { outcome: "sent" });
+    return finalize(email, device, enriched.kind, { outcome: "sent" });
   } catch (err) {
     const wpe = err as WebPushError | null;
     const status = wpe?.statusCode;
@@ -129,10 +154,23 @@ async function sendOne(
       } catch {
         /* best-effort */
       }
+      return finalize(email, device, enriched.kind, {
+        outcome: classified.outcome,
+        detail: classified.detail,
+        statusCode: status,
+      });
+    }
+    // Rate-limit (429) or push-service error (5xx): retry up to 2 times
+    // with exponential backoff. Any other error (auth, bad request, etc.)
+    // is not retriable and is logged immediately.
+    if (attempt < 2 && (status === 429 || (status !== undefined && status >= 500))) {
+      const delayMs = attempt === 0 ? 5_000 : 30_000;
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+      return sendOneAttempt(email, device, enriched, attempt + 1);
     }
     const detail =
       classified.detail ?? (err instanceof Error ? err.message : String(err)) ?? undefined;
-    return finalize(email, device, payload.kind, {
+    return finalize(email, device, enriched.kind, {
       outcome: classified.outcome,
       detail,
       statusCode: status,

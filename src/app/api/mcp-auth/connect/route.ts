@@ -41,7 +41,7 @@ export async function POST(request: Request) {
 
   const child = spawn("claude", argv, {
     stdio: ["pipe", "pipe", "pipe"],
-    shell: true,
+    shell: false,
     windowsHide: true,
   });
 

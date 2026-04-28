@@ -3,5 +3,6 @@ import { getVapidPublicKey } from "@/lib/push/vapid";
 
 export async function GET(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
-  return Response.json({ publicKey: getVapidPublicKey() });
+  const publicKey = await getVapidPublicKey();
+  return Response.json({ publicKey });
 }

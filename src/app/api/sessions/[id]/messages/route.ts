@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 
 interface MessageEntry {
   id: string;
@@ -49,7 +50,9 @@ function extractText(content: unknown): string {
   return "";
 }
 
-export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
+type RouteCtx = { params: Promise<{ id: string }> };
+
+async function getHandler(request: Request, { params }: RouteCtx): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
   const { id: sessionId } = await params;
@@ -181,3 +184,16 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
     );
   }
 }
+
+export const GET = withAudit<RouteCtx>(
+  {
+    route: "/api/sessions/[id]/messages",
+    auditSuccessGets: true,
+    subjectFrom: (req) => {
+      // Extract the session id from the URL path: /…/sessions/<id>/messages
+      const match = new URL(req.url).pathname.match(/\/sessions\/([^/]+)\/messages/);
+      return match?.[1] ?? null;
+    },
+  },
+  getHandler,
+);

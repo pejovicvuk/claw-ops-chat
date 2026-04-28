@@ -1,8 +1,16 @@
 import { spawn } from "child_process";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 
+/** Prevents simultaneous npm install processes from being spawned. */
+let installInProgress = false;
+
 export async function POST(request: Request) {
   if (!extractSession(request)) return unauthorized();
+
+  if (installInProgress) {
+    return Response.json({ error: "Installation already in progress" }, { status: 409 });
+  }
+  installInProgress = true;
 
   const encoder = new TextEncoder();
 
@@ -60,6 +68,7 @@ export async function POST(request: Request) {
         });
 
         step2.on("close", (code2) => {
+          installInProgress = false;
           if (code1 === 0 || code2 === 0) {
             send("Installation complete. Please restart the dev server (npm run dev).");
             sendEvent("done", { success: true });
@@ -71,6 +80,7 @@ export async function POST(request: Request) {
         });
 
         step2.on("error", (err) => {
+          installInProgress = false;
           send(`Error: ${err.message}`);
           sendEvent("done", { success: false, error: err.message });
           controller.close();
@@ -78,6 +88,7 @@ export async function POST(request: Request) {
       });
 
       step1.on("error", (err) => {
+        installInProgress = false;
         send(`Error: ${err.message}`);
         sendEvent("done", { success: false, error: err.message });
         controller.close();

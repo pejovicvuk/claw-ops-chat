@@ -4,6 +4,8 @@ import {
   deleteCredentials,
   registerMcpServer,
   saveCredentials,
+  syncGhCli,
+  unsyncGhCli,
   unregisterMcpServer,
   type GitHubCredentials,
 } from "@/lib/github-custom-config";
@@ -77,6 +79,7 @@ async function postHandler(request: Request): Promise<Response> {
   try {
     await saveCredentials(creds);
     await registerMcpServer(creds);
+    void syncGhCli(token);
   } catch (err) {
     return Response.json(
       { error: `Failed to save credentials: ${err instanceof Error ? err.message : String(err)}` },
@@ -91,6 +94,7 @@ async function deleteHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   await deleteCredentials();
   await unregisterMcpServer();
+  void unsyncGhCli();
   return Response.json({ ok: true });
 }
 

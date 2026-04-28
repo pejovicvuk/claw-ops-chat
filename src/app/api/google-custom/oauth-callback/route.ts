@@ -44,13 +44,18 @@ interface TokenResponse {
   error_description?: string;
 }
 
-function resolvePublicBase(request: Request): string {
-  const host = request.headers.get("x-forwarded-host") || request.headers.get("host");
-  const proto =
-    request.headers.get("x-forwarded-proto") ||
-    (host && !host.startsWith("localhost") ? "https" : "http");
-  if (host) return `${proto}://${host}`;
-  return (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:3100").replace(/\/+$/, "");
+function resolvePublicBase(): string {
+  // Prefer the explicit NEXT_PUBLIC_CHAT_ORIGIN env variable — this is the
+  // only safe source because x-forwarded-host can be forged by a reverse
+  // proxy or attacker, which would redirect OAuth tokens to an attacker-
+  // controlled URI. Set NEXT_PUBLIC_CHAT_ORIGIN=https://your-domain.com
+  // in the deployment environment.
+  const explicit = process.env.NEXT_PUBLIC_CHAT_ORIGIN;
+  if (explicit) return explicit.replace(/\/+$/, "");
+  // Fallback for development: same default as NEXT_PUBLIC_API_ORIGIN but
+  // pointing at the chat's own port. Still safe because this path is only
+  // reached when no explicit origin is configured.
+  return "http://localhost:3100";
 }
 
 function htmlPage(title: string, body: string, status = 200): Response {
@@ -106,7 +111,7 @@ async function finalizeServerSideFlow(request: Request, code: string): Promise<R
     );
   }
 
-  const redirectUri = `${resolvePublicBase(request)}${CALLBACK_PATH}`;
+  const redirectUri = `${resolvePublicBase()}${CALLBACK_PATH}`;
 
   // 1. Exchange the code.
   const tokenRes = await fetch(TOKEN_ENDPOINT, {

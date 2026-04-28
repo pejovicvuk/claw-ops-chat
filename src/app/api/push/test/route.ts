@@ -82,10 +82,28 @@ async function postHandler(request: Request): Promise<Response> {
     focusBehavior,
     forceShow: !exercising,
   };
-  // Awaited so the UI can show a real success/failure toast — fire-and-
-  // forget would always look successful even when zero devices delivered.
-  await sendToUser(session.email, payload, kind);
-  return Response.json({ ok: true, kind });
+  // Awaited so the UI can show real per-device counts — fire-and-forget
+  // (or a flat `{ok:true}`) would always look successful even when every
+  // upstream send failed. The previous version masked the VAPID-key
+  // breakage that triggered this fix.
+  const results = await sendToUser(session.email, payload, kind);
+  const counts = {
+    attempted: results.length,
+    sent: results.filter((r) => r.outcome === "sent").length,
+    dropped: results.filter((r) => r.outcome === "dropped").length,
+    errored: results.filter((r) => r.outcome === "error").length,
+  };
+  return Response.json({
+    ok: counts.errored === 0 && counts.dropped === 0,
+    kind,
+    ...counts,
+    devices: results.map((r) => ({
+      label: r.deviceLabel,
+      outcome: r.outcome,
+      statusCode: r.statusCode,
+      detail: r.detail,
+    })),
+  });
 }
 
 export const POST = withAudit({ route: "/api/push/test", subjectFrom: () => null }, postHandler);

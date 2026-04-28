@@ -1,10 +1,11 @@
 import { readFile, stat } from "fs/promises";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { safePath, SafePathError } from "@/lib/safe-path";
+import { withAudit } from "@/lib/audit/api-wrap";
 
 const MAX_SIZE = 1024 * 1024; // 1MB
 
-export async function GET(request: Request) {
+async function getHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
   const url = new URL(request.url);
@@ -41,3 +42,12 @@ export async function GET(request: Request) {
     );
   }
 }
+
+export const GET = withAudit(
+  {
+    route: "/api/files/read",
+    auditSuccessGets: true,
+    subjectFrom: (req) => new URL(req.url).searchParams.get("path"),
+  },
+  getHandler,
+);

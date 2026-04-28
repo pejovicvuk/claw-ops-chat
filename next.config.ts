@@ -6,6 +6,19 @@ const apiOrigin = (process.env.NEXT_PUBLIC_API_ORIGIN || "http://localhost:8080"
   "",
 );
 
+// Derive the chat server's own origin for tight WebSocket CSP allowlisting.
+// Falls back to the chat's own default port when NEXT_PUBLIC_CHAT_ORIGIN is
+// not set. Using a specific hostname avoids the broad "ws: wss:" wildcard.
+const chatOrigin = (
+  process.env.NEXT_PUBLIC_CHAT_ORIGIN || `http://localhost:${process.env.PORT || "3100"}`
+).replace(/\/+$/, "");
+let chatWsHost: string;
+try {
+  chatWsHost = new URL(chatOrigin).hostname;
+} catch {
+  chatWsHost = "localhost";
+}
+
 const nextConfig: NextConfig = {
   output: "standalone",
   basePath: "/chat",
@@ -53,7 +66,7 @@ const nextConfig: NextConfig = {
             "default-src 'self'",
             "script-src 'self' 'unsafe-inline'",
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-            `connect-src 'self' ws: wss: ${apiOrigin}`,
+            `connect-src 'self' ws://${chatWsHost} wss://${chatWsHost} ${apiOrigin}`,
             "img-src 'self' data: blob:",
             "font-src 'self' data: https://fonts.gstatic.com",
             "worker-src 'self'",

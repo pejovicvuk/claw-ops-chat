@@ -61,3 +61,16 @@ export interface GitLogResponse {
   branch: string | null;
   entries: GitLogEntry[];
 }
+
+/** Which side of git history to compare the working tree against. */
+export type DiffAgainst = "working" | "head" | "staged";
+
+export interface GitDiffResponse {
+  isRepo: boolean;
+  /** False when the file isn't tracked by git (or doesn't exist). */
+  tracked: boolean;
+  /** Unified diff text. Empty string when there's nothing to show. */
+  diff: string;
+  /** Set when the diff was capped or generation failed in a recoverable way. */
+  error?: string;
+}

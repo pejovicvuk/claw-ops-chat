@@ -2,7 +2,13 @@
 
 import { authFetch } from "@/lib/auth";
 import { FileApiError } from "@/lib/api";
-import type { GitBranchesResponse, GitLogResponse, GitStatusResponse } from "@/lib/git/types";
+import type {
+  DiffAgainst,
+  GitBranchesResponse,
+  GitDiffResponse,
+  GitLogResponse,
+  GitStatusResponse,
+} from "@/lib/git/types";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -40,5 +46,15 @@ export async function getGitLog(path: string, opts: GitLogOptions = {}): Promise
   if (opts.branch) params.set("branch", opts.branch);
   const res = await authFetch(`${BASE}/api/git/log?${params.toString()}`);
   await assertOk(res, "Failed to fetch git log");
+  return res.json();
+}
+
+export async function getGitDiff(
+  path: string,
+  against: DiffAgainst = "working",
+): Promise<GitDiffResponse> {
+  const params = new URLSearchParams({ path, against });
+  const res = await authFetch(`${BASE}/api/git/diff?${params.toString()}`);
+  await assertOk(res, "Failed to fetch git diff");
   return res.json();
 }

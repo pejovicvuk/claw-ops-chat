@@ -63,6 +63,9 @@ interface FileBrowserProps {
 
 const VIRTUALIZE_THRESHOLD = 500;
 const ROW_HEIGHT = 36;
+// Window allowed for a desktop double-click to cancel the single-click
+// open. Browsers typically fire `dblclick` 200–250 ms after `click`.
+const DBLCLICK_DELAY_MS = 220;
 
 function mapError(err: unknown): string {
   if (err instanceof FileApiError) {
@@ -226,31 +229,59 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
     prevErrorRef.current = error;
   }, [error, entries.length, toast]);
 
+  // Pending desktop single-click timers, keyed by entry path. Lets a
+  // double-click cancel the single-click open before it fires. Mobile
+  // ignores this map and acts immediately on tap.
+  const pendingClickRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  useEffect(() => {
+    const timers = pendingClickRef.current;
+    return () => {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    };
+  }, []);
+
   const handleEntryClick = useCallback(
     (entry: FileEntry) => {
       if (entry.directory) {
         navigateTo(entry.path);
         return;
       }
-      // Mobile: a single tap on a file opens it (the desktop "tap inserts
-      // @path into the chat" affordance is replaced by the long-press menu's
-      // Copy path item, which is more discoverable on touch). Desktop keeps
-      // its prior single-click → onFileClick behavior.
+      // Mobile: a single tap opens the file directly. Long-press exposes
+      // "Copy path" via the context menu for the @path workflow.
       if (isMobile) {
         if (onFileOpen) onFileOpen(entry);
         else onFileClick?.(entry.path);
-      } else {
-        onFileClick?.(entry.path);
+        return;
       }
+      // Desktop: defer the open so a follow-up double-click can cancel it
+      // and insert @path instead.
+      const timers = pendingClickRef.current;
+      const prev = timers.get(entry.path);
+      if (prev) clearTimeout(prev);
+      const t = setTimeout(() => {
+        timers.delete(entry.path);
+        onFileOpen?.(entry);
+      }, DBLCLICK_DELAY_MS);
+      timers.set(entry.path, t);
     },
     [navigateTo, onFileClick, onFileOpen, isMobile],
   );
 
   const handleEntryDoubleClick = useCallback(
     (entry: FileEntry) => {
-      if (!entry.directory) onFileOpen?.(entry);
+      if (entry.directory) return;
+      // Cancel the pending single-click open so we don't both open AND
+      // insert @path.
+      const timers = pendingClickRef.current;
+      const pending = timers.get(entry.path);
+      if (pending) {
+        clearTimeout(pending);
+        timers.delete(entry.path);
+      }
+      onFileClick?.(entry.path);
     },
-    [onFileOpen],
+    [onFileClick],
   );
 
   const handleEntryContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {

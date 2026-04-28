@@ -15,6 +15,8 @@ interface MobileFileSheetProps {
   initialPath?: string;
   /** Notify parent when the user navigates so URL stays in sync. */
   onPathChange?: (path: string) => void;
+  /** Forwarded to FileBrowser so the branch list can highlight the active chat. */
+  selectedSessionId?: string | null;
 }
 
 export function MobileFileSheet({
@@ -24,6 +26,7 @@ export function MobileFileSheet({
   onFileOpen,
   initialPath,
   onPathChange,
+  selectedSessionId,
 }: MobileFileSheetProps) {
   useEffect(() => {
     if (!open) return;
@@ -66,6 +69,7 @@ export function MobileFileSheet({
             onPathChange={onPathChange}
             onFileClick={onCopyPath}
             onFileOpen={onFileOpen}
+            selectedSessionId={selectedSessionId}
           />
         </div>
       </div>

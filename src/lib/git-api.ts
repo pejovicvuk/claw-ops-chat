@@ -5,6 +5,7 @@ import { FileApiError } from "@/lib/api";
 import type {
   DiffAgainst,
   GitBranchesResponse,
+  GitCommitDiffResponse,
   GitDiffResponse,
   GitLogResponse,
   GitStatusResponse,
@@ -56,5 +57,12 @@ export async function getGitDiff(
   const params = new URLSearchParams({ path, against });
   const res = await authFetch(`${BASE}/api/git/diff?${params.toString()}`);
   await assertOk(res, "Failed to fetch git diff");
+  return res.json();
+}
+
+export async function getGitCommitDiff(path: string, sha: string): Promise<GitCommitDiffResponse> {
+  const params = new URLSearchParams({ path, sha });
+  const res = await authFetch(`${BASE}/api/git/commit-diff?${params.toString()}`);
+  await assertOk(res, "Failed to fetch commit diff");
   return res.json();
 }

@@ -62,6 +62,7 @@ export function SettingsConnectionsPage() {
    * separately and OR the two signals into `googleStatus` below.
    */
   const [customGoogleConnected, setCustomGoogleConnected] = useState<boolean | null>(null);
+  const [customMicrosoftConnected, setCustomMicrosoftConnected] = useState<boolean | null>(null);
   const { setParam } = useUrlState();
 
   // Claude Code auth status.
@@ -195,6 +196,28 @@ export function SettingsConnectionsPage() {
     };
   }, []);
 
+  // Microsoft 365 custom connection — polls our local status endpoint
+  // instead of the hosted Anthropic MCP list. Also re-fetches on focus so
+  // the row reflects changes made in the Microsoft settings sub-page.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      authFetch(`${BASE}/api/microsoft-custom/status`)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null)
+        .then((data: { connected?: boolean } | null) => {
+          if (cancelled) return;
+          setCustomMicrosoftConnected(data?.connected ?? false);
+        });
+    };
+    load();
+    window.addEventListener("focus", load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", load);
+    };
+  }, []);
+
   // Custom Google Workspace — same status endpoint the Google sub-page
   // uses. Also re-fetch on window focus so the row flips to Connected the
   // moment the user closes the OAuth consent tab and returns, without
@@ -233,7 +256,12 @@ export function SettingsConnectionsPage() {
       : mcpServers !== null || customGoogleConnected !== null
         ? "disconnected"
         : "unknown";
-  const microsoftStatus = singleStatus(mcpServers, "microsoft-365");
+  const microsoftStatus: ConnectionStatus =
+    customMicrosoftConnected
+      ? "connected"
+      : customMicrosoftConnected !== null
+        ? "disconnected"
+        : "unknown";
   const slackStatus = singleStatus(mcpServers, "slack");
 
   return (

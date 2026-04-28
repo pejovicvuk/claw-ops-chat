@@ -25,6 +25,7 @@ import { SettingsAgentRulesPage } from "./pages/settings-agent-rules-page";
 import { SettingsAgentSkillsPage } from "./pages/settings-agent-skills-page";
 import { SettingsAgentSubagentsPage } from "./pages/settings-agent-subagents-page";
 import { SettingsNotificationsPage } from "./pages/settings-notifications-page";
+import { SettingsVoicePage } from "./pages/settings-voice-page";
 import { SettingsMonitoringPage } from "@/components/monitoring/settings-monitoring-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -49,6 +50,7 @@ type PageKey =
   | "agent/subagents"
   | "terminal"
   | "notifications"
+  | "voice"
   | "monitoring";
 
 interface PageInfo {
@@ -80,6 +82,7 @@ const PAGES: Record<PageKey, PageInfo> = {
   "agent/subagents": { title: "Subagents", parent: "agent" },
   terminal: { title: "Terminal", parent: "main", wide: true },
   notifications: { title: "Notifications", parent: "main" },
+  voice: { title: "Voice input", parent: "main" },
   monitoring: { title: "Monitoring", parent: "main", wide: true },
 };
 
@@ -211,6 +214,7 @@ export function SettingsOverlay() {
           {page === "agent/subagents" && <SettingsAgentSubagentsPage />}
           {page === "terminal" && <SettingsTerminalPage />}
           {page === "notifications" && <SettingsNotificationsPage />}
+          {page === "voice" && <SettingsVoicePage />}
           {page === "monitoring" && <SettingsMonitoringPage />}
         </div>
 

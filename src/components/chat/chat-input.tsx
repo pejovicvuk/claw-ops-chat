@@ -8,6 +8,7 @@ import { preloadMarkdown } from "./message-bubble";
 import { AttachmentRow } from "./chat-input/attachment-row";
 import type { AttachmentPillData } from "./chat-input/attachment-pill";
 import { MentionPopover, type MentionPopoverHandle } from "./chat-input/mention-popover";
+import { VoiceRecorder } from "./chat-input/voice-recorder";
 
 interface ChatInputProps {
   status: ClaudeStatus;
@@ -99,6 +100,24 @@ export function ChatInput({
     },
     [onAddFiles],
   );
+
+  // Append (not replace) transcribed voice text into the composer. Joins
+  // with a single space when the textarea already has content so the user
+  // can dictate in chunks. Resyncs the auto-grow height on the next tick.
+  const handleTranscribed = useCallback((transcript: string) => {
+    setText((prev) => (prev.trim().length > 0 ? `${prev.trimEnd()} ${transcript}` : transcript));
+    queueMicrotask(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 120)}px`;
+      el.focus();
+      const end = el.value.length;
+      el.selectionStart = end;
+      el.selectionEnd = end;
+      setCaret(end);
+    });
+  }, []);
 
   const handleSend = useCallback(() => {
     if (!canSend) return;
@@ -249,6 +268,10 @@ export function ChatInput({
               rows={1}
               className="flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] leading-normal text-canvas-fg placeholder:text-canvas-muted/50 focus:outline-none disabled:opacity-50"
               style={{ fontSize: "16px" }}
+            />
+            <VoiceRecorder
+              onTranscribed={handleTranscribed}
+              disabled={status === "disconnected" || status === "connecting"}
             />
             {isActive ? (
               <button

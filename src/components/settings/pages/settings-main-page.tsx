@@ -9,6 +9,7 @@ import {
   FiCpu,
   FiLink,
   FiMail,
+  FiMic,
   FiShield,
   FiTerminal,
   FiUser,
@@ -119,6 +120,29 @@ export function SettingsMainPage() {
             <p className="text-[13px] font-medium text-canvas-fg">Manage notifications</p>
             <p className="mt-0.5 text-[11px] text-canvas-muted">
               Per-device toggles, send a test, register / unregister browsers
+            </p>
+          </div>
+          <FiChevronRight size={14} className="shrink-0 text-canvas-muted" />
+        </button>
+      </SettingsSection>
+
+      {/* Voice input — STT in the chat composer */}
+      <SettingsSection
+        title="Voice input"
+        description="Dictate messages with a mic button. API keys live on the server, not in the browser."
+      >
+        <button
+          type="button"
+          onClick={() => setParam("settings", "voice")}
+          className="flex w-full items-center gap-3 rounded-xl border border-canvas-border bg-canvas-bg px-4 py-3 text-left transition-colors hover:bg-canvas-surface-hover"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-canvas-surface text-canvas-fg">
+            <FiMic size={15} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-canvas-fg">Speech-to-text</p>
+            <p className="mt-0.5 text-[11px] text-canvas-muted">
+              Provider, language, translate-to-English, optional summary
             </p>
           </div>
           <FiChevronRight size={14} className="shrink-0 text-canvas-muted" />

@@ -74,3 +74,25 @@ export interface GitDiffResponse {
   /** Set when the diff was capped or generation failed in a recoverable way. */
   error?: string;
 }
+
+export interface GitCommitDiffStats {
+  /** Number of files touched by the commit. */
+  files: number;
+  /** Lines added across all files. */
+  insertions: number;
+  /** Lines removed across all files. */
+  deletions: number;
+}
+
+export interface GitCommitDiffResponse {
+  isRepo: boolean;
+  /** False when the SHA doesn't resolve in this repo. */
+  found: boolean;
+  /** Whether the commit has 2+ parents. UI may show a hint that diff is vs first parent. */
+  isMerge: boolean;
+  stats: GitCommitDiffStats;
+  /** Unified diff text. Empty when nothing changed (rare) or when capped. */
+  diff: string;
+  /** Set when the diff was capped or generation failed in a recoverable way. */
+  error?: string;
+}

@@ -24,7 +24,7 @@ import {
   type PushEventKind,
 } from "@/lib/push/types";
 import { usePushDiagnostics } from "@/lib/push/use-push-diagnostics";
-import { usePushSubscription } from "@/lib/push/use-push-subscription";
+import { type TestSendResult, usePushSubscription } from "@/lib/push/use-push-subscription";
 import { useSwRegistrationStatus } from "@/lib/push/use-sw-registration";
 import { toast } from "@/lib/use-toast";
 import type { DeviceSummary } from "@/lib/push/types";
@@ -316,7 +316,24 @@ function ServiceWorkerStatusRow({ status, error }: ServiceWorkerStatusRowProps) 
 
 interface TestNotificationsCardProps {
   prefs: EventPreferences;
-  sendTest: (kind: PushEventKind) => Promise<void>;
+  sendTest: (kind: PushEventKind) => Promise<TestSendResult>;
+}
+
+function summarizeTestResult(kind: PushEventKind, r: TestSendResult): string {
+  if (r.attempted === 0) {
+    return `${EVENT_LABELS[kind].title}: no devices subscribed to this channel`;
+  }
+  const parts = [`Sent ${r.sent} of ${r.attempted}`];
+  if (r.dropped > 0) {
+    const reason =
+      r.devices.find((d) => d.outcome === "dropped" && d.detail)?.detail ?? "subscription invalid";
+    parts.push(`${r.dropped} dropped (${reason})`);
+  }
+  if (r.errored > 0) {
+    const detail = r.devices.find((d) => d.outcome === "error" && d.detail)?.detail;
+    parts.push(`${r.errored} errored${detail ? ` (${detail})` : ""}`);
+  }
+  return `${EVENT_LABELS[kind].title}: ${parts.join(" · ")}`;
 }
 
 function TestNotificationsCard({ prefs, sendTest }: TestNotificationsCardProps) {
@@ -325,8 +342,16 @@ function TestNotificationsCard({ prefs, sendTest }: TestNotificationsCardProps) 
     async (kind: PushEventKind) => {
       setPending(kind);
       try {
-        await sendTest(kind);
-        toast.success(`Test sent for ${EVENT_LABELS[kind].title}`);
+        const result = await sendTest(kind);
+        const message = summarizeTestResult(kind, result);
+        if (result.ok && result.sent > 0) {
+          toast.success(message);
+        } else {
+          // attempted=0 (no devices) OR any dropped/errored device — surface
+          // it as a warning so the user notices the upstream rejection
+          // instead of seeing a green "Test sent" while nothing arrives.
+          toast.error(message);
+        }
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Test send failed");
       } finally {
@@ -429,10 +454,16 @@ function RecentDeliveriesPanel() {
             <div
               key={`${e.ts}-${i}`}
               className="flex items-center justify-between gap-2 rounded-md border border-canvas-border bg-canvas-bg px-2 py-1.5 text-[11px]"
+              title={e.detail ?? undefined}
             >
               <div className="flex min-w-0 flex-1 items-center gap-2">
                 <OutcomeBadge outcome={e.outcome} />
                 <span className="truncate text-canvas-fg">{EVENT_LABELS[e.kind].title}</span>
+                {e.statusCode !== undefined && e.outcome !== "sent" && (
+                  <span className="shrink-0 rounded bg-canvas-surface px-1 py-0.5 text-[9px] font-mono text-canvas-muted">
+                    {e.statusCode}
+                  </span>
+                )}
               </div>
               <span className="shrink-0 truncate text-canvas-muted" title={e.device}>
                 {e.device}

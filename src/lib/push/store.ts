@@ -51,6 +51,13 @@ interface PushStore {
   remove(email: string, id: string): Promise<boolean>;
   removeByEndpoint(endpoint: string): Promise<void>;
   clear(email: string): Promise<number>;
+  /**
+   * Drop every subscription for every user. Used as a one-shot recovery
+   * step when the VAPID keypair changes (otherwise existing subscriptions
+   * point at a public key the server can no longer sign for, and every
+   * push fails with 401/403). Returns the count of records removed.
+   */
+  clearAllAcrossUsers(): Promise<number>;
   /** Iterate all subscriptions whose `events[kind]` is true. Server-side only. */
   forEachWithEvent(
     kind: keyof EventPreferences,
@@ -258,6 +265,16 @@ export function createPushStore(opts: PushStoreOptions = {}): PushStore {
       if (!devices) return 0;
       const count = devices.length;
       state.byEmail.delete(email);
+      await persist();
+      return count;
+    },
+
+    async clearAllAcrossUsers() {
+      await ensureLoaded();
+      let count = 0;
+      for (const devices of state.byEmail.values()) count += devices.length;
+      if (count === 0) return 0;
+      state.byEmail.clear();
       await persist();
       return count;
     },

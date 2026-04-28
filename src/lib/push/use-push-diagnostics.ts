@@ -12,6 +12,8 @@ export interface DiagnosticsEntry {
   device: string;
   kind: PushEventKind;
   outcome: "sent" | "dropped" | "error";
+  /** HTTP status from the upstream push service when available. */
+  statusCode?: number;
   detail?: string;
 }
 

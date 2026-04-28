@@ -18,8 +18,63 @@ import { useUrlState } from "@/lib/use-url-state";
  * - `push-closed`: the SW closed a stale notification (closeOnly
  *   payload). We dismiss any matching open toast for symmetry.
  *
+ * On mount we also check IndexedDB for a pending notification click that
+ * was recorded by the SW when the browser was closed at click time. This
+ * covers the gap where the postMessage fast-path silently drops because
+ * the page's message handler wasn't attached yet during initial load.
+ *
  * Mounts once at the app root (next to <ToastStack />). Renders nothing.
  */
+
+const IDB_NAME = "claw-chat-sw";
+const IDB_PENDING_CLICKS = "pendingClicks";
+const PENDING_CLICK_TTL_MS = 30_000;
+
+interface PendingClick {
+  url: string;
+  data: PushData;
+  ts: number;
+}
+
+async function popPendingClick(): Promise<PendingClick | null> {
+  if (typeof indexedDB === "undefined") return null;
+  return new Promise((resolve) => {
+    try {
+      const req = indexedDB.open(IDB_NAME, 2);
+      req.onerror = () => resolve(null);
+      req.onsuccess = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(IDB_PENDING_CLICKS)) {
+          db.close();
+          resolve(null);
+          return;
+        }
+        try {
+          const tx = db.transaction(IDB_PENDING_CLICKS, "readwrite");
+          const store = tx.objectStore(IDB_PENDING_CLICKS);
+          const getReq = store.get("latest");
+          getReq.onsuccess = () => {
+            const entry = getReq.result as PendingClick | undefined;
+            store.delete("latest");
+            tx.oncomplete = () => {
+              db.close();
+              resolve(entry ?? null);
+            };
+          };
+          getReq.onerror = () => {
+            db.close();
+            resolve(null);
+          };
+        } catch {
+          db.close();
+          resolve(null);
+        }
+      };
+    } catch {
+      resolve(null);
+    }
+  });
+}
 
 interface PushData {
   title?: string;
@@ -29,8 +84,34 @@ interface PushData {
   closeOnly?: boolean;
 }
 
+function navigateTo(url: string, setParam: (key: string, value: string) => void): void {
+  const parsed = parseNavUrl(url);
+  if (parsed) {
+    setParam(parsed.key, parsed.value);
+    return;
+  }
+  try {
+    window.location.assign(url);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function NotificationListener(): null {
   const { setParam } = useUrlState();
+
+  // On mount: check IDB for a pending notification click that was stored
+  // by the service worker when the browser was closed at click time. This
+  // recovers the navigation that the postMessage fast-path would have
+  // dropped because the listener wasn't attached yet during cold load.
+  useEffect(() => {
+    void popPendingClick().then((pending) => {
+      if (!pending) return;
+      if (Date.now() - pending.ts > PENDING_CLICK_TTL_MS) return;
+      navigateTo(pending.url, setParam);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -48,22 +129,7 @@ export function NotificationListener(): null {
         const message = body ? `${title} — ${body}` : title;
         const url = data.url;
         toast.info(message, {
-          onClick: url
-            ? () => {
-                const parsed = parseNavUrl(url);
-                if (parsed) {
-                  setParam(parsed.key, parsed.value);
-                  return;
-                }
-                // Unknown shape — fall back to a hard navigation. Better
-                // than silently dropping the click.
-                try {
-                  window.location.assign(url);
-                } catch {
-                  /* ignore */
-                }
-              }
-            : undefined,
+          onClick: url ? () => navigateTo(url, setParam) : undefined,
         });
         return;
       }
@@ -71,16 +137,11 @@ export function NotificationListener(): null {
       if (msg.kind === "notification-click") {
         const url = msg.url;
         if (!url) return;
-        const parsed = parseNavUrl(url);
-        if (parsed) {
-          setParam(parsed.key, parsed.value);
-          return;
-        }
-        try {
-          window.location.assign(url);
-        } catch {
-          /* ignore */
-        }
+        // The SW already handled the click via postMessage, so clear any
+        // pending IDB entry to prevent the mount-time check from double-
+        // navigating if the page was still loading when the message arrived.
+        void popPendingClick();
+        navigateTo(url, setParam);
         return;
       }
 

@@ -3,6 +3,7 @@
 import { ThemeProvider } from "next-themes";
 import { ActiveChatBroadcaster } from "@/components/notifications/active-chat-broadcaster";
 import { NotificationListener } from "@/components/notifications/notification-listener";
+import { useNotificationsChannel } from "@/lib/push/use-notifications-channel";
 import { useRegisterServiceWorker } from "@/lib/push/use-sw-registration";
 import { ToastStack } from "@/lib/use-toast";
 
@@ -13,11 +14,18 @@ function ServiceWorkerBoot(): null {
   return null;
 }
 
+function NotificationsChannel(): null {
+  // Connects to /ws/notifications for cross-session in-app toasts.
+  useNotificationsChannel();
+  return null;
+}
+
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem>
       <ServiceWorkerBoot />
       <NotificationListener />
+      <NotificationsChannel />
       <ActiveChatBroadcaster />
       {children}
       <ToastStack />

@@ -21,6 +21,16 @@ const TEST_PAYLOADS: Record<PushEventKind, Omit<PushPayload, "kind">> = {
     body: "If you see this, approval prompts will reach this device.",
     url: navUrls.chatRoot(),
   },
+  askQuestion: {
+    title: "Claw Chat — question (test)",
+    body: "If you see this, Claude's questions will reach this device.",
+    url: navUrls.chatRoot(),
+  },
+  planProposal: {
+    title: "Claw Chat — plan ready for review (test)",
+    body: "If you see this, plan-approval prompts will reach this device.",
+    url: navUrls.chatRoot(),
+  },
   error: {
     title: "Claw Chat — error (test)",
     body: "If you see this, error alerts will reach this device.",

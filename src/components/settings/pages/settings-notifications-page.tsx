@@ -59,6 +59,14 @@ const EVENT_LABELS: Record<PushEventKind, { title: string; description: string }
     title: "Permission requested",
     description: "Claude is paused waiting for you to approve a tool.",
   },
+  askQuestion: {
+    title: "Claude has a question",
+    description: "Claude used AskUserQuestion and is waiting for your reply.",
+  },
+  planProposal: {
+    title: "Plan ready for review",
+    description: "Claude finished a plan and is waiting for your approval before proceeding.",
+  },
   error: {
     title: "Errors and crashes",
     description: "Session errors or unexpected disconnects.",

@@ -90,6 +90,7 @@ self.addEventListener("fetch", (event) => {
 
 const IDB_NAME = "claw-chat-sw";
 const IDB_STORE = "activeChats";
+const IDB_PENDING_CLICKS = "pendingClicks";
 const activeChatByClientId = new Map();
 let activeChatLoaded = false;
 
@@ -97,16 +98,30 @@ function openIdb() {
   return new Promise((resolve, reject) => {
     let req;
     try {
-      req = indexedDB.open(IDB_NAME, 1);
+      // Version 2 adds the pendingClicks store for reliable notification
+      // click navigation when the page wasn't open at click time.
+      req = indexedDB.open(IDB_NAME, 2);
     } catch (err) {
       reject(err);
       return;
     }
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
+      const db = req.result;
       try {
-        req.result.createObjectStore(IDB_STORE);
+        if (!db.objectStoreNames.contains(IDB_STORE)) {
+          db.createObjectStore(IDB_STORE);
+        }
       } catch {
         /* ignore — already exists */
+      }
+      // Added in v2: queue a pending notification click so the page can
+      // process it on mount even when it wasn't open at tap/click time.
+      if (event.oldVersion < 2) {
+        try {
+          db.createObjectStore(IDB_PENDING_CLICKS);
+        } catch {
+          /* ignore */
+        }
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -166,6 +181,33 @@ async function idbWrite(clientId, chatId) {
     } else {
       store.put(chatId, clientId);
     }
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.onabort = () => resolve();
+  });
+}
+
+/**
+ * Write a pending notification click to IDB so the page can process it on
+ * mount even when the browser was closed at the time of the click. The entry
+ * has a short TTL (30 s) enforced on the read side in NotificationListener.
+ */
+async function idbWritePendingClick(url, data) {
+  let db;
+  try {
+    db = await openIdb();
+  } catch {
+    return;
+  }
+  await new Promise((resolve) => {
+    let tx;
+    try {
+      tx = db.transaction(IDB_PENDING_CLICKS, "readwrite");
+    } catch {
+      resolve();
+      return;
+    }
+    tx.objectStore(IDB_PENDING_CLICKS).put({ url, data, ts: Date.now() }, "latest");
     tx.oncomplete = () => resolve();
     tx.onerror = () => resolve();
     tx.onabort = () => resolve();
@@ -382,6 +424,13 @@ self.addEventListener("notificationclick", (event) => {
   const target = data.url || "/chat";
   event.waitUntil(
     (async () => {
+      // Always persist the pending click to IDB first. The page checks this
+      // on mount so that clicks work even when the browser was closed — the
+      // postMessage path below is a best-effort fast path for already-open
+      // tabs; it silently drops when the page hasn't attached its listener
+      // yet (e.g. initial load after cold-open).
+      await idbWritePendingClick(target, data);
+
       const wins = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const existing = wins.find((w) => w.url.includes("/chat"));
       if (existing) {
@@ -390,22 +439,29 @@ self.addEventListener("notificationclick", (event) => {
         } catch {
           /* ignore */
         }
-        // Prefer postMessage so the SPA can route in-app via
-        // `useUrlState` (no full page reload, no remount of state).
-        // The NotificationListener handles `notification-click`.
+        // Attempt in-app SPA routing via postMessage (no full reload).
+        // NotificationListener handles `notification-click` and clears
+        // the IDB entry so the page doesn't double-navigate on mount.
         try {
           existing.postMessage({ kind: "notification-click", url: target, data });
-          return;
         } catch {
-          /* fall through to navigate */
+          /* ignore — IDB fallback handles it */
         }
+        // Also navigate if the window is on a different chat, so that
+        // page-loading races are covered even without the IDB check.
         try {
-          if ("navigate" in existing) await existing.navigate(target);
+          const existingChat = new URL(existing.url).searchParams.get("chat");
+          const targetChat = new URL(target, self.location.origin).searchParams.get("chat");
+          if (existingChat !== targetChat && "navigate" in existing) {
+            await existing.navigate(target);
+          }
         } catch {
           /* ignore */
         }
         return;
       }
+      // No existing window — open a new one. The IDB entry will be
+      // picked up by NotificationListener once the page loads.
       await self.clients.openWindow(target);
     })(),
   );

@@ -13,6 +13,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import sdk from "./sdk-loader.js";
 const { query } = sdk as typeof import("@anthropic-ai/claude-agent-sdk");
 import { extractSessionFromCookieHeader } from "./src/lib/auth-server";
+import { consumeWsTicket } from "./src/lib/ws-ticket-store";
 import { execGit, GitExecError } from "./src/lib/git/exec";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
@@ -184,6 +185,13 @@ if (!ALLOWED_EMAIL) {
   process.exit(1);
 }
 
+if (!dev && ALLOWED_ORIGINS.size === 0) {
+  console.warn(
+    "!! ALLOWED_ORIGINS is not set. In production all cross-origin WebSocket " +
+      "connections will be rejected. Set ALLOWED_ORIGINS=https://your-domain.com in the .env file.",
+  );
+}
+
 /* ------------------------------------------------------------------ */
 /*  Types                                                              */
 /* ------------------------------------------------------------------ */
@@ -279,6 +287,12 @@ interface ChatSession {
     cacheRead: number;
     cacheCreate: number;
   };
+  /**
+   * Number of consecutive "No conversation found" retries for the current
+   * user message. Prevents infinite recursion when Claude's resume is
+   * broken. Reset to 0 on every successful result; capped at 2.
+   */
+  retryCount: number;
   /** Authenticated email of the client that established this session, for audit. */
   actorEmail: string;
   /**
@@ -326,27 +340,6 @@ function claudeSessionFileExists(sessionId: string): boolean {
     /* ignore read errors */
   }
   return false;
-}
-
-/* ------------------------------------------------------------------ */
-/*  WebSocket auth helper                                              */
-/* ------------------------------------------------------------------ */
-
-/**
- * Validate an access token by calling the Spring backend's /auth/me.
- * Returns true if the token is valid and the email matches ALLOWED_EMAIL.
- */
-async function validateAccessToken(token: string): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_ORIGIN}/api/v1/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!res.ok) return false;
-    const user = (await res.json()) as { email: string };
-    return user.email.toLowerCase() === ALLOWED_EMAIL.toLowerCase();
-  } catch {
-    return false;
-  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -400,6 +393,7 @@ class SessionManager {
         cronOnEvent: null,
         cronAbortTimer: null,
         cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+        retryCount: 0,
         actorEmail: "anonymous",
         displayPreview: "",
       };
@@ -482,6 +476,7 @@ class SessionManager {
       cronOnEvent: null,
       cronAbortTimer: null,
       cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+      retryCount: 0,
       actorEmail: "anonymous",
       displayPreview: persisted.lastUserMessage ? persisted.lastUserMessage.slice(0, 80) : "",
     };
@@ -973,6 +968,17 @@ class SessionManager {
   }
 
   private async handleUserMessage(session: ChatSession, text: string) {
+    // Guard against infinite retry loops from "No conversation found" errors.
+    if (session.retryCount > 2) {
+      this.broadcast(session, {
+        type: "error",
+        error: "Conversation resume failed after multiple retries. Please start a new chat.",
+      });
+      session.retryCount = 0;
+      session.isProcessing = false;
+      return;
+    }
+
     session.isProcessing = true;
     session.accumulatedText = "";
     if (!session.displayPreview && text.trim().length > 0) {
@@ -1600,7 +1606,7 @@ class SessionManager {
 
         // Result — turn complete
         if (msg.type === "result") {
-          // If resume failed, retry without resume
+          // If resume failed, retry without resume (bounded by retryCount guard)
           if (
             msg.is_error &&
             typeof msg.result === "string" &&
@@ -1611,10 +1617,12 @@ class SessionManager {
             delete (queryParams.options as Record<string, unknown>).resume;
             session.isProcessing = false;
             session.currentQuery = null;
+            session.retryCount += 1;
             this.handleUserMessage(session, text);
             return;
           }
           session.claudeSessionId = msg.session_id as string;
+          session.retryCount = 0; // reset on successful result
           session.accumulatedText = "";
           this.broadcast(session, {
             type: "result",
@@ -1920,11 +1928,34 @@ class SessionManager {
     });
   }
 
+  /**
+   * Event types that carry structural replay value. High-frequency streaming
+   * events (text_delta, thinking_delta, tool_use_start, tool_result) are
+   * excluded so eventHistory doesn't fill up during a long turn and get
+   * pruned before the important bookmarks (turn_start/end, result, etc.)
+   * are preserved.
+   */
+  private static readonly HISTORY_EVENT_TYPES = new Set([
+    "session_init",
+    "turn_start",
+    "turn_end",
+    "result",
+    "permission_request",
+    "permission_resolved",
+    "ask_question",
+    "plan_proposal",
+    "interrupted",
+    "error",
+  ]);
+
   private broadcast(session: ChatSession, event: Record<string, unknown>) {
     session.lastActivity = Date.now();
 
-    // Save to history for reconnecting clients (skip transient status events)
-    if (event.type !== "status") {
+    // Save to history for reconnecting clients — store only structural
+    // events needed for replay, skip high-frequency streaming events
+    // (text_delta, thinking_delta, tool_use_start, tool_result, status).
+    const eventType = event.type as string;
+    if (SessionManager.HISTORY_EVENT_TYPES.has(eventType)) {
       session.eventHistory.push(event);
       // Cap history to prevent unbounded growth (keep last 500 events)
       if (session.eventHistory.length > 500) {
@@ -2234,15 +2265,9 @@ function isOriginAllowed(origin: string | undefined): boolean {
     return ALLOWED_ORIGINS.has(origin);
   }
 
-  // Default: allow same-host origins (any port)
-  try {
-    const url = new URL(origin);
-    return (
-      url.hostname === "localhost" || url.hostname === "127.0.0.1" || origin.includes(".viksi.ai")
-    );
-  } catch {
-    return false;
-  }
+  // Production with no allowlist: reject all cross-origin connections.
+  // A startup warning is logged at boot (see ALLOWED_ORIGINS check below).
+  return false;
 }
 
 /* ------------------------------------------------------------------ */
@@ -2415,12 +2440,17 @@ app.prepare().then(() => {
     }
 
     // Authenticate: try signed session cookie first (fast, local HMAC check),
-    // then fall back to validating access token via the Spring backend.
+    // then fall back to a short-lived WS ticket (?ticket=<uuid>) issued by
+    // POST /api/auth/ws-ticket. Bearer tokens in URLs are intentionally NOT
+    // supported here — they appear in server logs and browser history.
     const wsRoute = isTerminalWs ? "/ws/terminal" : isMonitoringWs ? "/ws/monitoring" : "/ws/chat";
     const sessionPayload = extractSessionFromCookieHeader(req.headers.cookie);
-    if (!sessionPayload) {
-      const queryToken = qs.token as string | undefined;
-      if (!queryToken) {
+    let actorEmail: string;
+    if (sessionPayload) {
+      actorEmail = sessionPayload.email;
+    } else {
+      const queryTicket = qs.ticket as string | undefined;
+      if (!queryTicket) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         logWsUpgrade({
@@ -2431,21 +2461,20 @@ app.prepare().then(() => {
         }).catch(() => {});
         return;
       }
-      const valid = await validateAccessToken(queryToken);
-      if (!valid) {
+      const ticketEmail = consumeWsTicket(queryTicket);
+      if (!ticketEmail) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
         logWsUpgrade({
           route: wsRoute,
           statusCode: 401,
           actor: "anonymous",
-          errorMessage: "Invalid access token",
+          errorMessage: "Invalid or expired WS ticket",
         }).catch(() => {});
         return;
       }
+      actorEmail = ticketEmail;
     }
-
-    const actorEmail = sessionPayload?.email ?? "anonymous";
 
     if (isTerminalWs) {
       wss.handleUpgrade(req, socket, head, (ws) => {

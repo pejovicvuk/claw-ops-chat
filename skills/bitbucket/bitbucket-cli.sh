@@ -157,7 +157,9 @@ print(json.dumps(result,indent=2))
 cmd_prs() {
     local repo="${1:?Usage: bitbucket-cli.sh prs REPO [STATE]}"
     local state="${2:-OPEN}"
-    bb_get "$BASE/repositories/$WS/$repo/pullrequests?state=$state&pagelen=25" | python3 -c "
+    local encoded_repo
+    encoded_repo=$(urlencode "$repo")
+    bb_get "$BASE/repositories/$WS/$encoded_repo/pullrequests?state=$state&pagelen=25" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 result={
@@ -184,7 +186,10 @@ print(json.dumps(result,indent=2))
 cmd_pr() {
     local repo="${1:?Usage: bitbucket-cli.sh pr REPO PR_ID}"
     local pr_id="${2:?Usage: bitbucket-cli.sh pr REPO PR_ID}"
-    bb_get "$BASE/repositories/$WS/$repo/pullrequests/$pr_id" | python3 -c "
+    local encoded_repo encoded_pr_id
+    encoded_repo=$(urlencode "$repo")
+    encoded_pr_id=$(urlencode "$pr_id")
+    bb_get "$BASE/repositories/$WS/$encoded_repo/pullrequests/$encoded_pr_id" | python3 -c "
 import sys,json
 pr=json.load(sys.stdin)
 print(json.dumps({
@@ -207,7 +212,10 @@ print(json.dumps({
 cmd_diffstat() {
     local repo="${1:?Usage: bitbucket-cli.sh diffstat REPO PR_ID}"
     local pr_id="${2:?Usage: bitbucket-cli.sh diffstat REPO PR_ID}"
-    bb_get "$BASE/repositories/$WS/$repo/pullrequests/$pr_id/diffstat" | python3 -c "
+    local encoded_repo encoded_pr_id
+    encoded_repo=$(urlencode "$repo")
+    encoded_pr_id=$(urlencode "$pr_id")
+    bb_get "$BASE/repositories/$WS/$encoded_repo/pullrequests/$encoded_pr_id/diffstat" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 files=[]
@@ -234,13 +242,19 @@ print(json.dumps({
 cmd_diff() {
     local repo="${1:?Usage: bitbucket-cli.sh diff REPO PR_ID}"
     local pr_id="${2:?Usage: bitbucket-cli.sh diff REPO PR_ID}"
-    bb_get_raw "$BASE/repositories/$WS/$repo/pullrequests/$pr_id/diff"
+    local encoded_repo encoded_pr_id
+    encoded_repo=$(urlencode "$repo")
+    encoded_pr_id=$(urlencode "$pr_id")
+    bb_get_raw "$BASE/repositories/$WS/$encoded_repo/pullrequests/$encoded_pr_id/diff"
 }
 
 cmd_comments() {
     local repo="${1:?Usage: bitbucket-cli.sh comments REPO PR_ID}"
     local pr_id="${2:?Usage: bitbucket-cli.sh comments REPO PR_ID}"
-    bb_get "$BASE/repositories/$WS/$repo/pullrequests/$pr_id/comments?pagelen=50" | python3 -c "
+    local encoded_repo encoded_pr_id
+    encoded_repo=$(urlencode "$repo")
+    encoded_pr_id=$(urlencode "$pr_id")
+    bb_get "$BASE/repositories/$WS/$encoded_repo/pullrequests/$encoded_pr_id/comments?pagelen=50" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 comments=[]
@@ -268,7 +282,10 @@ print(json.dumps(result,indent=2))
 cmd_pr_commits() {
     local repo="${1:?Usage: bitbucket-cli.sh pr-commits REPO PR_ID}"
     local pr_id="${2:?Usage: bitbucket-cli.sh pr-commits REPO PR_ID}"
-    bb_get "$BASE/repositories/$WS/$repo/pullrequests/$pr_id/commits?pagelen=25" | python3 -c "
+    local encoded_repo encoded_pr_id
+    encoded_repo=$(urlencode "$repo")
+    encoded_pr_id=$(urlencode "$pr_id")
+    bb_get "$BASE/repositories/$WS/$encoded_repo/pullrequests/$encoded_pr_id/commits?pagelen=25" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 print(json.dumps([{
@@ -283,7 +300,9 @@ print(json.dumps([{
 cmd_branches() {
     local repo="${1:?Usage: bitbucket-cli.sh branches REPO [filter]}"
     local filter="${2:-}"
-    local url="$BASE/repositories/$WS/$repo/refs/branches?pagelen=25"
+    local encoded_repo
+    encoded_repo=$(urlencode "$repo")
+    local url="$BASE/repositories/$WS/$encoded_repo/refs/branches?pagelen=25"
     if [ -n "$filter" ]; then
         url="$url&q=name~\"$filter\""
     fi
@@ -307,7 +326,10 @@ print(json.dumps(result,indent=2))
 cmd_commits() {
     local repo="${1:?Usage: bitbucket-cli.sh commits REPO [BRANCH]}"
     local branch="${2:-main}"
-    bb_get "$BASE/repositories/$WS/$repo/commits/$branch?pagelen=10" | python3 -c "
+    local encoded_repo encoded_branch
+    encoded_repo=$(urlencode "$repo")
+    encoded_branch=$(urlencode "$branch")
+    bb_get "$BASE/repositories/$WS/$encoded_repo/commits/$encoded_branch?pagelen=10" | python3 -c "
 import sys,json
 d=json.load(sys.stdin)
 print(json.dumps([{

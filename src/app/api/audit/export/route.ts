@@ -1,5 +1,6 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { exportEvents } from "@/lib/audit/reader";
+import { withAudit } from "@/lib/audit/api-wrap";
 import type { AuditCategory, AuditFilter } from "@/lib/audit/types";
 
 const VALID_CATEGORIES = new Set<AuditCategory>(["api", "cron", "session"]);
@@ -8,7 +9,7 @@ const VALID_CATEGORIES = new Set<AuditCategory>(["api", "cron", "session"]);
  * Streams audit events in the requested range as NDJSON with a download
  * filename. Same filter vocabulary as `/api/audit/events` minus cursor/limit.
  */
-export async function GET(request: Request) {
+async function getHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   const url = new URL(request.url);
   const filter: AuditFilter = {};
@@ -61,3 +62,5 @@ export async function GET(request: Request) {
     },
   });
 }
+
+export const GET = withAudit({ route: "/api/audit/export", auditSuccessGets: true }, getHandler);

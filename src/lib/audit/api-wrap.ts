@@ -32,6 +32,12 @@ interface WithAuditOpts {
   subjectFrom?: (req: Request) => string | null | Promise<string | null>;
   /** Override the route category label in the subject line. */
   label?: string;
+  /**
+   * When true, successful GET responses are also written to the audit
+   * log (normally skipped to reduce noise). Use this for routes that
+   * serve sensitive data — file reads, message history, audit exports.
+   */
+  auditSuccessGets?: boolean;
 }
 
 type RouteHandler<Ctx> = (req: Request, ctx: Ctx) => Promise<Response>;
@@ -61,11 +67,14 @@ export function withAudit<Ctx>(opts: WithAuditOpts, handler: RouteHandler<Ctx>):
       });
       throw err;
     }
-    // Skip success GETs; log 4xx/5xx; log all state-changing methods.
+    // Log all state-changing methods and errors unconditionally.
+    // Skip success GETs unless the route opts in via auditSuccessGets (used
+    // for sensitive-data endpoints: file reads, message history, exports).
     const status = response.status;
     const isStateChanging = STATE_CHANGING_METHODS.has(method);
     const isError = status >= 400;
-    if (isStateChanging || isError) {
+    const isAuditedGet = method === "GET" && status < 400 && opts.auditSuccessGets;
+    if (isStateChanging || isError || isAuditedGet) {
       await fireAudit({
         request,
         method,

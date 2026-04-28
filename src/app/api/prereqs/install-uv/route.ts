@@ -8,6 +8,9 @@ import {
 } from "@/lib/prereq-sessions";
 import { buildUvInstallCommand, detectPlatform } from "@/lib/platform-detect";
 
+/** Prevents simultaneous uv installer processes from being spawned. */
+let uvInstallInProgress = false;
+
 /**
  * Install the `uv` / `uvx` CLI on the server where this app runs.
  *
@@ -25,9 +28,15 @@ export async function POST(request: Request) {
   const session = extractSession(request);
   if (!session) return unauthorized();
 
+  if (uvInstallInProgress) {
+    return Response.json({ error: "uv installation already in progress" }, { status: 409 });
+  }
+  uvInstallInProgress = true;
+
   const platform = detectPlatform();
   const built = await buildUvInstallCommand();
   if ("error" in built) {
+    uvInstallInProgress = false;
     return Response.json({ error: built.error }, { status: 400 });
   }
 
@@ -60,6 +69,7 @@ export async function POST(request: Request) {
   });
 
   child.on("close", (code) => {
+    uvInstallInProgress = false;
     broadcastToPrereqSession(email, prereqId, "done", {
       success: code === 0,
       ...(code !== 0 ? { error: `Installer exited with code ${code}` } : {}),
@@ -67,6 +77,7 @@ export async function POST(request: Request) {
   });
 
   child.on("error", (err) => {
+    uvInstallInProgress = false;
     broadcastToPrereqSession(email, prereqId, "done", {
       success: false,
       error: err.message,

@@ -2,6 +2,7 @@ import { readFile, stat } from "fs/promises";
 import { basename } from "path";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { safePath, SafePathError } from "@/lib/safe-path";
+import { withAudit } from "@/lib/audit/api-wrap";
 
 /**
  * Encode a filename for Content-Disposition header per RFC 5987.
@@ -15,7 +16,7 @@ function contentDisposition(name: string): string {
   return `attachment; filename="${asciiSafe}"; filename*=UTF-8''${encoded}`;
 }
 
-export async function GET(request: Request) {
+async function getHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
   const url = new URL(request.url);
@@ -52,3 +53,12 @@ export async function GET(request: Request) {
     );
   }
 }
+
+export const GET = withAudit(
+  {
+    route: "/api/files/download",
+    auditSuccessGets: true,
+    subjectFrom: (req) => new URL(req.url).searchParams.get("path"),
+  },
+  getHandler,
+);

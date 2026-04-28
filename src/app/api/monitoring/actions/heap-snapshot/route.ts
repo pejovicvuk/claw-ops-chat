@@ -1,4 +1,5 @@
 import { join } from "path";
+import { homedir } from "os";
 import { existsSync, mkdirSync } from "fs";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { getAuditWriter } from "@/lib/audit/writer";
@@ -12,7 +13,7 @@ export async function POST(request: Request) {
   } catch {
     return Response.json({ error: "v8 module unavailable" }, { status: 500 });
   }
-  const dir = "/root/.monitoring/heap-snapshots";
+  const dir = join(homedir(), ".monitoring", "heap-snapshots");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const filename = `heap-${Date.now()}.heapsnapshot`;
   const path = join(dir, filename);

@@ -77,10 +77,7 @@ async function getHandler(request: Request): Promise<Response> {
   try {
     const result = await execGit(diffArgs, { cwd: repoRoot, maxBuffer: MAX_DIFF_BYTES });
     if (result.code !== 0) {
-      return Response.json(
-        { error: result.stderr.trim() || "git diff failed" },
-        { status: 500 },
-      );
+      return Response.json({ error: result.stderr.trim() || "git diff failed" }, { status: 500 });
     }
     const body: GitDiffResponse = {
       isRepo: true,

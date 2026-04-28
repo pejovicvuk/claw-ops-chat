@@ -2,10 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { authFetch } from "@/lib/auth";
-import type {
-  SessionBranchSnapshot,
-  SessionBranchesResponse,
-} from "@/lib/session-branches";
+import type { SessionBranchSnapshot, SessionBranchesResponse } from "@/lib/session-branches";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 const POLL_INTERVAL_MS = 5000;

@@ -1,10 +1,7 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { withAudit } from "@/lib/audit/api-wrap";
 import { loadAllSessions } from "@/lib/session-persistence";
-import type {
-  SessionBranchSnapshot,
-  SessionBranchesResponse,
-} from "@/lib/session-branches";
+import type { SessionBranchSnapshot, SessionBranchesResponse } from "@/lib/session-branches";
 
 export const dynamic = "force-dynamic";
 

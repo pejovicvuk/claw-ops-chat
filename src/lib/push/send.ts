@@ -118,10 +118,7 @@ async function sendOne(
       // 24h TTL — if the device is offline that long, drop the message.
       { TTL: 24 * 60 * 60 },
     );
-    return finalize(email, device, payload.kind, {
-      outcome: "sent",
-      drop: false,
-    });
+    return finalize(email, device, payload.kind, { outcome: "sent" });
   } catch (err) {
     const wpe = err as WebPushError | null;
     const status = wpe?.statusCode;
@@ -136,7 +133,7 @@ async function sendOne(
     const detail =
       classified.detail ?? (err instanceof Error ? err.message : String(err)) ?? undefined;
     return finalize(email, device, payload.kind, {
-      ...classified,
+      outcome: classified.outcome,
       detail,
       statusCode: status,
     });

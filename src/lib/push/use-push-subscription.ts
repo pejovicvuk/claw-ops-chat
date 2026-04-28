@@ -81,6 +81,23 @@ function waitForActivation(reg: ServiceWorkerRegistration): Promise<void> {
 
 export type PushSupport = { kind: "supported" } | { kind: "unsupported"; reason: string };
 
+export interface TestDeviceResult {
+  label: string;
+  outcome: "sent" | "dropped" | "error";
+  statusCode?: number;
+  detail?: string;
+}
+
+export interface TestSendResult {
+  ok: boolean;
+  kind: PushEventKind;
+  attempted: number;
+  sent: number;
+  dropped: number;
+  errored: number;
+  devices: TestDeviceResult[];
+}
+
 export interface UsePushSubscriptionResult {
   support: PushSupport;
   permission: NotificationPermission;
@@ -104,8 +121,13 @@ export interface UsePushSubscriptionResult {
   setDeviceBehavior: (id: string, behavior: Partial<BehaviorPreferences>) => Promise<void>;
   removeDevice: (id: string) => Promise<void>;
   clearAll: () => Promise<void>;
-  /** Fire a test notification on the given event channel (defaults to turnComplete). */
-  sendTest: (kind?: PushEventKind) => Promise<void>;
+  /**
+   * Fire a test notification on the given event channel (defaults to
+   * turnComplete). Resolves with per-device delivery counts so the
+   * caller can render a toast like "Sent 1 / 2 (1 dropped: 401)"
+   * instead of an opaque success.
+   */
+  sendTest: (kind?: PushEventKind) => Promise<TestSendResult>;
   refresh: () => Promise<void>;
 }
 
@@ -409,20 +431,25 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     }
   }, [refresh]);
 
-  const sendTest = useCallback(async (kind: PushEventKind = "turnComplete") => {
-    setError(null);
-    try {
-      const res = await authFetch(`${BASE}/api/push/test?kind=${encodeURIComponent(kind)}`, {
-        method: "POST",
-      });
-      if (!res.ok) throw new Error(`Failed to send test (${res.status})`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send test notification");
-      // Re-throw so the caller (settings UI) can show a user-visible
-      // failure toast instead of silently appearing to succeed.
-      throw err;
-    }
-  }, []);
+  const sendTest = useCallback(
+    async (kind: PushEventKind = "turnComplete"): Promise<TestSendResult> => {
+      setError(null);
+      try {
+        const res = await authFetch(`${BASE}/api/push/test?kind=${encodeURIComponent(kind)}`, {
+          method: "POST",
+        });
+        if (!res.ok) throw new Error(`Failed to send test (${res.status})`);
+        const body = (await res.json()) as TestSendResult;
+        return body;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to send test notification");
+        // Re-throw so the caller (settings UI) can show a user-visible
+        // failure toast instead of silently appearing to succeed.
+        throw err;
+      }
+    },
+    [],
+  );
 
   return {
     support,

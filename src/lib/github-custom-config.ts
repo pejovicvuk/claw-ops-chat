@@ -2,6 +2,7 @@ import { existsSync } from "fs";
 import { mkdir, readFile, writeFile, chmod, unlink } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
+import { spawn } from "child_process";
 import {
   registerMcpServer as registerServer,
   unregisterMcpServer as unregisterServer,
@@ -81,4 +82,34 @@ export async function unregisterMcpServer(): Promise<void> {
 
 export async function isMcpServerRegistered(): Promise<boolean> {
   return isServerRegistered(MCP_SERVER_ID);
+}
+
+/**
+ * Authenticate the gh CLI with the stored PAT so that tools like
+ * claw-ops-fe (which checks `gh auth status` via SSH) see GitHub as
+ * connected. Reads the token from stdin to avoid exposing it in argv.
+ * Best-effort — silently no-ops if gh is not installed.
+ */
+export async function syncGhCli(token: string): Promise<void> {
+  return new Promise((resolve) => {
+    const proc = spawn("gh", ["auth", "login", "--with-token"], { timeout: 15000 });
+    proc.stdin.write(token + "\n");
+    proc.stdin.end();
+    proc.on("close", () => resolve());
+    proc.on("error", () => resolve());
+  });
+}
+
+/**
+ * Log out of the gh CLI when GitHub is disconnected in claw-ops-chat.
+ * Best-effort — silently no-ops if gh is not installed or not logged in.
+ */
+export async function unsyncGhCli(): Promise<void> {
+  return new Promise((resolve) => {
+    const proc = spawn("gh", ["auth", "logout", "--hostname", "github.com", "--yes"], {
+      timeout: 10000,
+    });
+    proc.on("close", () => resolve());
+    proc.on("error", () => resolve());
+  });
 }

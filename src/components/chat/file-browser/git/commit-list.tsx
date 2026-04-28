@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useState } from "react";
 import { FiAlertTriangle, FiRefreshCw } from "react-icons/fi";
 import { List, type RowComponentProps } from "react-window";
 import { useGitLog } from "@/lib/use-git-log";
@@ -16,6 +17,13 @@ interface CommitListProps {
 
 export function CommitList({ repoRoot, branch }: CommitListProps) {
   const { entries, loading, error, reload } = useGitLog(repoRoot, branch, true, COMMIT_LIMIT);
+  // Single-open expansion: clicking a commit row reveals its diff and
+  // closes any other open commit. Mobile users on small screens never
+  // have to dismiss two panels at once.
+  const [expandedSha, setExpandedSha] = useState<string | null>(null);
+  const handleToggle = useCallback((sha: string) => {
+    setExpandedSha((prev) => (prev === sha ? null : sha));
+  }, []);
 
   if (loading && entries.length === 0) {
     return (
@@ -53,13 +61,22 @@ export function CommitList({ repoRoot, branch }: CommitListProps) {
     return <p className="py-8 text-center text-[12px] text-canvas-muted">No commits</p>;
   }
 
-  if (entries.length >= VIRTUALIZE_THRESHOLD) {
+  // react-window assumes a fixed rowHeight, which breaks the moment one
+  // row expands to show its diff. We bypass virtualization whenever any
+  // commit is expanded. With COMMIT_LIMIT=100 this never matters today,
+  // but the guard keeps things correct if the limit ever rises.
+  if (entries.length >= VIRTUALIZE_THRESHOLD && expandedSha === null) {
     const Row = ({ index, style }: RowComponentProps<Record<string, never>>) => {
       const entry = entries[index];
       if (!entry) return null;
       return (
         <div style={style}>
-          <CommitListItem entry={entry} />
+          <CommitListItem
+            entry={entry}
+            expanded={false}
+            onToggle={() => handleToggle(entry.sha)}
+            repoRoot={repoRoot}
+          />
         </div>
       );
     };
@@ -80,7 +97,12 @@ export function CommitList({ repoRoot, branch }: CommitListProps) {
     <div role="list" aria-label="Commits">
       {entries.map((entry) => (
         <div key={entry.sha} role="listitem">
-          <CommitListItem entry={entry} />
+          <CommitListItem
+            entry={entry}
+            expanded={entry.sha === expandedSha}
+            onToggle={() => handleToggle(entry.sha)}
+            repoRoot={repoRoot}
+          />
         </div>
       ))}
     </div>

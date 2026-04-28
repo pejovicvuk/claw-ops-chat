@@ -48,10 +48,9 @@ describe("useGitDiff", () => {
 
   it("clears state when path becomes empty", async () => {
     getGitDiffMock.mockResolvedValueOnce({ isRepo: true, tracked: true, diff: "x" });
-    const { result, rerender } = renderHook(
-      ({ p }: { p: string }) => useGitDiff(p, "working"),
-      { initialProps: { p: "~/a.txt" } },
-    );
+    const { result, rerender } = renderHook(({ p }: { p: string }) => useGitDiff(p, "working"), {
+      initialProps: { p: "~/a.txt" },
+    });
     await waitFor(() => expect(result.current.diff).toBe("x"));
 
     rerender({ p: "" });

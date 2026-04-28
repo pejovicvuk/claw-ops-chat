@@ -644,11 +644,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
           </div>
         ) : git.repoRoot ? (
           <div key="git" className="flex-1 min-h-0 animate-panel-in">
-            <GitPanelView
-              git={git}
-              repoRoot={git.repoRoot}
-              selectedSessionId={selectedSessionId}
-            />
+            <GitPanelView git={git} repoRoot={git.repoRoot} selectedSessionId={selectedSessionId} />
           </div>
         ) : null}
 

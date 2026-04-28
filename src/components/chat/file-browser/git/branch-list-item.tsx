@@ -26,8 +26,7 @@ export function BranchListItem({
   // Other-chat conflict: at least one session is on this branch but it
   // isn't the one currently open in the UI, AND it isn't the user's
   // current branch (where a checkout would be a no-op).
-  const otherChatActive =
-    sessionsOnBranch.length > 0 && !isCurrentChatBranch && !branch.current;
+  const otherChatActive = sessionsOnBranch.length > 0 && !isCurrentChatBranch && !branch.current;
 
   const handleClick = () => {
     if (otherChatActive) {

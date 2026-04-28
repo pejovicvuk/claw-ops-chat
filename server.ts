@@ -578,10 +578,7 @@ class SessionManager {
       if (err instanceof GitExecError) return;
       // Anything else: log but don't surface — branch detection is
       // advisory, not load-bearing.
-      console.warn(
-        `[session=${session.id}] refreshBranchName failed:`,
-        (err as Error).message,
-      );
+      console.warn(`[session=${session.id}] refreshBranchName failed:`, (err as Error).message);
     }
   }
 

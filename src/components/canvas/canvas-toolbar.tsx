@@ -1,8 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { FiArrowLeft, FiChevronLeft, FiChevronRight, FiPlus } from "react-icons/fi";
-import { AddWindowMenu } from "./add-window-menu";
+import { FiArrowLeft, FiChevronLeft, FiChevronRight, FiMessageSquare } from "react-icons/fi";
+import type { IconType } from "react-icons";
 import { TOOLBAR_H, type WindowKind } from "./canvas-types";
 
 interface CanvasToolbarProps {
@@ -18,8 +17,9 @@ interface CanvasToolbarProps {
 
 /**
  * Top bar for the per-item canvas. Left side: back arrow + item title +
- * slug pill. Right side: page navigator + accent "Add window" button
- * (which opens an inline dropdown picker).
+ * slug pill. Right side: page navigator + a row of icon-only tool
+ * buttons, one per `WindowKind`. Each icon click directly spawns a new
+ * window of that kind — no dropdown, no extra confirm step.
  */
 export function CanvasToolbar({
   itemDisplayName,
@@ -31,8 +31,6 @@ export function CanvasToolbar({
   onAdd,
   onOpenSessions,
 }: CanvasToolbarProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
-
   return (
     <header
       className="relative flex shrink-0 items-center justify-between gap-3 border-b border-canvas-border bg-canvas-bg px-3"
@@ -65,29 +63,38 @@ export function CanvasToolbar({
       </div>
       <div className="flex shrink-0 items-center gap-2">
         <PageNavigator current={currentPage} total={totalPages} onChange={onPageChange} />
-        <div className="relative">
-          <button
-            type="button"
-            onClick={() => setMenuOpen((v) => !v)}
-            className="btn-press inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1 text-[12px] font-medium text-white hover:opacity-90"
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-          >
-            <FiPlus size={13} />
-            Add window
-          </button>
-          {menuOpen && (
-            <AddWindowMenu
-              onPick={(kind) => {
-                setMenuOpen(false);
-                onAdd(kind);
-              }}
-              onDismiss={() => setMenuOpen(false)}
-            />
-          )}
-        </div>
+        <ToolPalette onAdd={onAdd} />
       </div>
     </header>
+  );
+}
+
+/** Window-kind → icon mapping. New kinds slot in here without touching the toolbar layout. */
+const KIND_ICONS: Record<WindowKind, { icon: IconType; label: string }> = {
+  chat: { icon: FiMessageSquare, label: "New chat" },
+};
+
+const KIND_ORDER: WindowKind[] = ["chat"];
+
+function ToolPalette({ onAdd }: { onAdd: (kind: WindowKind) => void }) {
+  return (
+    <div className="inline-flex items-center gap-0.5 rounded-lg border border-canvas-border bg-canvas-bg px-1 py-0.5">
+      {KIND_ORDER.map((kind) => {
+        const { icon: Icon, label } = KIND_ICONS[kind];
+        return (
+          <button
+            key={kind}
+            type="button"
+            onClick={() => onAdd(kind)}
+            className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-accent hover:text-white focus-visible:bg-accent focus-visible:text-white"
+            aria-label={label}
+            title={label}
+          >
+            <Icon size={13} />
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

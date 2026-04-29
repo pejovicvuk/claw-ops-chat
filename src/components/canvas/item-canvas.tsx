@@ -76,6 +76,20 @@ export function ItemCanvas({ projectSlug, itemSlug, onOpenSessions }: ItemCanvas
     };
   }, [itemSlug, projectSlug]);
 
+  // Lock the global file browser to this item's folder while the canvas
+  // is mounted. ChatLayout reads `?root` + `?path` and forwards them to
+  // the FileBrowser, which enforces the boundary in `navigateTo`.
+  const itemAbsolutePath = item?.absolutePath ?? null;
+  useEffect(() => {
+    if (!itemAbsolutePath) return;
+    setParam("root", itemAbsolutePath);
+    setParam("path", itemAbsolutePath);
+    return () => {
+      setParam("root", null);
+      setParam("path", null);
+    };
+  }, [itemAbsolutePath, setParam]);
+
   const handleBack = useCallback(() => {
     setParam("item", null);
   }, [setParam]);

@@ -102,6 +102,13 @@ interface ChatViewProps {
   /** Mobile-only: opens the Files panel. Mirrors `onOpenSessions` but at
       the opposite end of the Mode/Effort bar. */
   onOpenFiles?: () => void;
+  /**
+   * Initial working directory for a NEW chat (no resumeSessionId).
+   * Used by the per-item canvas to scope a session to the item's
+   * folder. Resumes still load `sessionCwd` from the persisted session
+   * metadata.
+   */
+  defaultCwd?: string | null;
 }
 
 export function ChatView({
@@ -112,9 +119,13 @@ export function ChatView({
   onSessionCreated,
   onOpenSessions,
   onOpenFiles,
+  defaultCwd,
 }: ChatViewProps) {
   const isMobile = useIsMobile();
-  const [sessionCwd, setSessionCwd] = useState<string | null>(null);
+  // `defaultCwd` seeds new chats with a scoped working directory (e.g.
+  // an item's folder under ~/projects). Resumes overwrite this with the
+  // persisted session metadata in the effect below.
+  const [sessionCwd, setSessionCwd] = useState<string | null>(defaultCwd ?? null);
   const {
     messages,
     status,

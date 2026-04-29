@@ -29,6 +29,12 @@ export interface ItemMeta {
   createdAt: number;
   /** Shallow readdir count, ignoring the metadata sidecar. */
   itemCount: number;
+  /**
+   * Server-resolved absolute path on disk. The chat-window canvas reads
+   * this and passes it as `sessionCwd` so a per-item Claude session
+   * starts inside the item's folder instead of the server's home.
+   */
+  absolutePath: string;
 }
 
 interface ItemMetaFile {
@@ -120,6 +126,7 @@ export async function listItems(projectSlug: string): Promise<ItemMeta[]> {
       repoUrl: meta.repoUrl,
       createdAt: meta.createdAt,
       itemCount: await countChildEntries(projectSlug, slug),
+      absolutePath: itemDir(projectSlug, slug),
     });
   }
   out.sort((a, b) => b.createdAt - a.createdAt);
@@ -143,6 +150,7 @@ export async function readItemMeta(
     repoUrl: meta.repoUrl,
     createdAt: meta.createdAt,
     itemCount: await countChildEntries(projectSlug, itemSlug),
+    absolutePath: itemDir(projectSlug, itemSlug),
   };
 }
 
@@ -188,6 +196,7 @@ export async function createFolderItem(
     repoUrl: null,
     createdAt,
     itemCount: 0,
+    absolutePath: itemDir(projectSlug, slug),
   };
 }
 
@@ -239,6 +248,7 @@ export async function createRepoItem(
     repoUrl: normalizedUrl,
     createdAt,
     itemCount: await countChildEntries(projectSlug, slug),
+    absolutePath: itemDir(projectSlug, slug),
   };
 }
 

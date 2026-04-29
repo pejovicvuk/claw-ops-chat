@@ -709,16 +709,20 @@ export function ChatView({
                       // instantly. Capped at 12 * 25ms so a huge backlog doesn't
                       // visibly cascade for half a second.
                       const histIdx = historyIdsRef.current.indexOf(msg.id);
-                      const staggerStyle =
-                        histIdx >= 0
-                          ? { animationDelay: `${Math.min(histIdx, 12) * 25}ms` }
-                          : undefined;
+                      // History messages (loaded from JSONL on session switch
+                      // or initial mount) appear instantly — re-running the
+                      // fade-in for every message on every chat switch was
+                      // the visible "disappear and reappear" flash. Only
+                      // genuinely-new streaming messages animate in.
+                      const isHistory = histIdx >= 0;
+                      const enterAnim = isHistory ? "" : "animate-msg-in";
+                      const staggerStyle: React.CSSProperties | undefined = undefined;
 
                       if (msg._isInfo) {
                         return (
                           <div
                             key={msg.id}
-                            className="animate-msg-in flex justify-center px-4 py-1.5"
+                            className={`${enterAnim} flex justify-center px-4 py-1.5`}
                             style={staggerStyle}
                           >
                             <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
@@ -753,7 +757,7 @@ export function ChatView({
                       return (
                         <div
                           key={msg.id}
-                          className={`animate-msg-in ${
+                          className={`${enterAnim} ${
                             isTimelineNode ? "ml-4 border-l border-accent/15 pl-1" : ""
                           } ${isTimelineNode && !prevIsTimeline ? "mt-2 pt-1" : ""} ${
                             isTimelineNode && !nextIsTimeline ? "mb-2 pb-1" : ""

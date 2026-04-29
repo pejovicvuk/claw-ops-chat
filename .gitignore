@@ -54,6 +54,7 @@ src/lib/bitbucket-custom-config.js
 src/lib/reports/*.js
 src/lib/monitoring/**/*.js
 src/lib/audit/*.js
+src/lib/preview-proxy/*.js
 src/app/api/monitoring/**/*.js
 src/components/monitoring/**/*.js
 

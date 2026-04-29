@@ -27,9 +27,17 @@ import type { WindowGeometry } from "@/components/canvas/canvas-types";
  */
 
 export const EDGE_BAND = 32;
+/**
+ * Wider trigger band reserved for the four canvas corners. Matching the
+ * Windows 11 Snap behaviour: corners get a more forgiving acquisition area
+ * than the edges so the user doesn't have to thread a 32 px diagonal needle.
+ */
+export const CORNER_BAND = 48;
 export const SNAP_INSET = 2;
 /** Pointer is allowed this many pixels outside canvas before we give up. */
 export const POINTER_TOLERANCE = 32;
+/** How close (px) a resize edge must be to its limit before resize-snap fires. */
+export const RESIZE_SNAP_TOLERANCE = 32;
 
 /** Tolerance (px) around an inter-window gap so the pointer doesn't have to be pixel-perfect. */
 export const GAP_TOLERANCE = 16;
@@ -91,6 +99,7 @@ export interface OtherWindow {
 
 interface DetectOptions {
   edgeBand?: number;
+  cornerBand?: number;
   inset?: number;
   /** Other visible windows on the active page, EXCLUDING the dragged one. */
   otherWindows?: OtherWindow[];
@@ -157,6 +166,7 @@ function detectAdaptiveEdgeZone(
   opts: DetectOptions,
 ): SnapResult | null {
   const edgeBand = opts.edgeBand ?? EDGE_BAND;
+  const cornerBand = opts.cornerBand ?? CORNER_BAND;
   const inset = opts.inset ?? SNAP_INSET;
 
   const nearTop = pointer.y < edgeBand;
@@ -164,15 +174,22 @@ function detectAdaptiveEdgeZone(
   const nearLeft = pointer.x < edgeBand;
   const nearRight = pointer.x > bounds.width - edgeBand;
 
+  // Corner test uses a wider band so quarter-zone acquisition is more forgiving
+  // than edge acquisition — corners win whenever both axes fall inside it.
+  const nearCornerTop = pointer.y < cornerBand;
+  const nearCornerBottom = pointer.y > bounds.height - cornerBand;
+  const nearCornerLeft = pointer.x < cornerBand;
+  const nearCornerRight = pointer.x > bounds.width - cornerBand;
+
   const halfW = Math.floor(bounds.width / 2);
   const halfH = Math.floor(bounds.height / 2);
 
   // Corner zones first — quarter-sized sectors in the canvas.
-  if (nearTop && nearLeft) {
+  if (nearCornerTop && nearCornerLeft) {
     const rect = bestRectInZone({ x: 0, y: 0, w: halfW, h: halfH }, obstacles, inset);
     if (rect) return { kind: "tl", geometry: rect };
   }
-  if (nearTop && nearRight) {
+  if (nearCornerTop && nearCornerRight) {
     const rect = bestRectInZone(
       { x: halfW, y: 0, w: bounds.width - halfW, h: halfH },
       obstacles,
@@ -180,7 +197,7 @@ function detectAdaptiveEdgeZone(
     );
     if (rect) return { kind: "tr", geometry: rect };
   }
-  if (nearBottom && nearLeft) {
+  if (nearCornerBottom && nearCornerLeft) {
     const rect = bestRectInZone(
       { x: 0, y: halfH, w: halfW, h: bounds.height - halfH },
       obstacles,
@@ -188,7 +205,7 @@ function detectAdaptiveEdgeZone(
     );
     if (rect) return { kind: "bl", geometry: rect };
   }
-  if (nearBottom && nearRight) {
+  if (nearCornerBottom && nearCornerRight) {
     const rect = bestRectInZone(
       { x: halfW, y: halfH, w: bounds.width - halfW, h: bounds.height - halfH },
       obstacles,
@@ -373,6 +390,240 @@ function intersect(a: InternalRect, b: OtherWindow): InternalRect | null {
   const bottom = Math.min(a.y + a.h, b.y + b.h);
   if (right <= x || bottom <= y) return null;
   return { x, y, w: right - x, h: bottom - y };
+}
+
+/* ─────────────── resize-snap (fit-to-available) ─────────────── */
+
+/**
+ * The 8 compass-direction resize edges, mirrored from `draggable-window`.
+ * Kept local so this pure module never imports from React-land.
+ */
+export type ResizeEdge = "n" | "e" | "s" | "w" | "ne" | "nw" | "se" | "sw";
+
+/** Window descriptor used by resize-snap math — same shape as OtherWindow. */
+export interface ResizeRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+interface ResizeSnapOptions {
+  /** How close (px) the dragged edge must be to its limit before the snap fires. */
+  tolerance?: number;
+  inset?: number;
+}
+
+/**
+ * Per-axis "limit" computation: the farthest a given edge can travel
+ * before colliding with another window or the canvas boundary. Iterates
+ * obstacles whose perpendicular extent overlaps the active window — a
+ * window above-and-to-the-right is irrelevant for a right-edge limit if
+ * it's vertically out of band.
+ */
+function computeRightLimit(a: ResizeRect, others: ResizeRect[], canvasWidth: number): number {
+  let limit = canvasWidth;
+  for (const o of others) {
+    if (yOverlap(o, a) && o.x >= a.x + a.w) limit = Math.min(limit, o.x);
+  }
+  return limit;
+}
+
+function computeLeftLimit(a: ResizeRect, others: ResizeRect[], canvasLeft: number): number {
+  let limit = canvasLeft;
+  for (const o of others) {
+    if (yOverlap(o, a) && o.x + o.w <= a.x) limit = Math.max(limit, o.x + o.w);
+  }
+  return limit;
+}
+
+function computeBottomLimit(a: ResizeRect, others: ResizeRect[], canvasHeight: number): number {
+  let limit = canvasHeight;
+  for (const o of others) {
+    if (xOverlap(o, a) && o.y >= a.y + a.h) limit = Math.min(limit, o.y);
+  }
+  return limit;
+}
+
+function computeTopLimit(a: ResizeRect, others: ResizeRect[], canvasTop: number): number {
+  let limit = canvasTop;
+  for (const o of others) {
+    if (xOverlap(o, a) && o.y + o.h <= a.y) limit = Math.max(limit, o.y + o.h);
+  }
+  return limit;
+}
+
+function yOverlap(a: ResizeRect, b: ResizeRect): boolean {
+  return a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+function xOverlap(a: ResizeRect, b: ResizeRect): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w;
+}
+
+/**
+ * "Fit-to-available" snap suggestion for a window currently being resized.
+ *
+ * Unlike `detectSnapZone` (which is pointer-based and intended for drag),
+ * this anchors the window's *opposite* edges and snaps the moving edge to
+ * the next limit — the canvas boundary or the nearest obstacle on the
+ * matching axis. The result is a SnapResult shaped exactly like a drag
+ * snap so the same overlay component renders both.
+ *
+ * Edge resize → fills to one limit; opposite edges fixed.
+ * Corner resize → fills to BOTH limits (e.g. SE corner → fills right and
+ *                 bottom limits simultaneously) which gives "fit to
+ *                 available quarter / rectangle".
+ *
+ * Returns null when the moving edge is already at its limit (no slack
+ * left to snap to) or when the window is below MIN_ZONE size after
+ * the inset.
+ */
+export function detectResizeSnap(
+  rect: ResizeRect,
+  edge: ResizeEdge,
+  bounds: CanvasBounds,
+  others: ResizeRect[],
+  opts: ResizeSnapOptions = {},
+): SnapResult | null {
+  if (bounds.width <= 0 || bounds.height <= 0) return null;
+  const tol = opts.tolerance ?? RESIZE_SNAP_TOLERANCE;
+  const inset = opts.inset ?? SNAP_INSET;
+
+  const hasN = edge === "n" || edge === "ne" || edge === "nw";
+  const hasS = edge === "s" || edge === "se" || edge === "sw";
+  const hasE = edge === "e" || edge === "ne" || edge === "se";
+  const hasW = edge === "w" || edge === "nw" || edge === "sw";
+
+  // Compute the geometry that fills to each active edge's limit; opposite
+  // edges stay anchored at their start position.
+  let nextLeft = rect.x;
+  let nextTop = rect.y;
+  let nextRight = rect.x + rect.w;
+  let nextBottom = rect.y + rect.h;
+  let snappedAny = false;
+
+  if (hasE) {
+    const limit = computeRightLimit(rect, others, bounds.width);
+    const slack = limit - (rect.x + rect.w);
+    if (slack > 0 && slack <= tol) {
+      nextRight = limit;
+      snappedAny = true;
+    } else {
+      return null;
+    }
+  }
+  if (hasW) {
+    const limit = computeLeftLimit(rect, others, 0);
+    const slack = rect.x - limit;
+    if (slack > 0 && slack <= tol) {
+      nextLeft = limit;
+      snappedAny = true;
+    } else {
+      return null;
+    }
+  }
+  if (hasS) {
+    const limit = computeBottomLimit(rect, others, bounds.height);
+    const slack = limit - (rect.y + rect.h);
+    if (slack > 0 && slack <= tol) {
+      nextBottom = limit;
+      snappedAny = true;
+    } else {
+      return null;
+    }
+  }
+  if (hasN) {
+    const limit = computeTopLimit(rect, others, 0);
+    const slack = rect.y - limit;
+    if (slack > 0 && slack <= tol) {
+      nextTop = limit;
+      snappedAny = true;
+    } else {
+      return null;
+    }
+  }
+
+  if (!snappedAny) return null;
+
+  // Pick the kind that matches what we filled to. Re-using the canvas-edge
+  // family means SnapOverlay renders identically.
+  const kind: SnapKind = edgeToSnapKind(edge);
+
+  const x = nextLeft + inset;
+  const y = nextTop + inset;
+  const w = Math.max(0, nextRight - nextLeft - 2 * inset);
+  const h = Math.max(0, nextBottom - nextTop - 2 * inset);
+  if (w < MIN_ZONE_W || h < MIN_ZONE_H) return null;
+
+  return { kind, geometry: { x, y, w, h } };
+}
+
+function edgeToSnapKind(edge: ResizeEdge): SnapKind {
+  switch (edge) {
+    case "n":
+      return "top";
+    case "s":
+      return "bottom";
+    case "e":
+      return "right";
+    case "w":
+      return "left";
+    case "ne":
+      return "tr";
+    case "nw":
+      return "tl";
+    case "se":
+      return "br";
+    case "sw":
+      return "bl";
+  }
+}
+
+/**
+ * Group-resize partner lookup. Returns the window whose mirrored edge sits
+ * within `tol` px of the active window's dragged edge AND whose
+ * perpendicular extent overlaps. Edge-only — corners are ambiguous (two
+ * perpendicular partners) and out of scope.
+ */
+export function findResizePartner(
+  active: ResizeRect,
+  edge: ResizeEdge,
+  others: { id: string; rect: ResizeRect }[],
+  tol = 4,
+): { id: string; partnerEdge: ResizeEdge } | null {
+  if (edge !== "n" && edge !== "s" && edge !== "e" && edge !== "w") return null;
+  for (const o of others) {
+    if (
+      edge === "e" &&
+      Math.abs(o.rect.x - (active.x + active.w)) <= tol &&
+      yOverlap(o.rect, active)
+    ) {
+      return { id: o.id, partnerEdge: "w" };
+    }
+    if (
+      edge === "w" &&
+      Math.abs(o.rect.x + o.rect.w - active.x) <= tol &&
+      yOverlap(o.rect, active)
+    ) {
+      return { id: o.id, partnerEdge: "e" };
+    }
+    if (
+      edge === "s" &&
+      Math.abs(o.rect.y - (active.y + active.h)) <= tol &&
+      xOverlap(o.rect, active)
+    ) {
+      return { id: o.id, partnerEdge: "n" };
+    }
+    if (
+      edge === "n" &&
+      Math.abs(o.rect.y + o.rect.h - active.y) <= tol &&
+      xOverlap(o.rect, active)
+    ) {
+      return { id: o.id, partnerEdge: "s" };
+    }
+  }
+  return null;
 }
 
 /* ─────────────── gap family (unchanged from PR #104) ─────────────── */

@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  CORNER_BAND,
   EDGE_BAND,
   POINTER_TOLERANCE,
+  RESIZE_SNAP_TOLERANCE,
   SNAP_INSET,
+  detectResizeSnap,
   detectSnapZone,
+  findResizePartner,
   largestFreeRectInZone,
   type CanvasBounds,
   type OtherWindow,
+  type ResizeRect,
 } from "./snap-zones";
 
 const BOUNDS: CanvasBounds = { width: 1000, height: 800 };
@@ -268,5 +273,194 @@ describe("EDGE_BAND boundary", () => {
   it("just outside the band (and not near another edge) → null", () => {
     const r = detectSnapZone({ x: EDGE_BAND + 1, y: 400 }, BOUNDS);
     expect(r).toBeNull();
+  });
+});
+
+describe("CORNER_BAND — wider corner acquisition zone", () => {
+  it("CORNER_BAND is larger than EDGE_BAND", () => {
+    expect(CORNER_BAND).toBeGreaterThan(EDGE_BAND);
+  });
+
+  it("pointer just outside EDGE_BAND on both axes still triggers a corner", () => {
+    // (EDGE_BAND+1, EDGE_BAND+1) is past the edge band but inside the
+    // corner band — pre-fix this would fall through, post-fix it fires tl.
+    const r = detectSnapZone({ x: EDGE_BAND + 1, y: EDGE_BAND + 1 }, BOUNDS);
+    expect(r?.kind).toBe("tl");
+  });
+
+  it("bottom-right corner fires when pointer is inside CORNER_BAND but past EDGE_BAND", () => {
+    const r = detectSnapZone(
+      { x: BOUNDS.width - EDGE_BAND - 1, y: BOUNDS.height - EDGE_BAND - 1 },
+      BOUNDS,
+    );
+    expect(r?.kind).toBe("br");
+  });
+
+  it("just outside the corner band on both axes → falls back (null when no edge match either)", () => {
+    const r = detectSnapZone({ x: CORNER_BAND + 1, y: CORNER_BAND + 1 }, BOUNDS);
+    expect(r).toBeNull();
+  });
+});
+
+describe("detectResizeSnap — fit-to-available", () => {
+  // Window starts as a small rect somewhere on the canvas; the resize
+  // edge is the one being dragged. Slack is "how far the edge can travel
+  // before hitting a limit"; snap fires when slack ≤ RESIZE_SNAP_TOLERANCE.
+  const rect: ResizeRect = { x: 200, y: 200, w: 400, h: 300 };
+
+  it("E edge with no obstacles, edge near canvas right → fills to canvas.right", () => {
+    // Move rect close to the right wall: x + w is at width - 10.
+    const moved: ResizeRect = { x: BOUNDS.width - 410, y: 200, w: 400, h: 300 };
+    const r = detectResizeSnap(moved, "e", BOUNDS, []);
+    expect(r?.kind).toBe("right");
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.x + r.geometry.w).toBe(BOUNDS.width - SNAP_INSET);
+    // Top / bottom anchored.
+    expect(r.geometry.y).toBe(moved.y + SNAP_INSET);
+    expect(r.geometry.h).toBe(moved.h - 2 * SNAP_INSET);
+  });
+
+  it("E edge with one obstacle to the right → fills to that obstacle's left", () => {
+    const moved: ResizeRect = { x: 100, y: 200, w: 400, h: 300 };
+    const obstacle: ResizeRect = { x: 520, y: 100, w: 200, h: 600 };
+    const r = detectResizeSnap(moved, "e", BOUNDS, [obstacle]);
+    expect(r?.kind).toBe("right");
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.x + r.geometry.w).toBe(obstacle.x - SNAP_INSET);
+  });
+
+  it("E edge already at canvas edge (no slack) → null", () => {
+    const flush: ResizeRect = { x: 200, y: 200, w: BOUNDS.width - 200, h: 300 };
+    const r = detectResizeSnap(flush, "e", BOUNDS, []);
+    expect(r).toBeNull();
+  });
+
+  it("E edge with slack greater than tolerance → null", () => {
+    // 200 + 400 = 600; canvas right at 1000; slack 400 >> tolerance.
+    const r = detectResizeSnap(rect, "e", BOUNDS, []);
+    expect(r).toBeNull();
+  });
+
+  it("SE corner with empty space, both edges within tolerance → fills both axes", () => {
+    const moved: ResizeRect = {
+      x: 100,
+      y: 100,
+      w: BOUNDS.width - 100 - 10,
+      h: BOUNDS.height - 100 - 10,
+    };
+    const r = detectResizeSnap(moved, "se", BOUNDS, []);
+    expect(r?.kind).toBe("br");
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.x + r.geometry.w).toBe(BOUNDS.width - SNAP_INSET);
+    expect(r.geometry.y + r.geometry.h).toBe(BOUNDS.height - SNAP_INSET);
+  });
+
+  it("SE corner with an obstacle on the right → fills to obstacle on x, canvas on y", () => {
+    const moved: ResizeRect = {
+      x: 100,
+      y: 100,
+      w: 400,
+      h: BOUNDS.height - 100 - 10,
+    };
+    // Obstacle at right covers full height so it's a valid x-limit, but
+    // its y range would also overlap the moved rect's bottom — stay clear
+    // of the bottom-limit path with a row above the moved rect.
+    const obstacle: ResizeRect = { x: 520, y: 0, w: 200, h: BOUNDS.height };
+    const r = detectResizeSnap(moved, "se", BOUNDS, [obstacle]);
+    expect(r?.kind).toBe("br");
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.x + r.geometry.w).toBe(obstacle.x - SNAP_INSET);
+    expect(r.geometry.y + r.geometry.h).toBe(BOUNDS.height - SNAP_INSET);
+  });
+
+  it("SE corner already at canvas corner → null", () => {
+    const flush: ResizeRect = {
+      x: 200,
+      y: 200,
+      w: BOUNDS.width - 200,
+      h: BOUNDS.height - 200,
+    };
+    const r = detectResizeSnap(flush, "se", BOUNDS, []);
+    expect(r).toBeNull();
+  });
+
+  it("W edge near left limit fills to 0 with right edge anchored", () => {
+    const moved: ResizeRect = { x: 10, y: 200, w: 400, h: 300 };
+    const r = detectResizeSnap(moved, "w", BOUNDS, []);
+    expect(r?.kind).toBe("left");
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.x).toBe(SNAP_INSET);
+    // Right edge anchored: x + w == moved.x + moved.w
+    expect(r.geometry.x + r.geometry.w).toBe(moved.x + moved.w - SNAP_INSET);
+  });
+
+  it("S edge near canvas bottom fills to canvas height", () => {
+    const moved: ResizeRect = {
+      x: 200,
+      y: 200,
+      w: 400,
+      h: BOUNDS.height - 200 - 10,
+    };
+    const r = detectResizeSnap(moved, "s", BOUNDS, []);
+    expect(r?.kind).toBe("bottom");
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.y + r.geometry.h).toBe(BOUNDS.height - SNAP_INSET);
+  });
+
+  it("tolerance override controls the firing threshold", () => {
+    const moved: ResizeRect = { x: 100, y: 200, w: 400, h: 300 };
+    // slack = 500. With default tolerance 32 → null.
+    expect(detectResizeSnap(moved, "e", BOUNDS, [])).toBeNull();
+    // With tolerance 600 → fires.
+    const r = detectResizeSnap(moved, "e", BOUNDS, [], { tolerance: 600 });
+    expect(r?.kind).toBe("right");
+  });
+
+  it("RESIZE_SNAP_TOLERANCE is exported and positive", () => {
+    expect(RESIZE_SNAP_TOLERANCE).toBeGreaterThan(0);
+  });
+});
+
+describe("findResizePartner — adjacent-window detection", () => {
+  const a: ResizeRect = { x: 100, y: 100, w: 400, h: 300 };
+
+  it("finds a window touching A's right edge with overlapping y", () => {
+    const b: ResizeRect = { x: 500, y: 150, w: 300, h: 200 };
+    const partner = findResizePartner(a, "e", [{ id: "b", rect: b }]);
+    expect(partner).toEqual({ id: "b", partnerEdge: "w" });
+  });
+
+  it("returns null when the candidate does not vertically overlap", () => {
+    const b: ResizeRect = { x: 500, y: 500, w: 300, h: 200 };
+    const partner = findResizePartner(a, "e", [{ id: "b", rect: b }]);
+    expect(partner).toBeNull();
+  });
+
+  it("returns null when the candidate is too far away", () => {
+    const b: ResizeRect = { x: 600, y: 150, w: 300, h: 200 };
+    const partner = findResizePartner(a, "e", [{ id: "b", rect: b }]);
+    expect(partner).toBeNull();
+  });
+
+  it("finds a window touching A's bottom edge", () => {
+    const b: ResizeRect = { x: 200, y: 400, w: 300, h: 200 };
+    const partner = findResizePartner(a, "s", [{ id: "b", rect: b }]);
+    expect(partner).toEqual({ id: "b", partnerEdge: "n" });
+  });
+
+  it("returns null for corner edges (group resize is edge-only)", () => {
+    const b: ResizeRect = { x: 500, y: 100, w: 300, h: 300 };
+    expect(findResizePartner(a, "ne", [{ id: "b", rect: b }])).toBeNull();
+    expect(findResizePartner(a, "se", [{ id: "b", rect: b }])).toBeNull();
+  });
+
+  it("respects the tolerance for borders 'almost touching'", () => {
+    // a.right = 500; b.x = 503 (3 px gap)
+    const b: ResizeRect = { x: 503, y: 150, w: 300, h: 200 };
+    expect(findResizePartner(a, "e", [{ id: "b", rect: b }], 4)).toEqual({
+      id: "b",
+      partnerEdge: "w",
+    });
+    expect(findResizePartner(a, "e", [{ id: "b", rect: b }], 2)).toBeNull();
   });
 });

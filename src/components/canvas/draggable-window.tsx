@@ -6,7 +6,7 @@ import { clampRectToViewport, type Rect } from "@/lib/clamp-to-viewport";
 import { MIN_H, MIN_W, type WindowGeometry } from "./canvas-types";
 
 /** All 8 compass directions plus the centre "drag" mode (handled separately). */
-type ResizeEdge = "n" | "e" | "s" | "w" | "ne" | "nw" | "se" | "sw";
+export type ResizeEdge = "n" | "e" | "s" | "w" | "ne" | "nw" | "se" | "sw";
 
 interface DraggableWindowProps {
   title: string;
@@ -27,6 +27,16 @@ interface DraggableWindowProps {
    */
   onDragStart?: () => void;
   onDragMove?: (clientX: number, clientY: number) => void;
+  /**
+   * Resize-tracking hooks. Resize uses a geometry-based snap (fit-to-
+   * available) instead of a pointer-based one, so it gets its own
+   * pipeline. `onResizeStart` fires once with the edge being grabbed;
+   * `onResizeMove` fires (RAF-batched) with each new clamped rect.
+   * `onDragEnd` is reused on pointer-up — same protocol returns the
+   * snap geometry to apply.
+   */
+  onResizeStart?: (edge: ResizeEdge) => void;
+  onResizeMove?: (rect: Rect) => void;
   /**
    * Returns the snap target the page wants to apply on release, or null
    * to commit the pointer-derived geometry as usual. Called once on
@@ -58,6 +68,8 @@ export function DraggableWindow({
   onFocus,
   onDragStart,
   onDragMove,
+  onResizeStart,
+  onResizeMove,
   onDragEnd,
   children,
 }: DraggableWindowProps) {
@@ -84,8 +96,14 @@ export function DraggableWindow({
       h: canvasBounds.height,
     });
     onChange({ ...geometry, ...clamped });
+    if (ds.mode === "resize") {
+      // Geometry-based resize-snap: the canvas page reads this rect to
+      // compute fit-to-available previews and to mirror to a partner
+      // window during group resize.
+      onResizeMove?.(clamped);
+    }
     ds.pending = null;
-  }, [canvasBounds.height, canvasBounds.width, geometry, onChange]);
+  }, [canvasBounds.height, canvasBounds.width, geometry, onChange, onResizeMove]);
 
   const queueRect = useCallback(
     (next: Rect) => {
@@ -109,11 +127,11 @@ export function DraggableWindow({
         queueRect({ ...ds.startRect, x: ds.startRect.x + dx, y: ds.startRect.y + dy });
         onDragMove?.(e.clientX, e.clientY);
       } else if (ds.edge) {
+        // Resize: only queue the new rect. The flush callback drives the
+        // resize-snap / partner-mirror pipeline via `onResizeMove`. We
+        // deliberately don't call `onDragMove` here — pointer-based snap
+        // is the wrong intent during a resize gesture.
         queueRect(resizeFromEdge(ds.edge, ds.startRect, dx, dy));
-        // Mirror the drag-mode snap pipeline during resize: report the
-        // pointer position so the canvas can preview a snap target. On
-        // release, the same `onDragEnd` protocol applies the snap.
-        onDragMove?.(e.clientX, e.clientY);
       }
     },
     [onDragMove, queueRect],
@@ -133,12 +151,11 @@ export function DraggableWindow({
       } catch {
         /* releasePointerCapture can throw if element was unmounted */
       }
-      // Both drag AND resize call into the snap pipeline now — the
-      // canvas page tracks pointer position during either gesture and
-      // hands back a snap geometry to apply on release. Notifying
-      // `onDragStart` before resize would fire the canvas-rect cache;
-      // we initialise it lazily inside the canvas page's drag-move
-      // instead so resize works without that signal.
+      // Drag and resize share the `onDragEnd` protocol: the canvas page
+      // returns the snap geometry it wants applied (or null). For drag
+      // this is a pointer-based snap; for resize it's a geometry-based
+      // fit-to-available snap. The window writes either back through
+      // `onChange` and then clears its gesture state.
       dragStateRef.current = null;
       const snap = onDragEnd?.() ?? null;
       if (snap) {
@@ -159,20 +176,27 @@ export function DraggableWindow({
       } catch {
         /* setPointerCapture can throw if element is detached */
       }
+      const startRect: Rect = { x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h };
       dragStateRef.current = {
         pointerId: e.pointerId,
         mode,
         edge,
         startPointer: { x: e.clientX, y: e.clientY },
-        startRect: { x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h },
+        startRect,
         pending: null,
         rafHandle: null,
       };
-      // Both drag and resize prime the snap pipeline so the canvas page
-      // captures its bounding rect once and the dragged window gets
-      // excluded from "other windows" gap / split detection.
-      onDragStart?.();
-      onDragMove?.(e.clientX, e.clientY);
+      if (mode === "drag") {
+        // Drag uses pointer-based snap detection; prime the canvas page
+        // with the cached bounding rect and the initial pointer.
+        onDragStart?.();
+        onDragMove?.(e.clientX, e.clientY);
+      } else if (edge) {
+        // Resize uses geometry-based snap detection. The canvas page
+        // captures the start geometry + finds a partner window here so
+        // it has the start state ready before any move events arrive.
+        onResizeStart?.(edge);
+      }
     },
     [
       geometry.h,
@@ -184,6 +208,7 @@ export function DraggableWindow({
       onDragMove,
       onDragStart,
       onFocus,
+      onResizeStart,
     ],
   );
 

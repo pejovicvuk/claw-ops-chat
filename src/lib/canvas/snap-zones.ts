@@ -5,35 +5,48 @@ import type { WindowGeometry } from "@/components/canvas/canvas-types";
  *
  * Layers three increasingly specific zone families behind one entry point:
  *
- *   1. Canvas edges  — Aero-Snap-style halves / quarters / max along the
- *                      4 outer edges. Wins when the pointer is in an
- *                      outer hot-zone band.
- *   2. Inter-window gaps — when the pointer is between two existing
- *                      windows along a horizontal or vertical axis,
- *                      suggest filling the gap rectangle. Picks up the
- *                      "drag between two stacked windows" gesture.
- *   3. Window splits — pointer hovering OVER an existing window suggests
- *                      a half/quarter of THAT window's bounds. Lets the
- *                      user "drop into" any cell of the layout.
+ *   1. Adaptive canvas edges — the largest free rectangle within the
+ *                              half (edge) or quarter (corner) sector
+ *                              the pointer is closest to. Empty zones
+ *                              are skipped. Capped at half-canvas-area
+ *                              for edges and quarter for corners — drag
+ *                              never produces a fullscreen snap.
+ *   2. Inter-window gaps     — when the pointer is between two existing
+ *                              windows along a shared axis, suggest
+ *                              filling the gap rectangle.
+ *   3. Window splits         — pointer hovering OVER an existing window
+ *                              suggests a half/quarter of THAT window's
+ *                              bounds.
+ *
+ * Pointer is clamped to canvas bounds with a 32 px tolerance so a drag
+ * that drifts a pixel past the edge still registers — important for the
+ * right edge that abuts the Files panel.
  *
  * All math is pure (no DOM, no React) so each family has its own table-
  * driven test cases.
  */
 
 export const EDGE_BAND = 32;
-export const TOP_BAND = 16;
 export const SNAP_INSET = 2;
+/** Pointer is allowed this many pixels outside canvas before we give up. */
+export const POINTER_TOLERANCE = 32;
 
 /** Tolerance (px) around an inter-window gap so the pointer doesn't have to be pixel-perfect. */
 export const GAP_TOLERANCE = 16;
-
-/** Minimum gap dimensions before we'll suggest filling — anything smaller is just visual noise. */
 export const MIN_GAP_W = 80;
 export const MIN_GAP_H = 80;
 
+/**
+ * Minimum width / height a free rect must have before we'll suggest
+ * snapping into it. Set lower than `MIN_W` / `MIN_H` from `canvas-types`
+ * because a tight snap is still useful to surface — the user can
+ * resize after if they want more room.
+ */
+export const MIN_ZONE_W = 80;
+export const MIN_ZONE_H = 80;
+
 export type SnapKind =
-  // Canvas-edge zones
-  | "max"
+  // Canvas-edge zones (now adaptive)
   | "left"
   | "right"
   | "top"
@@ -78,18 +91,25 @@ export interface OtherWindow {
 
 interface DetectOptions {
   edgeBand?: number;
-  topBand?: number;
   inset?: number;
   /** Other visible windows on the active page, EXCLUDING the dragged one. */
   otherWindows?: OtherWindow[];
 }
 
+interface InternalRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
 /**
  * Returns the most specific snap suggestion for the pointer, or null.
  *
- * Priority order: canvas-edge → gap → split. Earlier families short-
- * circuit later ones; gaps only fire when the pointer is *between*
- * windows; splits only fire when the pointer is *inside* a window.
+ * Priority order: adaptive canvas-edge → gap → split. Earlier families
+ * short-circuit later ones. The pointer is clamped back into canvas
+ * bounds with a 32 px tolerance so drags that graze the edge still
+ * trigger their zone.
  */
 export function detectSnapZone(
   pointer: PointerInCanvas,
@@ -97,34 +117,46 @@ export function detectSnapZone(
   opts: DetectOptions = {},
 ): SnapResult | null {
   if (bounds.width <= 0 || bounds.height <= 0) return null;
-  if (pointer.x < 0 || pointer.y < 0 || pointer.x > bounds.width || pointer.y > bounds.height) {
+  if (
+    pointer.x < -POINTER_TOLERANCE ||
+    pointer.y < -POINTER_TOLERANCE ||
+    pointer.x > bounds.width + POINTER_TOLERANCE ||
+    pointer.y > bounds.height + POINTER_TOLERANCE
+  ) {
     return null;
   }
-
-  const edge = detectCanvasEdgeZone(pointer, bounds, opts);
-  if (edge) return edge;
+  // Clamp the pointer back into bounds — used only for zone calculation.
+  // The "edge band" is naturally inclusive of the boundary now.
+  const clamped: PointerInCanvas = {
+    x: Math.min(Math.max(pointer.x, 0), bounds.width),
+    y: Math.min(Math.max(pointer.y, 0), bounds.height),
+  };
 
   const others = opts.otherWindows ?? [];
+
+  const edge = detectAdaptiveEdgeZone(clamped, bounds, others, opts);
+  if (edge) return edge;
+
   if (others.length > 0) {
-    const gap = detectGapZone(pointer, others, opts);
+    const gap = detectGapZone(clamped, others, opts);
     if (gap) return gap;
 
-    const split = detectSplitZone(pointer, others, opts);
+    const split = detectSplitZone(clamped, others, opts);
     if (split) return split;
   }
 
   return null;
 }
 
-/* ─────────────── canvas-edge family ─────────────── */
+/* ─────────────── adaptive canvas-edge family ─────────────── */
 
-function detectCanvasEdgeZone(
+function detectAdaptiveEdgeZone(
   pointer: PointerInCanvas,
   bounds: CanvasBounds,
+  obstacles: OtherWindow[],
   opts: DetectOptions,
 ): SnapResult | null {
   const edgeBand = opts.edgeBand ?? EDGE_BAND;
-  const topBand = opts.topBand ?? TOP_BAND;
   const inset = opts.inset ?? SNAP_INSET;
 
   const nearTop = pointer.y < edgeBand;
@@ -132,102 +164,219 @@ function detectCanvasEdgeZone(
   const nearLeft = pointer.x < edgeBand;
   const nearRight = pointer.x > bounds.width - edgeBand;
 
-  if (pointer.y < topBand) return { kind: "max", geometry: rectMax(bounds, inset) };
+  const halfW = Math.floor(bounds.width / 2);
+  const halfH = Math.floor(bounds.height / 2);
 
-  if (nearTop && nearLeft) return { kind: "tl", geometry: rectQuarter(bounds, "tl", inset) };
-  if (nearTop && nearRight) return { kind: "tr", geometry: rectQuarter(bounds, "tr", inset) };
-  if (nearBottom && nearLeft) return { kind: "bl", geometry: rectQuarter(bounds, "bl", inset) };
-  if (nearBottom && nearRight) return { kind: "br", geometry: rectQuarter(bounds, "br", inset) };
+  // Corner zones first — quarter-sized sectors in the canvas.
+  if (nearTop && nearLeft) {
+    const rect = bestRectInZone({ x: 0, y: 0, w: halfW, h: halfH }, obstacles, inset);
+    if (rect) return { kind: "tl", geometry: rect };
+  }
+  if (nearTop && nearRight) {
+    const rect = bestRectInZone(
+      { x: halfW, y: 0, w: bounds.width - halfW, h: halfH },
+      obstacles,
+      inset,
+    );
+    if (rect) return { kind: "tr", geometry: rect };
+  }
+  if (nearBottom && nearLeft) {
+    const rect = bestRectInZone(
+      { x: 0, y: halfH, w: halfW, h: bounds.height - halfH },
+      obstacles,
+      inset,
+    );
+    if (rect) return { kind: "bl", geometry: rect };
+  }
+  if (nearBottom && nearRight) {
+    const rect = bestRectInZone(
+      { x: halfW, y: halfH, w: bounds.width - halfW, h: bounds.height - halfH },
+      obstacles,
+      inset,
+    );
+    if (rect) return { kind: "br", geometry: rect };
+  }
 
-  if (nearLeft) return { kind: "left", geometry: rectHalf(bounds, "left", inset) };
-  if (nearRight) return { kind: "right", geometry: rectHalf(bounds, "right", inset) };
-  if (nearTop) return { kind: "top", geometry: rectHalf(bounds, "top", inset) };
-  if (nearBottom) return { kind: "bottom", geometry: rectHalf(bounds, "bottom", inset) };
+  // Edge zones — half-sized sectors covering one half of the canvas.
+  if (nearLeft) {
+    const rect = bestRectInZone({ x: 0, y: 0, w: halfW, h: bounds.height }, obstacles, inset);
+    if (rect) return { kind: "left", geometry: rect };
+  }
+  if (nearRight) {
+    const rect = bestRectInZone(
+      { x: halfW, y: 0, w: bounds.width - halfW, h: bounds.height },
+      obstacles,
+      inset,
+    );
+    if (rect) return { kind: "right", geometry: rect };
+  }
+  if (nearTop) {
+    const rect = bestRectInZone({ x: 0, y: 0, w: bounds.width, h: halfH }, obstacles, inset);
+    if (rect) return { kind: "top", geometry: rect };
+  }
+  if (nearBottom) {
+    const rect = bestRectInZone(
+      { x: 0, y: halfH, w: bounds.width, h: bounds.height - halfH },
+      obstacles,
+      inset,
+    );
+    if (rect) return { kind: "bottom", geometry: rect };
+  }
 
   return null;
 }
 
-function rectMax(b: CanvasBounds, inset: number): WindowGeometry {
+/**
+ * Find the largest free rectangle inside `zone` after subtracting any
+ * `obstacles`. Returns null if the entire zone is obstructed (or the
+ * largest free rect is too tiny to be useful).
+ */
+function bestRectInZone(
+  zone: InternalRect,
+  obstacles: OtherWindow[],
+  inset: number,
+): WindowGeometry | null {
+  const free = largestFreeRectInZone(zone, obstacles);
+  if (!free) return null;
+  if (free.w < MIN_ZONE_W || free.h < MIN_ZONE_H) return null;
+  // Apply the visual inset gutter so the preview reads as a window.
   return {
-    x: inset,
-    y: inset,
-    w: Math.max(0, b.width - 2 * inset),
-    h: Math.max(0, b.height - 2 * inset),
+    x: free.x + inset,
+    y: free.y + inset,
+    w: Math.max(0, free.w - 2 * inset),
+    h: Math.max(0, free.h - 2 * inset),
   };
 }
-
-function rectHalf(
-  b: CanvasBounds,
-  side: "left" | "right" | "top" | "bottom",
-  inset: number,
-): WindowGeometry {
-  const halfW = Math.floor(b.width / 2);
-  const halfH = Math.floor(b.height / 2);
-  if (side === "left") {
-    return {
-      x: inset,
-      y: inset,
-      w: Math.max(0, halfW - inset),
-      h: Math.max(0, b.height - 2 * inset),
-    };
-  }
-  if (side === "right") {
-    return {
-      x: halfW,
-      y: inset,
-      w: Math.max(0, b.width - halfW - inset),
-      h: Math.max(0, b.height - 2 * inset),
-    };
-  }
-  if (side === "top") {
-    return {
-      x: inset,
-      y: inset,
-      w: Math.max(0, b.width - 2 * inset),
-      h: Math.max(0, halfH - inset),
-    };
-  }
-  return {
-    x: inset,
-    y: halfH,
-    w: Math.max(0, b.width - 2 * inset),
-    h: Math.max(0, b.height - halfH - inset),
-  };
-}
-
-function rectQuarter(
-  b: CanvasBounds,
-  corner: "tl" | "tr" | "bl" | "br",
-  inset: number,
-): WindowGeometry {
-  const halfW = Math.floor(b.width / 2);
-  const halfH = Math.floor(b.height / 2);
-  const leftW = Math.max(0, halfW - inset);
-  const rightW = Math.max(0, b.width - halfW - inset);
-  const topH = Math.max(0, halfH - inset);
-  const bottomH = Math.max(0, b.height - halfH - inset);
-  if (corner === "tl") return { x: inset, y: inset, w: leftW, h: topH };
-  if (corner === "tr") return { x: halfW, y: inset, w: rightW, h: topH };
-  if (corner === "bl") return { x: inset, y: halfH, w: leftW, h: bottomH };
-  return { x: halfW, y: halfH, w: rightW, h: bottomH };
-}
-
-/* ─────────────── gap family ─────────────── */
 
 /**
- * Detect "fill the gap between two adjacent windows" zones. For every
- * pair of `otherWindows` that share a non-trivial overlap on one axis
- * with a clear gap on the other axis, we produce a candidate gap
- * rectangle. The pointer-containing candidate (with `GAP_TOLERANCE`
- * slack) wins.
- *
- * Two pairs are considered:
- *   - vertical neighbours (one above the other, sharing x-overlap)
- *   - horizontal neighbours (one beside the other, sharing y-overlap)
- *
- * Trivial gaps (< MIN_GAP_W × MIN_GAP_H) are skipped — anything smaller
- * isn't worth showing as a snap target, the window wouldn't fit cleanly.
+ * Largest axis-aligned rectangle inside `zone` that doesn't overlap any
+ * obstacle. Algorithm: decompose the zone into a grid using each
+ * obstacle's intersecting edges, mark cells free / obstructed by their
+ * midpoint, run histogram-style max-rectangle on the binary grid.
  */
+export function largestFreeRectInZone(
+  zone: InternalRect,
+  obstacles: OtherWindow[],
+): InternalRect | null {
+  if (zone.w <= 0 || zone.h <= 0) return null;
+  const ints: InternalRect[] = [];
+  for (const o of obstacles) {
+    const i = intersect(zone, o);
+    if (i) ints.push(i);
+  }
+  if (ints.length === 0) return zone;
+
+  const xsSet = new Set<number>([zone.x, zone.x + zone.w]);
+  const ysSet = new Set<number>([zone.y, zone.y + zone.h]);
+  for (const i of ints) {
+    xsSet.add(i.x);
+    xsSet.add(i.x + i.w);
+    ysSet.add(i.y);
+    ysSet.add(i.y + i.h);
+  }
+  const xs = [...xsSet].sort((a, b) => a - b);
+  const ys = [...ysSet].sort((a, b) => a - b);
+
+  const cols = xs.length - 1;
+  const rows = ys.length - 1;
+  // free[r][c] = true iff cell is unobstructed.
+  const free: boolean[][] = [];
+  for (let r = 0; r < rows; r++) {
+    const row: boolean[] = [];
+    const midY = (ys[r] + ys[r + 1]) / 2;
+    for (let c = 0; c < cols; c++) {
+      const midX = (xs[c] + xs[c + 1]) / 2;
+      let blocked = false;
+      for (const i of ints) {
+        if (midX > i.x && midX < i.x + i.w && midY > i.y && midY < i.y + i.h) {
+          blocked = true;
+          break;
+        }
+      }
+      row.push(!blocked);
+    }
+    free.push(row);
+  }
+  return maxRectFromGrid(free, xs, ys);
+}
+
+/**
+ * Max-rectangle in a binary grid (true = free) using histogram method.
+ * `xs` / `ys` are the absolute pixel break-lines for the columns / rows.
+ */
+function maxRectFromGrid(free: boolean[][], xs: number[], ys: number[]): InternalRect | null {
+  const rows = free.length;
+  if (rows === 0) return null;
+  const cols = free[0].length;
+  if (cols === 0) return null;
+
+  // For each column build a "running height in pixels" when sweeping
+  // rows top-to-bottom. We use the actual y-deltas (not 1 unit each)
+  // so the histogram measures real pixels.
+  const heights = new Array<number>(cols).fill(0);
+  let best: InternalRect | null = null;
+
+  for (let r = 0; r < rows; r++) {
+    const rowH = ys[r + 1] - ys[r];
+    for (let c = 0; c < cols; c++) {
+      heights[c] = free[r][c] ? heights[c] + rowH : 0;
+    }
+    const candidate = largestRectInHistogram(heights, xs);
+    if (candidate && (!best || area(candidate) > area(best))) {
+      // The rectangle's bottom is at ys[r+1]; y = bottom - candidate.h
+      best = { ...candidate, y: ys[r + 1] - candidate.h };
+    }
+  }
+  if (!best) return null;
+  // Sanity: clamp inside the grid box.
+  return best;
+}
+
+/**
+ * Largest rectangle anchored at row-bottom in a histogram. Standard
+ * monotonic-stack approach. Returns rect in pixel coords; y is left
+ * unset (the caller fills it from the row index).
+ */
+function largestRectInHistogram(
+  heights: number[],
+  xs: number[],
+): { x: number; w: number; h: number; y: number } | null {
+  const stack: number[] = [];
+  let best: { x: number; w: number; h: number; y: number } | null = null;
+  const n = heights.length;
+  for (let i = 0; i <= n; i++) {
+    const h = i === n ? 0 : heights[i];
+    while (stack.length > 0 && h < heights[stack[stack.length - 1]]) {
+      const topIdx = stack.pop()!;
+      const topH = heights[topIdx];
+      const leftIdx = stack.length === 0 ? 0 : stack[stack.length - 1] + 1;
+      const x = xs[leftIdx];
+      const w = xs[i] - x;
+      if (w > 0 && topH > 0) {
+        const cand = { x, w, h: topH, y: 0 };
+        if (!best || area(cand) > area(best)) best = cand;
+      }
+    }
+    stack.push(i);
+  }
+  return best;
+}
+
+function area(r: { w: number; h: number }): number {
+  return r.w * r.h;
+}
+
+function intersect(a: InternalRect, b: OtherWindow): InternalRect | null {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.w, b.x + b.w);
+  const bottom = Math.min(a.y + a.h, b.y + b.h);
+  if (right <= x || bottom <= y) return null;
+  return { x, y, w: right - x, h: bottom - y };
+}
+
+/* ─────────────── gap family (unchanged from PR #104) ─────────────── */
+
 function detectGapZone(
   pointer: PointerInCanvas,
   others: OtherWindow[],
@@ -261,21 +410,12 @@ function detectGapZone(
   return null;
 }
 
-interface GapRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-/** Compute the gap rectangle between two windows, or null if they aren't a clean vertical / horizontal pair. */
-function gapBetween(a: OtherWindow, b: OtherWindow): GapRect | null {
+function gapBetween(a: OtherWindow, b: OtherWindow): InternalRect | null {
   const aRight = a.x + a.w;
   const aBottom = a.y + a.h;
   const bRight = b.x + b.w;
   const bBottom = b.y + b.h;
 
-  // Vertical pair: one above the other with a horizontal-axis overlap.
   if (aBottom <= b.y) {
     const overlapL = Math.max(a.x, b.x);
     const overlapR = Math.min(aRight, bRight);
@@ -290,7 +430,6 @@ function gapBetween(a: OtherWindow, b: OtherWindow): GapRect | null {
     }
   }
 
-  // Horizontal pair: side by side with a vertical-axis overlap.
   if (aRight <= b.x) {
     const overlapT = Math.max(a.y, b.y);
     const overlapB = Math.min(aBottom, bBottom);
@@ -308,26 +447,13 @@ function gapBetween(a: OtherWindow, b: OtherWindow): GapRect | null {
   return null;
 }
 
-/* ─────────────── split family ─────────────── */
+/* ─────────────── split family (unchanged from PR #104) ─────────────── */
 
-/**
- * Detect "drop into half / quarter of an existing window" zones. The
- * pointer's relative position inside the underlying window divides the
- * window into a 3×3 grid (1/3 thresholds). Outer thirds → halves /
- * quarters of that window's bounds; centre-centre → null (dead-zone).
- *
- * Geometry returned is a sub-rectangle of the underlying window, NOT
- * the canvas. Releasing onto a split overlaps the existing window —
- * we don't displace it.
- */
 function detectSplitZone(
   pointer: PointerInCanvas,
   others: OtherWindow[],
   opts: DetectOptions,
 ): SnapResult | null {
-  // Pick the topmost window in z-order containing the pointer. Caller is
-  // expected to pass `otherWindows` in front-to-back order; we take the
-  // first match, which approximates "what the user is hovering over".
   const win = others.find(
     (w) => pointer.x >= w.x && pointer.x <= w.x + w.w && pointer.y >= w.y && pointer.y <= w.y + w.h,
   );
@@ -351,8 +477,6 @@ function detectSplitZone(
   if (inTop) return { kind: "split-t", geometry: splitRect(win, "t", inset) };
   if (inBottom) return { kind: "split-b", geometry: splitRect(win, "b", inset) };
 
-  // Centre-centre: dead-zone. User probably wants to drop ON TOP of this
-  // window, not snap into a fraction of it.
   return null;
 }
 

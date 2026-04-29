@@ -110,6 +110,10 @@ export function DraggableWindow({
         onDragMove?.(e.clientX, e.clientY);
       } else if (ds.edge) {
         queueRect(resizeFromEdge(ds.edge, ds.startRect, dx, dy));
+        // Mirror the drag-mode snap pipeline during resize: report the
+        // pointer position so the canvas can preview a snap target. On
+        // release, the same `onDragEnd` protocol applies the snap.
+        onDragMove?.(e.clientX, e.clientY);
       }
     },
     [onDragMove, queueRect],
@@ -129,16 +133,16 @@ export function DraggableWindow({
       } catch {
         /* releasePointerCapture can throw if element was unmounted */
       }
-      const wasDrag = ds.mode === "drag";
+      // Both drag AND resize call into the snap pipeline now — the
+      // canvas page tracks pointer position during either gesture and
+      // hands back a snap geometry to apply on release. Notifying
+      // `onDragStart` before resize would fire the canvas-rect cache;
+      // we initialise it lazily inside the canvas page's drag-move
+      // instead so resize works without that signal.
       dragStateRef.current = null;
-      if (wasDrag) {
-        const snap = onDragEnd?.() ?? null;
-        if (snap) {
-          // Apply the snap target instead of (or on top of) the
-          // pointer-derived geometry. Clear maximized/minimized so the
-          // window can be dragged out again to break the snap.
-          onChange({ ...geometry, ...snap, maximized: false, minimized: false });
-        }
+      const snap = onDragEnd?.() ?? null;
+      if (snap) {
+        onChange({ ...geometry, ...snap, maximized: false, minimized: false });
       }
     },
     [flush, geometry, onChange, onDragEnd],
@@ -164,10 +168,11 @@ export function DraggableWindow({
         pending: null,
         rafHandle: null,
       };
-      if (mode === "drag") {
-        onDragStart?.();
-        onDragMove?.(e.clientX, e.clientY);
-      }
+      // Both drag and resize prime the snap pipeline so the canvas page
+      // captures its bounding rect once and the dragged window gets
+      // excluded from "other windows" gap / split detection.
+      onDragStart?.();
+      onDragMove?.(e.clientX, e.clientY);
     },
     [
       geometry.h,
@@ -291,8 +296,10 @@ export function DraggableWindow({
 
 /* ───────────────────────── resize math ───────────────────────── */
 
-const EDGE_HIT_PX = 8; // px-thick hit zone for each side
-const CORNER_HIT_PX = 16; // square hit zone for each corner
+const EDGE_HIT_PX = 12; // px-thick hit zone for each side
+const CORNER_HIT_PX = 24; // square hit zone for each corner
+/** z-index applied to every handle so internal chat content can never sit above. */
+const HANDLE_Z = 10;
 
 /**
  * Translate a pointer delta into the next geometry given which edge /
@@ -371,6 +378,7 @@ function ResizeHandle({ edge, onPointerDown, onPointerMove, onPointerUp }: Resiz
           left: CORNER_HIT_PX,
           right: CORNER_HIT_PX,
           height: EDGE_HIT_PX,
+          zIndex: HANDLE_Z,
         }}
       />
     );
@@ -385,6 +393,7 @@ function ResizeHandle({ edge, onPointerDown, onPointerMove, onPointerUp }: Resiz
           left: CORNER_HIT_PX,
           right: CORNER_HIT_PX,
           height: EDGE_HIT_PX,
+          zIndex: HANDLE_Z,
         }}
       />
     );
@@ -399,6 +408,7 @@ function ResizeHandle({ edge, onPointerDown, onPointerMove, onPointerUp }: Resiz
           top: CORNER_HIT_PX,
           bottom: CORNER_HIT_PX,
           width: EDGE_HIT_PX,
+          zIndex: HANDLE_Z,
         }}
       />
     );
@@ -413,16 +423,18 @@ function ResizeHandle({ edge, onPointerDown, onPointerMove, onPointerUp }: Resiz
           top: CORNER_HIT_PX,
           bottom: CORNER_HIT_PX,
           width: EDGE_HIT_PX,
+          zIndex: HANDLE_Z,
         }}
       />
     );
   }
 
-  // Corner handles: 16×16 box. SE keeps the diagonal grip glyph for
-  // visual continuity with the previous design.
+  // Corner handles: square hit-box. SE keeps the diagonal grip glyph for
+  // visual continuity.
   const cornerStyle: React.CSSProperties = {
     width: CORNER_HIT_PX,
     height: CORNER_HIT_PX,
+    zIndex: HANDLE_Z,
   };
   if (edge === "se") {
     return (

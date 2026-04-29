@@ -12,6 +12,7 @@ import {
   type WindowDescriptor,
   type WindowGeometry,
   type WindowKind,
+  type WindowState,
 } from "./canvas-types";
 import { CanvasToolbar } from "./canvas-toolbar";
 import { CanvasPage } from "./canvas-page";
@@ -136,13 +137,10 @@ export function ItemCanvas({ projectSlug, itemSlug, onOpenSessions }: ItemCanvas
     setState((current) => {
       const { page, geometry } = nextSpawnGeometry(current, viewport);
       const id = makeWindowId();
-      const sessionId = `new-${id}`;
-      // Currently every kind maps to a chat session — but the switch is
-      // here so the next kind drops in without restructuring this block.
-      const winState =
+      const winState: WindowState =
         kind === "chat"
-          ? ({ kind: "chat", sessionId } as const)
-          : ({ kind: "chat", sessionId } as const);
+          ? { kind: "chat", sessionId: `new-${id}` }
+          : { kind: "preview", port: 3000 };
       const descriptor: WindowDescriptor = { id, page, geometry, state: winState };
       return {
         ...current,
@@ -151,6 +149,25 @@ export function ItemCanvas({ projectSlug, itemSlug, onOpenSessions }: ItemCanvas
         currentPage: page,
       };
     });
+  }, []);
+
+  /**
+   * Patch an individual window's `state` (e.g. preview port edit).
+   * Mirrors the `updateGeometry` shape — partial merge on the matching
+   * window's discriminated-union state, leaving the rest untouched.
+   */
+  const updateState = useCallback((id: string, patch: Partial<WindowState>) => {
+    setState((current) => ({
+      ...current,
+      windows: current.windows.map((win) => {
+        if (win.id !== id) return win;
+        // Discriminated-union merge: keep the existing kind unless the
+        // patch explicitly switches it. The cast is safe because the
+        // caller is expected to pass a same-kind patch.
+        const merged = { ...win.state, ...patch } as WindowState;
+        return { ...win, state: merged };
+      }),
+    }));
   }, []);
 
   const setPage = useCallback((page: number) => {
@@ -230,6 +247,7 @@ export function ItemCanvas({ projectSlug, itemSlug, onOpenSessions }: ItemCanvas
             onClose={closeWindow}
             onFocus={bringToFront}
             onSessionCreated={handleSessionCreated}
+            onStateChange={updateState}
           />
         </div>
       </div>

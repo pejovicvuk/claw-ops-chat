@@ -1,6 +1,6 @@
 "use client";
 
-import { FiMessageSquare } from "react-icons/fi";
+import { FiMessageSquare, FiMonitor } from "react-icons/fi";
 import { DOCK_H, type WindowDescriptor } from "./canvas-types";
 
 interface DockStripProps {
@@ -39,6 +39,7 @@ export function DockStrip({ windows, onRestore }: DockStripProps) {
 
 function KindIcon({ win }: { win: WindowDescriptor }) {
   if (win.state.kind === "chat") return <FiMessageSquare size={11} />;
+  if (win.state.kind === "preview") return <FiMonitor size={11} />;
   return null;
 }
 
@@ -47,5 +48,6 @@ function titleFor(win: WindowDescriptor): string {
     if (win.state.sessionId.startsWith("new-")) return "New chat";
     return `Chat ${win.state.sessionId.slice(0, 8)}`;
   }
+  if (win.state.kind === "preview") return `Preview · :${win.state.port}`;
   return win.id.slice(0, 8);
 }

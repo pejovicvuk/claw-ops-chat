@@ -1,6 +1,12 @@
 "use client";
 
-import { FiArrowLeft, FiChevronLeft, FiChevronRight, FiMessageSquare } from "react-icons/fi";
+import {
+  FiArrowLeft,
+  FiChevronLeft,
+  FiChevronRight,
+  FiMessageSquare,
+  FiMonitor,
+} from "react-icons/fi";
 import type { IconType } from "react-icons";
 import { TOOLBAR_H, type WindowKind } from "./canvas-types";
 
@@ -72,9 +78,10 @@ export function CanvasToolbar({
 /** Window-kind → icon mapping. New kinds slot in here without touching the toolbar layout. */
 const KIND_ICONS: Record<WindowKind, { icon: IconType; label: string }> = {
   chat: { icon: FiMessageSquare, label: "New chat" },
+  preview: { icon: FiMonitor, label: "New preview" },
 };
 
-const KIND_ORDER: WindowKind[] = ["chat"];
+const KIND_ORDER: WindowKind[] = ["chat", "preview"];
 
 function ToolPalette({ onAdd }: { onAdd: (kind: WindowKind) => void }) {
   return (

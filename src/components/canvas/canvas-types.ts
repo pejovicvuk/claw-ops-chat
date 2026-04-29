@@ -29,8 +29,8 @@ export const TOOLBAR_H = 48;
 /** Bottom dock strip height, in px. Visible iff at least one window is minimized on the current page. */
 export const DOCK_H = 44;
 
-/** Discriminator for window kinds. Currently only `chat`; expand as new window types ship. */
-export type WindowKind = "chat";
+/** Discriminator for window kinds. Add a new variant to `WindowState` below alongside any new entry here. */
+export type WindowKind = "chat" | "preview";
 
 export interface WindowGeometry {
   x: number;
@@ -41,7 +41,7 @@ export interface WindowGeometry {
   maximized?: boolean;
 }
 
-export type WindowState = { kind: "chat"; sessionId: string };
+export type WindowState = { kind: "chat"; sessionId: string } | { kind: "preview"; port: number };
 
 export interface WindowDescriptor {
   id: string;

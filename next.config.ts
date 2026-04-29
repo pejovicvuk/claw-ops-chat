@@ -53,6 +53,64 @@ const nextConfig: NextConfig = {
     ],
   },
   headers: async () => [
+    // Preview iframe override — must come BEFORE the catch-all. The chat
+    // app embeds dev servers running on localhost in iframes via the
+    // /chat/preview/<port>/* reverse proxy. The catch-all sets
+    // `frame-ancestors 'none'` + `X-Frame-Options: DENY` which would
+    // forbid even same-origin embedding. Relax just for /preview/*.
+    //
+    // Note: `source` matches POST-basePath (Next strips the basePath
+    // before regex matching), so `/preview/:port*` matches incoming
+    // `/chat/preview/<port>/...` requests.
+    //
+    // We deliberately keep `script-src 'self' 'unsafe-inline'` and do
+    // NOT add `'unsafe-eval'` — Vite/Next/Webpack dev servers don't
+    // need it, and the project security rule (.claude/rules/security.md)
+    // forbids it. If a future framework requires it, add it conditionally.
+    //
+    // `img-src` and `media-src` are widened to `* data: blob:` because
+    // dev apps load assets from arbitrary local paths during development
+    // and we'd rather not chase per-app CSP failures.
+    {
+      source: "/preview/:port*",
+      headers: [
+        {
+          key: "Cache-Control",
+          value: "no-store",
+        },
+        {
+          key: "Content-Security-Policy",
+          value: [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline'",
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            `connect-src 'self' ws://${chatWsHost} wss://${chatWsHost} ${apiOrigin}`,
+            "img-src * data: blob:",
+            "media-src * data: blob:",
+            "font-src 'self' data: https://fonts.gstatic.com",
+            "worker-src 'self' blob:",
+            "object-src 'none'",
+            "frame-ancestors 'self'",
+            "base-uri 'self'",
+            "form-action 'self'",
+          ]
+            .join("; ")
+            .concat(";"),
+        },
+        {
+          key: "X-Content-Type-Options",
+          value: "nosniff",
+        },
+        {
+          key: "X-Frame-Options",
+          value: "SAMEORIGIN",
+        },
+        {
+          key: "Referrer-Policy",
+          value: "strict-origin-when-cross-origin",
+        },
+      ],
+    },
     {
       source: "/(.*)",
       headers: [

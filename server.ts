@@ -51,6 +51,12 @@ import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
 import { purgeOldImages } from "./src/lib/proxy/image-cache";
 import { migrateGoogleMcpTier } from "./src/lib/google-custom-config";
 import { logWsUpgrade } from "./src/lib/audit/api-wrap";
+import {
+  forwardHttp,
+  matchPreviewPath,
+  PREVIEW_PREFIX,
+} from "./src/lib/preview-proxy/http-forward";
+import { forwardWs } from "./src/lib/preview-proxy/ws-forward";
 import { bootstrapMonitoring } from "./src/lib/monitoring/bootstrap";
 import { getMonitoringBroadcaster } from "./src/lib/monitoring/ws-broadcast";
 import {
@@ -2503,6 +2509,16 @@ setChatSendHandle({
 
 app.prepare().then(() => {
   const server = createServer((req, res) => {
+    // Preview reverse proxy — short-circuit Next.js for /chat/preview/<port>/*
+    // so localhost dev servers can be iframed inside item canvases. Auth +
+    // port validation live in `forwardHttp`.
+    if (req.url && req.url.startsWith(`${PREVIEW_PREFIX}/`)) {
+      const match = matchPreviewPath(req.url);
+      if (match) {
+        forwardHttp(req, res, match, { selfPort: port });
+        return;
+      }
+    }
     const parsedUrl = parse(req.url || "/", true);
     handle(req, res, parsedUrl);
   });
@@ -2537,6 +2553,17 @@ app.prepare().then(() => {
 
   server.on("upgrade", async (req: IncomingMessage, socket, head) => {
     const { pathname, query: qs } = parse(req.url || "/", true);
+
+    // Preview proxy WS upgrade — dev-server HMR clients connect through
+    // here. Auth + port validation live in `forwardWs`. Handled before
+    // the chat-route branches so they don't have to know about it.
+    if (req.url && req.url.startsWith(`${PREVIEW_PREFIX}/`)) {
+      const match = matchPreviewPath(req.url);
+      if (match) {
+        forwardWs(req, socket, head, match, { selfPort: port, wss });
+        return;
+      }
+    }
 
     const isChatWs = pathname === "/ws/chat" || pathname === "/chat/ws/chat";
     const isTerminalWs = pathname === "/ws/terminal" || pathname === "/chat/ws/terminal";

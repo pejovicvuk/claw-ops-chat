@@ -586,7 +586,7 @@ function PermissionRequestBlock({
     onRespond?.(message.permissionId ?? "", false, false, denyText.trim() || undefined);
 
   return (
-    <div className="px-4 py-1.5">
+    <div className="px-4 py-1.5" data-approval-id={message.permissionId ?? undefined}>
       <div className="rounded-lg border border-accent/30 bg-canvas-surface-hover px-3.5 py-3">
         <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-accent">
           <Icon size={12} />
@@ -704,7 +704,7 @@ function PlanProposalBlock({
   };
 
   return (
-    <div className="px-4 py-1.5">
+    <div className="px-4 py-1.5" data-approval-id={message.planId ?? undefined}>
       <div className="rounded-lg border border-accent/30 bg-canvas-surface-hover px-3.5 py-3">
         <div className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-accent">
           <FiCheck size={11} />
@@ -883,7 +883,7 @@ function AskQuestionBlock({
   if (questions.length === 0) return null;
 
   return (
-    <div className="px-4 py-1.5">
+    <div className="px-4 py-1.5" data-approval-id={message.askId ?? undefined}>
       <div className="rounded-lg border border-accent/30 bg-canvas-surface-hover px-3.5 py-3">
         {questions.map((q) => {
           const selected = selections[q.question] ?? new Set<string>();

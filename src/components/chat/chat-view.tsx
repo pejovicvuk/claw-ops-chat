@@ -10,6 +10,7 @@ import {
   FiAlertTriangle,
 } from "react-icons/fi";
 import { useClaudeChat } from "@/lib/use-claude-chat";
+import type { ChatMessage } from "@/lib/types";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
 import { useUrlState } from "@/lib/use-url-state";
@@ -87,6 +88,64 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
+}
+
+/**
+ * Top-pinned banner that appears whenever the agent is awaiting any kind
+ * of user response (permission, plan acceptance, or AskUserQuestion).
+ *
+ * Lives ABOVE the messages scroll container — never inside it — so it's
+ * impossible to scroll past, content-visibility-skip, or overflow-clip.
+ * Tapping the banner scrolls the latest pending inline card into view via
+ * the `data-approval-id` attribute that PermissionRequestBlock /
+ * PlanProposalBlock / AskQuestionBlock now expose.
+ *
+ * Identical on desktop and mobile. The previous floating pill only watched
+ * permission_request and was nested inside the absolute-positioned scroll
+ * container, which is what produced the "approval visible on phone but
+ * not desktop" bug.
+ */
+function ApprovalBanner({
+  messages,
+  scrollRef,
+}: {
+  messages: ChatMessage[];
+  scrollRef: React.RefObject<HTMLDivElement | null>;
+}) {
+  const pending = messages.filter(
+    (m) =>
+      (m.type === "permission_request" && !m.permissionResolved) ||
+      (m.type === "plan_proposal" && !m.planResolved) ||
+      (m.type === "ask_question" && !m.askResolved),
+  );
+  if (pending.length === 0) return null;
+  const latest = pending[pending.length - 1];
+  const id = latest.permissionId ?? latest.planId ?? latest.askId ?? "";
+  const label =
+    latest.type === "permission_request"
+      ? `Approval needed · ${latest.toolName ?? "Tool"}`
+      : latest.type === "plan_proposal"
+        ? "Plan ready for review"
+        : "Claude is waiting for your input";
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!id) return;
+        const el = scrollRef.current?.querySelector<HTMLElement>(`[data-approval-id="${id}"]`);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      }}
+      role="status"
+      aria-live="polite"
+      className="flex shrink-0 items-center justify-center gap-1.5 border-b border-accent/40 bg-accent/10 px-3 py-2 text-[12px] font-semibold text-accent"
+    >
+      <FiShield size={12} />
+      <span>
+        {label}
+        {pending.length > 1 ? ` · +${pending.length - 1} more` : ""} — tap to review
+      </span>
+    </button>
+  );
 }
 
 interface ChatViewProps {
@@ -310,7 +369,45 @@ export function ChatView({
     };
   }, [resumeSessionId, setInitialMessages, setInitialContextUsage]);
 
+  // Force-scroll the latest pending approval into view exactly once per
+  // approval id — even if the user has manually scrolled up, an arriving
+  // permission / plan / ask prompt MUST be unmissable. Tracked by id so
+  // we don't fight the user's subsequent scrolling on unrelated re-
+  // renders. Falls through to the normal "stick to bottom" behavior when
+  // nothing is pending.
+  const lastScrolledApprovalIdRef = useRef<string | null>(null);
   useEffect(() => {
+    let latestPending: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.type === "permission_request" && !m.permissionResolved) {
+        latestPending = m.permissionId ?? null;
+        break;
+      }
+      if (m.type === "plan_proposal" && !m.planResolved) {
+        latestPending = m.planId ?? null;
+        break;
+      }
+      if (m.type === "ask_question" && !m.askResolved) {
+        latestPending = m.askId ?? null;
+        break;
+      }
+    }
+    if (latestPending && latestPending !== lastScrolledApprovalIdRef.current) {
+      lastScrolledApprovalIdRef.current = latestPending;
+      // requestAnimationFrame: when this effect fires from a
+      // pending_approvals snapshot the inline card was just appended to
+      // `messages` and hasn't been laid out yet — scrolling on the same
+      // tick targets stale geometry. One frame is enough.
+      requestAnimationFrame(() => {
+        const el = scrollRef.current?.querySelector<HTMLElement>(
+          `[data-approval-id="${latestPending}"]`,
+        );
+        if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+        else bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      });
+      return;
+    }
     if (userScrolledUpRef.current) return;
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, infoMessages]);
@@ -668,6 +765,7 @@ export function ChatView({
 
         {/* Messages */}
         <PushReminderBanner />
+        <ApprovalBanner messages={messages} scrollRef={scrollRef} />
         <div className="relative flex-1">
           <div
             ref={scrollRef}
@@ -685,7 +783,7 @@ export function ChatView({
             ) : (
               <SessionCwdProvider value={sessionCwd}>
                 <ChatFilesProvider key={sessionId}>
-                  <div className={isMobile ? "py-3" : "py-3 pb-24"}>
+                  <div className="py-3">
                     {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
                     {sortedMessages.map((msg, idx) => {
                       // Staggered enter animation for first-load history only —
@@ -776,32 +874,10 @@ export function ChatView({
             )}
           </div>
 
-          {/* Floating pill that scrolls the user to the inline approval
-            card when it's off-screen. Replaces the old blocking modal —
-            the inline PermissionRequestBlock now renders full Allow /
-            Deny / Always-allow / Deny-with-reason controls directly in
-            the stream, so the modal was redundant. This pill is a
-            no-JS-deps fallback: it always shows while a permission is
-            pending, and a tap scrolls to the bottom (where the latest
-            inline card lives). */}
-          {(() => {
-            const pending = messages.find(
-              (m) => m.type === "permission_request" && !m.permissionResolved,
-            );
-            if (!pending) return null;
-            const toolName = pending.toolName ?? "Tool";
-            return (
-              <button
-                type="button"
-                onClick={() => bottomRef.current?.scrollIntoView({ behavior: "smooth" })}
-                className="animate-msg-in absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/40 bg-canvas-bg/95 px-3 py-1.5 text-[11px] font-medium shadow-lg backdrop-blur"
-                style={{ color: "var(--accent)" }}
-              >
-                <FiShield size={11} />
-                <span>Approval needed · {toolName} — tap to review</span>
-              </button>
-            );
-          })()}
+          {/* Awaiting-input awareness lives in <ApprovalBanner /> above
+              the scroll container — it covers permission, plan, AND ask,
+              and can't be content-visibility-skipped or overflow-clipped
+              the way the old in-scroller floating pill could. */}
         </div>
 
         <SetupGuard forceShow={setupRequired}>

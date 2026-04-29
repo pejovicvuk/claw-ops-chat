@@ -204,6 +204,16 @@ interface ChatSession {
   isProcessing: boolean;
   messageQueue: Array<{ text: string }>;
   pendingRequests: Map<string, (response: Record<string, unknown>) => void>;
+  /**
+   * Original broadcast payloads of currently-pending approval / plan / ask
+   * prompts, keyed by request id. Mirrors the keys of `pendingRequests`.
+   * Sent to every client on connect as a `pending_approvals` snapshot so
+   * a fresh tab — especially a second device opened mid-flow — hydrates
+   * deterministically rather than racing the live broadcast and the
+   * eventHistory replay. Cleared whenever the matching pendingRequests
+   * resolver is called or the turn is aborted.
+   */
+  pendingApprovalEvents: Map<string, Record<string, unknown>>;
   sessionAllowedTools: Set<string>;
   permissionMode: string;
   effort: string | null;
@@ -373,6 +383,7 @@ class SessionManager {
         isProcessing: false,
         messageQueue: [],
         pendingRequests: new Map(),
+        pendingApprovalEvents: new Map(),
         sessionAllowedTools: new Set(),
         permissionMode: "default",
         effort: null,
@@ -453,13 +464,25 @@ class SessionManager {
       isProcessing: false,
       messageQueue: [],
       pendingRequests: new Map(),
+      pendingApprovalEvents: new Map(),
       sessionAllowedTools: new Set(persisted.sessionAllowedTools ?? []),
       permissionMode: persisted.permissionMode || "default",
       effort: persisted.effort ?? null,
       requestCounter: 0,
       accumulatedText: persisted.accumulatedText ?? "",
       messageTimestamps: [],
-      eventHistory: Array.isArray(persisted.eventHistory) ? persisted.eventHistory : [],
+      // Stale request prompts have no resolver after a server restart —
+      // clicking Allow on a replayed `permission_request` from the
+      // previous boot would go nowhere. Strip them on restore so the
+      // `interrupted` banner is the only signal the user sees about the
+      // lost turn. `pendingApprovalEvents` starts empty for the same
+      // reason — there is nothing pending until the agent asks again.
+      eventHistory: (Array.isArray(persisted.eventHistory) ? persisted.eventHistory : []).filter(
+        (e) =>
+          e.type !== "permission_request" &&
+          e.type !== "ask_question" &&
+          e.type !== "plan_proposal",
+      ),
       lastActivity: persisted.lastActivity || Date.now(),
       abortController: null,
       currentQuery: null,
@@ -684,6 +707,18 @@ class SessionManager {
       }
     }
 
+    // Authoritative snapshot of currently-pending approval / plan / ask
+    // prompts. The client uses this to reconcile its message list on
+    // every connect — covering second-device-opened-mid-flow, page
+    // reload, and the narrow race where the live broadcast and the
+    // eventHistory replay disagree because a sibling client just
+    // answered. Always sent (even when empty) so the client can clear
+    // any stale-locally-staged pending state.
+    this.send(ws, {
+      type: "pending_approvals",
+      approvals: Array.from(session.pendingApprovalEvents.values()),
+    });
+
     // Always send the current status snapshot on reconnect. Without this,
     // a browser that reconnected after a status change (e.g. after a
     // tool finished running) would sit on whatever state it had before
@@ -824,6 +859,7 @@ class SessionManager {
         resolver(msg);
         session.pendingRequests.delete(id);
       }
+      session.pendingApprovalEvents.delete(id);
       // Purge the original prompt from eventHistory so a reconnecting
       // client (or another tab) doesn't re-surface an already-answered
       // modal. Without this, every route change / page reload showed
@@ -877,6 +913,7 @@ class SessionManager {
             answers: {},
             message: "Interrupted by user",
           });
+          session.pendingApprovalEvents.delete(id);
           this.broadcast(session, { type: "permission_resolved", id });
         }
         if (session.pendingRequests.size > 0) {
@@ -890,6 +927,7 @@ class SessionManager {
           }
         }
         session.pendingRequests.clear();
+        session.pendingApprovalEvents.clear();
 
         // AbortController is what actually kills the Claude CLI child
         // process — we pass `signal: abortController.signal` into
@@ -1093,7 +1131,9 @@ class SessionManager {
         // Handle AskUserQuestion
         if (toolName === "AskUserQuestion") {
           const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
-          this.broadcast(session, { type: "ask_question", id, questions: input.questions || [] });
+          const askEvent = { type: "ask_question", id, questions: input.questions || [] };
+          session.pendingApprovalEvents.set(id, askEvent);
+          this.broadcast(session, askEvent);
           this.setStatus(session, "awaiting_input");
           const chatLabel = chatLabelFor(session);
           const firstQ = Array.isArray(input.questions) ? String(input.questions[0] ?? "") : "";
@@ -1129,7 +1169,9 @@ class SessionManager {
         if (toolName === "ExitPlanMode") {
           const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
           const planText = typeof input.plan === "string" ? input.plan : JSON.stringify(input);
-          this.broadcast(session, { type: "plan_proposal", id, plan: planText });
+          const planEvent = { type: "plan_proposal", id, plan: planText };
+          session.pendingApprovalEvents.set(id, planEvent);
+          this.broadcast(session, planEvent);
           this.setStatus(session, "awaiting_permission");
           const planChatLabel = chatLabelFor(session);
           const planBody = planText.length > 100 ? `${planText.slice(0, 97)}…` : planText;
@@ -1219,7 +1261,9 @@ class SessionManager {
         // Default mode (or tools not auto-handled above): ask the user
         const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
         const description = getToolDescription(toolName, input);
-        this.broadcast(session, { type: "permission_request", id, toolName, input, description });
+        const permEvent = { type: "permission_request", id, toolName, input, description };
+        session.pendingApprovalEvents.set(id, permEvent);
+        this.broadcast(session, permEvent);
         this.setStatus(session, "awaiting_permission");
         const chatLabel = chatLabelFor(session);
         const detail = description ? `${toolName}: ${description}` : `${toolName}`;
@@ -1944,6 +1988,8 @@ class SessionManager {
         RESPONSE_TIMEOUT_MS > 0
           ? setTimeout(() => {
               session.pendingRequests.delete(id);
+              session.pendingApprovalEvents.delete(id);
+              this.broadcast(session, { type: "permission_resolved", id });
               console.warn(`[session=${session.id}] Response timeout for request ${id}`);
               this.setStatus(session, "thinking");
               resolve({ allow: false, message: "Response timed out", answers: {} });

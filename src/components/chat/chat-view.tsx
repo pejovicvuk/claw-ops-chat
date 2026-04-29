@@ -220,11 +220,25 @@ export function ChatView({
 
   /* Notify parent when SDK creates a new session (so page can update selected session) */
   useEffect(() => {
-    if (claudeSessionId && claudeSessionId !== notifiedSessionRef.current) {
+    // Only fire when the SDK assigns an id that differs from the URL's
+    // sessionId — i.e. a fresh chat just got promoted from its
+    // client-generated UUID to the SDK's real one. For chats the user
+    // is *resuming* (sessionId already === claudeSessionId), this would
+    // otherwise re-fire on every switch because my reset effect nulls
+    // claudeSessionId on session change and the next session_init then
+    // looks "new" relative to notifiedSessionRef. The parent's
+    // handleSessionCreated calls invalidateSessions + loadSessions,
+    // which flips the sidebar's loading state and was the visible flash
+    // in the conversation list.
+    if (
+      claudeSessionId &&
+      claudeSessionId !== sessionId &&
+      claudeSessionId !== notifiedSessionRef.current
+    ) {
       notifiedSessionRef.current = claudeSessionId;
       onSessionCreated?.(claudeSessionId);
     }
-  }, [claudeSessionId, onSessionCreated]);
+  }, [claudeSessionId, sessionId, onSessionCreated]);
 
   // On the first `idle` after reconnect, push our remembered per-session
   // mode to the server so a container restart doesn't land the session in

@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback } from "react";
-import { FiPlus, FiRefreshCw, FiSettings } from "react-icons/fi";
+import { useCallback, useMemo, useState } from "react";
+import { FiPlus, FiRefreshCw, FiSearch, FiSettings, FiX } from "react-icons/fi";
 import { SessionList } from "@/components/chat/session-list";
 import { SidebarTabs, type SidebarMode } from "./sidebar-tabs";
 import { ReportsList } from "@/components/reports/reports-list";
@@ -60,6 +60,24 @@ export function Sidebar({
   const selectedProjectSlug = params.get("project");
 
   const openSettings = useCallback(() => setParam("settings", "main"), [setParam]);
+
+  // Local-only search filter for the chats list. Lives in component
+  // state (not URL) on purpose — it's transient input that shouldn't
+  // round-trip through history or be shareable. State resets naturally
+  // each time the mobile drawer remounts. Case-insensitive substring
+  // match against `session.display`; could later widen to first-message
+  // content, but display titles are usually descriptive enough.
+  const [chatSearchQuery, setChatSearchQuery] = useState("");
+  const filteredSessions = useMemo(() => {
+    const q = chatSearchQuery.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) => s.display.toLowerCase().includes(q));
+  }, [sessions, chatSearchQuery]);
+  const noChatMatches =
+    mode === "chats" &&
+    !!chatSearchQuery.trim() &&
+    sessions.length > 0 &&
+    filteredSessions.length === 0;
 
   // Flip to fast polling while the user is looking at the reports list or
   // the reports view overall — 3s lag vs 30s lag makes running indicators
@@ -172,21 +190,73 @@ export function Sidebar({
         </div>
       </div>
 
+      {/* Search bar — chats mode only, hidden until there's something to
+          search. Sits OUTSIDE the scroll container so it stays visible
+          while the user scrolls the list. `type="search"` lets the
+          browser render its native clear-X / Esc-clear affordance; we
+          add an explicit clear button + onKeyDown for cross-browser
+          consistency (Firefox doesn't always honor Esc on search inputs). */}
+      {mode === "chats" && sessions.length > 0 && (
+        <div className="shrink-0 border-b border-canvas-border px-3 py-2">
+          <div className="relative">
+            <FiSearch
+              size={11}
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-canvas-muted"
+            />
+            <input
+              type="search"
+              value={chatSearchQuery}
+              onChange={(e) => setChatSearchQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setChatSearchQuery("");
+              }}
+              placeholder="Search chats..."
+              aria-label="Search conversations"
+              className="w-full rounded-md border border-canvas-border bg-canvas-surface-hover/40 py-1.5 pl-7 pr-7 text-[12px] text-canvas-fg placeholder:text-canvas-muted focus:border-accent/40 focus:bg-canvas-surface-hover focus:outline-none [&::-webkit-search-cancel-button]:appearance-none"
+            />
+            {chatSearchQuery && (
+              <button
+                type="button"
+                onClick={() => setChatSearchQuery("")}
+                aria-label="Clear search"
+                className="absolute right-1.5 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+              >
+                <FiX size={10} />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-2 py-2">
-        {mode === "chats" && (
-          <SessionList
-            selectedSessionId={selectedSessionId}
-            sessions={sessions}
-            loading={sessionsLoading}
-            onSelectSession={onSelectSession}
-            onNewChat={onNewChat}
-            onRefresh={onRefreshSessions}
-            runningSessionIds={runningSessionIds}
-            onDeleteSession={onDeleteSession}
-            hideHeader
-            hideFooter
-          />
-        )}
+        {mode === "chats" &&
+          (noChatMatches ? (
+            <div className="px-2 py-8 text-center">
+              <p className="text-[11px] text-canvas-muted">
+                No chats match &ldquo;{chatSearchQuery}&rdquo;
+              </p>
+              <button
+                type="button"
+                onClick={() => setChatSearchQuery("")}
+                className="mt-2 rounded-md px-2 py-1 text-[11px] text-accent hover:bg-canvas-surface-hover"
+              >
+                Clear search
+              </button>
+            </div>
+          ) : (
+            <SessionList
+              selectedSessionId={selectedSessionId}
+              sessions={filteredSessions}
+              loading={sessionsLoading}
+              onSelectSession={onSelectSession}
+              onNewChat={onNewChat}
+              onRefresh={onRefreshSessions}
+              runningSessionIds={runningSessionIds}
+              onDeleteSession={onDeleteSession}
+              hideHeader
+              hideFooter
+            />
+          ))}
         {mode === "reports" && (
           <ReportsList
             runs={feed.runs}

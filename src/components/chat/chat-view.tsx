@@ -279,8 +279,28 @@ export function ChatView({
   }, [permissionMode, setPermissionMode, status, stopGeneration]);
 
   useEffect(() => {
-    if (!resumeSessionId) return;
+    // Switching to "+ New chat" — no history to load, just clear out any
+    // messages left over from the previous chat. Without this clear, when
+    // ChatView is no longer keyed on sessionId (it used to remount on
+    // every switch), the previous chat's messages would leak into the
+    // empty new-chat view.
+    if (!resumeSessionId) {
+      setInitialMessages([]);
+      setInitialContextUsage(null);
+      setSessionCwd(null);
+      setLoadingHistory(false);
+      capturedHistoryRef.current = false;
+      historyIdsRef.current = [];
+      return;
+    }
+    // Switching to an existing chat — show the loading skeleton WHILE
+    // keeping the old chat's messages on screen until the new ones land.
+    // setInitialMessages is called in the .then() below, atomically
+    // replacing the array so the user perceives a clean cross-fade
+    // instead of a flash to blank.
     let cancelled = false;
+    setLoadingHistory(true);
+    capturedHistoryRef.current = false;
     fetchSessionMessages(resumeSessionId)
       .then((data) => {
         if (!cancelled) {
@@ -292,14 +312,10 @@ export function ChatView({
       })
       .catch(() => {
         if (cancelled) return;
-        // 404 is the normal path when the user taps "+ New chat" on
-        // mobile: handleNewChat mints a brand-new UUID the server has
-        // never seen, so there's no JSONL to load. Without this reset,
-        // the *previous* chat's messages leaked into the new view —
-        // the drawer would close and the user would see the old chat
-        // unchanged, making the + button feel broken ("it just closes
-        // the chats section"). Clearing here gives the new chat the
-        // empty-state UI it should have.
+        // 404 — the SDK hasn't written a JSONL for this id yet. Could
+        // happen if the user lands on a session right after sending its
+        // very first message, before Claude has produced any output.
+        // Falling through to an empty list gives the empty-state UI.
         setInitialMessages([]);
         setInitialContextUsage(null);
         setSessionCwd(null);
@@ -674,7 +690,7 @@ export function ChatView({
             onScroll={handleScroll}
             className="absolute inset-0 overflow-y-auto overflow-x-hidden"
           >
-            {loadingHistory && (
+            {loadingHistory && messages.length === 0 && (
               <div className="flex items-center justify-center py-8">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-canvas-border border-t-canvas-muted" />
                 <span className="ml-2 text-[12px] text-canvas-muted">Loading conversation...</span>

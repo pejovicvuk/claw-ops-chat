@@ -433,7 +433,6 @@ export function ChatLayout({
             <ReportsMainPane />
           ) : (
             <ChatView
-              key={sessionId}
               sessionId={sessionId}
               resumeSessionId={selectedSessionId}
               onSessionCreated={onSessionCreated}

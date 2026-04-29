@@ -615,6 +615,27 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
+  /* ── Reset transient per-turn state when switching sessions ── */
+  // Previously the parent component remounted ChatView via `key={sessionId}`
+  // which reset everything for free — but caused a visible blank-out flash
+  // between unmount and the new history fetch. Now ChatView stays mounted
+  // and we explicitly null out the bits that are scoped to a single turn:
+  // the in-flight assistant message id, tool indicator, claudeSessionId,
+  // context usage, and auth/setup banners. `messages` is intentionally
+  // left alone — chat-view's history fetch calls `setInitialMessages` on
+  // success which atomically swaps in the new chat's messages with no
+  // intermediate empty state, so the user perceives a clean cross-fade
+  // instead of a flash to blank.
+  useEffect(() => {
+    setActiveTool(null);
+    setClaudeSessionId(null);
+    setContextUsage(null);
+    setAuthRequired(null);
+    setSetupRequired(false);
+    currentAssistantRef.current = null;
+    currentThinkingRef.current = null;
+  }, [sessionId]);
+
   /* ── Connect WebSocket ── */
   const connect = useCallback(() => {
     if (!sessionId) return;

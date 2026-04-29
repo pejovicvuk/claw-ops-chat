@@ -129,8 +129,17 @@ export function forwardHttp(
       const status = upRes.statusCode ?? 502;
       const headers = filterResponseHeaders(upRes.headers, match, req);
 
-      // Treat HTML as a stream we rewrite; everything else passes through.
-      if (isHtmlContentType(upRes.headers["content-type"])) {
+      // Only rewrite identity-encoded HTML. The rewriter operates on
+      // UTF-8 text; piping gzipped/brotli bytes through it produces
+      // U+FFFD-corrupted garbage that the browser fails to decode and
+      // surfaces as Firefox's "Content Encoding Error". We force
+      // upstream to identity via `Accept-Encoding: identity` (see
+      // `filterRequestHeaders`), but if some middleware compresses
+      // anyway we need a pass-through fallback.
+      const upstreamEncoding = upRes.headers["content-encoding"];
+      const isEncoded = !!upstreamEncoding && upstreamEncoding !== "identity";
+
+      if (isHtmlContentType(upRes.headers["content-type"]) && !isEncoded) {
         // Drop content-length — the rewriter changes the byte count.
         delete headers["content-length"];
         res.writeHead(status, headers);
@@ -204,6 +213,12 @@ function filterRequestHeaders(
   out["x-forwarded-host"] = String(headers["host"] ?? "");
   out["x-forwarded-proto"] = String(headers["x-forwarded-proto"] ?? "http");
   out["x-forwarded-prefix"] = match.prefix.replace(/\/$/, "");
+  // Force the upstream to return identity-encoded bytes. Otherwise the
+  // dev server may compress (Next 16 / Turbopack honor the user's
+  // `Accept-Encoding: gzip, br, ...`) and the HTML rewriter would
+  // corrupt the binary stream while trying to splice text into it.
+  // The chat's own front-proxy can re-compress on its way to the user.
+  out["accept-encoding"] = "identity";
   return out;
 }
 

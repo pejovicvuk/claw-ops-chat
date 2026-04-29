@@ -18,6 +18,8 @@ const ws_1 = require("ws");
 const sdk_loader_js_1 = __importDefault(require("./sdk-loader.js"));
 const { query } = sdk_loader_js_1.default;
 const auth_server_1 = require("./src/lib/auth-server");
+const ws_ticket_store_1 = require("./src/lib/ws-ticket-store");
+const exec_1 = require("./src/lib/git/exec");
 const claude_status_1 = require("./src/lib/claude-status");
 const terminal_shell_1 = require("./src/lib/terminal-shell");
 const jira_custom_config_1 = require("./src/lib/jira-custom-config");
@@ -27,10 +29,29 @@ const fs_2 = require("fs");
 const session_status_store_1 = require("./src/lib/session-status-store");
 const session_persistence_1 = require("./src/lib/session-persistence");
 const agent_config_1 = require("./src/lib/agent-config");
+const account_rate_limits_1 = require("./src/lib/account-rate-limits");
+const rate_limit_probe_1 = require("./src/lib/rate-limit-probe");
 const tool_policy_1 = require("./src/lib/reports/tool-policy");
 const scheduler_1 = require("./src/lib/reports/scheduler");
 const scheduler_singleton_1 = require("./src/lib/reports/scheduler-singleton");
+const paths_1 = require("./src/lib/projects/paths");
 const session_manager_singleton_1 = require("./src/lib/reports/session-manager-singleton");
+const chat_send_singleton_1 = require("./src/lib/chat-send-singleton");
+const writer_1 = require("./src/lib/audit/writer");
+const nav_urls_1 = require("./src/lib/nav-urls");
+const send_1 = require("./src/lib/push/send");
+const paths_2 = require("./src/lib/audit/paths");
+const retention_1 = require("./src/lib/audit/retention");
+const unfurl_cache_1 = require("./src/lib/proxy/unfurl-cache");
+const image_cache_1 = require("./src/lib/proxy/image-cache");
+const google_custom_config_1 = require("./src/lib/google-custom-config");
+const api_wrap_1 = require("./src/lib/audit/api-wrap");
+const http_forward_1 = require("./src/lib/preview-proxy/http-forward");
+const ws_forward_1 = require("./src/lib/preview-proxy/ws-forward");
+const bootstrap_1 = require("./src/lib/monitoring/bootstrap");
+const ws_broadcast_1 = require("./src/lib/monitoring/ws-broadcast");
+const ws_session_store_1 = require("./src/lib/monitoring/ws-session-store");
+const node_cron_1 = __importDefault(require("node-cron"));
 let ptyModule = null;
 let ptyLoadError = null;
 function loadPty() {
@@ -135,6 +156,10 @@ if (!ALLOWED_EMAIL) {
     console.error("FATAL: ALLOWED_EMAIL environment variable is required");
     process.exit(1);
 }
+if (!dev && ALLOWED_ORIGINS.size === 0) {
+    console.warn("!! ALLOWED_ORIGINS is not set. In production all cross-origin WebSocket " +
+        "connections will be rejected. Set ALLOWED_ORIGINS=https://your-domain.com in the .env file.");
+}
 /**
  * Check whether Claude Code has a persisted JSONL file for the given
  * session id. The SDK writes conversation history to
@@ -143,6 +168,18 @@ if (!ALLOWED_EMAIL) {
  * UUID-shaped sessionId coming in over the WebSocket represents a real
  * resumable conversation or a brand-new chat the client just invented.
  */
+/**
+ * Short, notification-friendly label for a chat session. Falls back to
+ * a generic "Chat" when the session has not yet processed a user
+ * message (the displayPreview fills in lazily — see handleUserMessage).
+ */
+function chatLabelFor(session) {
+    const preview = session.displayPreview?.trim();
+    if (preview) {
+        return preview.length > 60 ? `${preview.slice(0, 57)}…` : preview;
+    }
+    return "Chat";
+}
 function claudeSessionFileExists(sessionId) {
     const projectsDir = (0, path_1.join)((0, os_1.homedir)(), ".claude", "projects");
     if (!(0, fs_2.existsSync)(projectsDir))
@@ -164,29 +201,20 @@ function claudeSessionFileExists(sessionId) {
     return false;
 }
 /* ------------------------------------------------------------------ */
-/*  WebSocket auth helper                                              */
-/* ------------------------------------------------------------------ */
-/**
- * Validate an access token by calling the Spring backend's /auth/me.
- * Returns true if the token is valid and the email matches ALLOWED_EMAIL.
- */
-async function validateAccessToken(token) {
-    try {
-        const res = await fetch(`${API_ORIGIN}/api/v1/auth/me`, {
-            headers: { Authorization: `Bearer ${token}` },
-        });
-        if (!res.ok)
-            return false;
-        const user = (await res.json());
-        return user.email.toLowerCase() === ALLOWED_EMAIL.toLowerCase();
-    }
-    catch {
-        return false;
-    }
-}
-/* ------------------------------------------------------------------ */
 /*  Session Manager                                                    */
 /* ------------------------------------------------------------------ */
+/**
+ * Short, per-process random hex injected into every pending-request ID so
+ * IDs never collide across server restarts. The client persists the set of
+ * already-answered request IDs to sessionStorage (so a reload doesn't
+ * re-prompt the user). Without a boot prefix, after a container restart
+ * the server's `requestCounter` resets to 0 and regenerates ids like
+ * `req-1`, `req-2`, ... — which the client's dedup cache has already
+ * marked "resolved". That caused the observed "agent is waiting for
+ * approval but no modal appears" bug: the new permission_request events
+ * were silently dropped as stale.
+ */
+const SERVER_BOOT_ID = Math.random().toString(36).slice(2, 10);
 class SessionManager {
     constructor() {
         this.sessions = new Map();
@@ -219,6 +247,7 @@ class SessionManager {
                 currentQuery: null,
                 userAborted: false,
                 sessionCwd: null,
+                branchName: null,
                 status: "idle",
                 lastUserMessage: "",
                 wasInterrupted: false,
@@ -227,6 +256,10 @@ class SessionManager {
                 cronOnEvent: null,
                 cronAbortTimer: null,
                 cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+                retryCount: 0,
+                actorEmail: "anonymous",
+                displayPreview: "",
+                recentClientMessageIds: new Set(),
             };
             this.sessions.set(sessionId, session);
             (0, session_status_store_1.setSessionStatus)(sessionId, "idle");
@@ -295,6 +328,7 @@ class SessionManager {
             currentQuery: null,
             userAborted: false,
             sessionCwd: persisted.sessionCwd ?? null,
+            branchName: persisted.branchName ?? null,
             // Status is always reset to "idle" on boot — whatever was in
             // flight is gone. The wasInterrupted flag is what tells the
             // client something was cut short.
@@ -306,6 +340,10 @@ class SessionManager {
             cronOnEvent: null,
             cronAbortTimer: null,
             cronTokenUsage: { input: 0, output: 0, cacheRead: 0, cacheCreate: 0 },
+            retryCount: 0,
+            actorEmail: "anonymous",
+            displayPreview: persisted.lastUserMessage ? persisted.lastUserMessage.slice(0, 80) : "",
+            recentClientMessageIds: new Set(),
         };
         this.sessions.set(session.id, session);
         (0, session_status_store_1.setSessionStatus)(session.id, "idle");
@@ -359,6 +397,7 @@ class SessionManager {
             effort: session.effort,
             claudeSessionId: session.claudeSessionId,
             sessionCwd: session.sessionCwd,
+            branchName: session.branchName,
             eventHistory: session.eventHistory,
             sessionAllowedTools: Array.from(session.sessionAllowedTools),
             accumulatedText: session.accumulatedText,
@@ -367,9 +406,83 @@ class SessionManager {
             wasInterrupted: session.wasInterrupted,
         });
     }
-    connect(ws, sessionId, sessionCwd) {
+    /**
+     * Probe the git branch of the session's cwd. Empty stdout means
+     * detached HEAD or non-repo — both stored as null. GitExecError is
+     * swallowed to keep the existing branchName value (e.g. transient
+     * filesystem hiccups shouldn't blank the chip).
+     */
+    async refreshBranchName(session) {
+        if (!session.sessionCwd)
+            return;
+        try {
+            const result = await (0, exec_1.execGit)(["branch", "--show-current"], {
+                cwd: session.sessionCwd,
+                timeoutMs: 2000,
+            });
+            if (result.code !== 0)
+                return;
+            const next = result.stdout.toString("utf-8").trim() || null;
+            if (next !== session.branchName) {
+                session.branchName = next;
+                this.queuePersist(session);
+            }
+        }
+        catch (err) {
+            if (err instanceof exec_1.GitExecError)
+                return;
+            // Anything else: log but don't surface — branch detection is
+            // advisory, not load-bearing.
+            console.warn(`[session=${session.id}] refreshBranchName failed:`, err.message);
+        }
+    }
+    /**
+     * Slim per-session view used by the /api/sessions/branches route to
+     * mark active chats in the branch list. Mirrors the shape returned by
+     * the disk-fallback walk in that route so the client only needs one
+     * type.
+     */
+    listBranchSnapshots() {
+        const out = [];
+        const seen = new Set();
+        for (const session of this.sessions.values()) {
+            if (seen.has(session))
+                continue;
+            seen.add(session);
+            out.push({
+                sessionId: session.id,
+                claudeSessionId: session.claudeSessionId,
+                branchName: session.branchName,
+                sessionCwd: session.sessionCwd,
+                status: session.status,
+                display: session.displayPreview || session.lastUserMessage.slice(0, 80) || "Chat",
+            });
+        }
+        return out;
+    }
+    connect(ws, sessionId, sessionCwd, actorEmail, clientMeta) {
         const session = this.getOrCreateSession(sessionId);
         session.clients.add(ws);
+        if (actorEmail)
+            session.actorEmail = actorEmail;
+        (0, ws_session_store_1.wsRegisterSession)({
+            id: sessionId,
+            client: clientMeta?.client,
+            ip: clientMeta?.ip,
+            clientCount: session.clients.size,
+        });
+        (0, writer_1.getAuditWriter)()
+            .session({
+            type: "connected",
+            severity: "info",
+            actor: session.actorEmail,
+            subject: `Chat WS connected ${sessionId}`,
+            durationMs: null,
+            sessionId,
+            claudeSessionId: session.claudeSessionId,
+            details: { clientCount: session.clients.size, cwd: sessionCwd ?? null },
+        })
+            .catch(() => { });
         // Only treat a UUID-shaped sessionId as a resumable SDK session when
         // Claude Code has actually written a JSONL file for it. Previously
         // ANY UUID got auto-bound as claudeSessionId, so a fresh chat
@@ -391,6 +504,9 @@ class SessionManager {
         if (sessionCwd && !session.sessionCwd) {
             session.sessionCwd = sessionCwd;
         }
+        // Detect the current git branch in the background — informs the
+        // branch-list UI which chats are on which branch.
+        void this.refreshBranchName(session);
         // Send current state to the new client
         this.send(ws, { type: "ready" });
         if (session.claudeSessionId) {
@@ -440,7 +556,9 @@ class SessionManager {
                     this.send(ws, { type: "error", message: "Rate limit exceeded. Slow down." });
                     return;
                 }
-                const msg = JSON.parse(data.toString());
+                const raw = data.toString();
+                (0, ws_session_store_1.wsRecordIncoming)(sessionId, Buffer.byteLength(raw, "utf-8"));
+                const msg = JSON.parse(raw);
                 this.handleMessage(session, ws, msg);
             }
             catch {
@@ -450,6 +568,27 @@ class SessionManager {
         ws.on("close", () => {
             clearInterval(heartbeat);
             session.clients.delete(ws);
+            (0, ws_session_store_1.wsUpdateSession)(sessionId, {
+                clientCount: session.clients.size,
+                queueDepth: session.messageQueue.length,
+                pendingRequests: session.pendingRequests.size,
+                lastActivityAt: Date.now(),
+            });
+            if (session.clients.size === 0) {
+                (0, ws_session_store_1.wsRemoveSession)(sessionId);
+            }
+            (0, writer_1.getAuditWriter)()
+                .session({
+                type: "disconnected",
+                severity: "info",
+                actor: session.actorEmail,
+                subject: `Chat WS disconnected ${sessionId}`,
+                durationMs: null,
+                sessionId,
+                claudeSessionId: session.claudeSessionId,
+                details: { clientCount: session.clients.size },
+            })
+                .catch(() => { });
             // Sessions stay alive even with 0 clients — work continues in background.
             // Only cleanup idle sessions (not processing, no clients) after 30 minutes.
             if (session.clients.size === 0 && !session.isProcessing) {
@@ -486,6 +625,46 @@ class SessionManager {
         session.messageTimestamps.push(now);
         return true;
     }
+    /**
+     * Public entry point used by the HTTP `/api/chat/send` route to deliver
+     * a user message into a chat session. Mirrors the WebSocket "message"
+     * handler but with idempotency on `clientMessageId` so a fetch retry
+     * (the browser's `keepalive` flag survives navigation but the response
+     * may never reach the originating tab) doesn't double-send.
+     *
+     * Returns:
+     *   - { ok: true }                  → queued / processing started
+     *   - { ok: true, duplicate: true } → same clientMessageId already seen
+     *   - { ok: false, rateLimited }    → too many sends in 1s window
+     */
+    enqueueUserMessage(args) {
+        const session = this.getOrCreateSession(args.sessionId);
+        if (args.actorEmail)
+            session.actorEmail = args.actorEmail;
+        if (args.sessionCwd && !session.sessionCwd)
+            session.sessionCwd = args.sessionCwd;
+        if (session.recentClientMessageIds.has(args.clientMessageId)) {
+            return { ok: true, duplicate: true };
+        }
+        session.recentClientMessageIds.add(args.clientMessageId);
+        if (session.recentClientMessageIds.size > 50) {
+            const oldest = session.recentClientMessageIds.values().next().value;
+            if (oldest !== undefined)
+                session.recentClientMessageIds.delete(oldest);
+        }
+        if (!this.checkRateLimit(session)) {
+            return { ok: false, rateLimited: true };
+        }
+        session.lastUserMessage = args.text;
+        this.queuePersist(session);
+        if (session.isProcessing) {
+            session.messageQueue.push({ text: args.text });
+        }
+        else {
+            this.handleUserMessage(session, args.text);
+        }
+        return { ok: true };
+    }
     handleMessage(session, _ws, msg) {
         const type = msg.type;
         if (type === "message") {
@@ -521,6 +700,11 @@ class SessionManager {
             // Broadcast a resolution marker so other open tabs watching the
             // same session can also drop the prompt from their UI state.
             this.broadcast(session, { type: "permission_resolved", id });
+            // Dismiss stale system notifications on all devices when the user
+            // responds from any tab. Covers permission, ask, and plan prompts.
+            void (0, send_1.sendToUser)(session.actorEmail, { title: "", body: "", kind: "permissionRequest", tagKey: session.id, closeOnly: true }, "permissionRequest");
+            void (0, send_1.sendToUser)(session.actorEmail, { title: "", body: "", kind: "askQuestion", tagKey: session.id, closeOnly: true }, "askQuestion");
+            void (0, send_1.sendToUser)(session.actorEmail, { title: "", body: "", kind: "planProposal", tagKey: session.id, closeOnly: true }, "planProposal");
             session.accumulatedText = "";
             return;
         }
@@ -544,6 +728,12 @@ class SessionManager {
                     });
                     this.broadcast(session, { type: "permission_resolved", id });
                 }
+                if (session.pendingRequests.size > 0) {
+                    // Close all pending prompt notifications on every device.
+                    for (const kind of ["permissionRequest", "askQuestion", "planProposal"]) {
+                        void (0, send_1.sendToUser)(session.actorEmail, { title: "", body: "", kind, tagKey: session.id, closeOnly: true }, kind);
+                    }
+                }
                 session.pendingRequests.clear();
                 // AbortController is what actually kills the Claude CLI child
                 // process — we pass `signal: abortController.signal` into
@@ -566,17 +756,68 @@ class SessionManager {
             return;
         }
         if (type === "set_effort") {
-            session.effort = msg.effort || null;
+            // Whitelist the SDK's EffortLevel values; anything else (including
+            // "" for Auto) becomes null and the SDK falls back to adaptive
+            // thinking.
+            const raw = typeof msg.effort === "string" ? msg.effort : "";
+            const allowed = new Set(["low", "medium", "high", "xhigh", "max"]);
+            session.effort = allowed.has(raw) ? raw : null;
+            // Echo back to every connected tab so toolbars stay in sync after a
+            // reload or across multi-tab sessions. Mirrors `mode_changed`.
+            this.broadcast(session, { type: "effort_changed", effort: session.effort });
             return;
         }
         if (type === "set_mode") {
-            session.permissionMode = msg.mode || "default";
+            this.setSessionMode(session, msg.mode || "default", "client");
             return;
         }
     }
+    /**
+     * Update a session's permission mode, broadcast the change to every
+     * connected client, and tell the live SDK Query handle to flip its
+     * own internal gate. Called both when the client explicitly sends
+     * `set_mode` (for multi-tab sync) and when the server changes mode on
+     * its own (ExitPlanMode approval).
+     *
+     * Without the `query.setPermissionMode()` call, the SDK keeps
+     * enforcing the previous mode for the rest of the turn — so after
+     * plan-approval the agent sees its Bash/Edit calls denied by the
+     * SDK's plan-mode gate even though our `session.permissionMode`
+     * flipped to `acceptEdits`.
+     */
+    setSessionMode(session, mode, reason) {
+        session.permissionMode = mode;
+        this.broadcast(session, { type: "mode_changed", mode, reason });
+        // Fire-and-forget: session state + UI stay correct even if the SDK
+        // call can't land (e.g. the Query handle already finished).
+        const setPermOnQuery = session.currentQuery?.setPermissionMode;
+        if (typeof setPermOnQuery === "function") {
+            try {
+                void setPermOnQuery.call(session.currentQuery, mode).catch(() => {
+                    /* SDK rejected — we already updated our own state */
+                });
+            }
+            catch {
+                /* synchronous throw — ignore */
+            }
+        }
+    }
     async handleUserMessage(session, text) {
+        // Guard against infinite retry loops from "No conversation found" errors.
+        if (session.retryCount > 2) {
+            this.broadcast(session, {
+                type: "error",
+                error: "Conversation resume failed after multiple retries. Please start a new chat.",
+            });
+            session.retryCount = 0;
+            session.isProcessing = false;
+            return;
+        }
         session.isProcessing = true;
         session.accumulatedText = "";
+        if (!session.displayPreview && text.trim().length > 0) {
+            session.displayPreview = text.trim().slice(0, 80);
+        }
         const abortController = new AbortController();
         session.abortController = abortController;
         // Kick off the status machine for this turn — sidebar dot flips blue
@@ -586,6 +827,20 @@ class SessionManager {
         // a new assistant-turn container before any stream_event arrives.
         const turnId = `turn-${Date.now()}-${++session.requestCounter}`;
         this.broadcast(session, { type: "turn_start", turnId });
+        const turnStartedAt = Date.now();
+        (0, writer_1.getAuditWriter)()
+            .session({
+            type: "user_message",
+            severity: "info",
+            actor: session.actorEmail,
+            subject: `User message (${text.length} chars)`,
+            durationMs: null,
+            sessionId: session.id,
+            claudeSessionId: session.claudeSessionId,
+            turnId,
+            details: { textLength: text.length },
+        })
+            .catch(() => { });
         let toolInputAccum = "";
         let pendingToolUse = null;
         const getToolDescription = (toolName, input) => {
@@ -624,7 +879,16 @@ class SessionManager {
             // problem warrants it. Delivered as thinking_delta stream events,
             // which the UI renders as a collapsible Thinking block. Opt-out
             // with CLAUDE_THINKING=off if the extra tokens cost matter.
-            ...(process.env.CLAUDE_THINKING !== "off" ? { thinking: { type: "adaptive" } } : {}),
+            //
+            // IMPORTANT: adaptive thinking overrides any explicit `effort`
+            // value, so the toolbar's Low/Med/High/Max selector used to be a
+            // no-op (every turn ran as "auto"). Only enable adaptive thinking
+            // when the user picked "Auto" (session.effort === null).
+            ...(session.effort
+                ? {}
+                : process.env.CLAUDE_THINKING !== "off"
+                    ? { thinking: { type: "adaptive" } }
+                    : {}),
             // Pass the mode through to the SDK. Without this, the SDK never
             // exposes the ExitPlanMode tool to Claude when the user chose
             // plan mode — Claude couldn't call it even when asked, and just
@@ -639,7 +903,9 @@ class SessionManager {
                             permissionMode: "bypassPermissions",
                             allowDangerouslySkipPermissions: true,
                         }
-                        : {}),
+                        : session.permissionMode === "auto"
+                            ? { permissionMode: "auto" }
+                            : {}),
             canUseTool: async (toolName, input) => {
                 // Autonomous cron runs take a short-circuit path: decideCronTool
                 // enforces the per-job allowlist, bash-prefix filter, and turn
@@ -658,9 +924,20 @@ class SessionManager {
                 }
                 // Handle AskUserQuestion
                 if (toolName === "AskUserQuestion") {
-                    const id = `req-${++session.requestCounter}`;
+                    const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
                     this.broadcast(session, { type: "ask_question", id, questions: input.questions || [] });
                     this.setStatus(session, "awaiting_input");
+                    const chatLabel = chatLabelFor(session);
+                    const firstQ = Array.isArray(input.questions) ? String(input.questions[0] ?? "") : "";
+                    const qBody = firstQ.length > 100 ? `${firstQ.slice(0, 97)}…` : firstQ;
+                    void (0, send_1.sendToUser)(session.actorEmail, {
+                        title: `${chatLabel} has a question`,
+                        body: qBody || "Claude is waiting for your input.",
+                        kind: "askQuestion",
+                        url: nav_urls_1.navUrls.chat(session.id),
+                        tagKey: session.id,
+                        chatId: session.id,
+                    }, "askQuestion");
                     const response = await this.waitForResponse(session, id);
                     this.setStatus(session, "thinking");
                     return {
@@ -677,10 +954,20 @@ class SessionManager {
                 // reason" in user bug reports). This branch renders a proper plan
                 // card on the client and applies the user's chosen mode switch.
                 if (toolName === "ExitPlanMode") {
-                    const id = `req-${++session.requestCounter}`;
+                    const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
                     const planText = typeof input.plan === "string" ? input.plan : JSON.stringify(input);
                     this.broadcast(session, { type: "plan_proposal", id, plan: planText });
                     this.setStatus(session, "awaiting_permission");
+                    const planChatLabel = chatLabelFor(session);
+                    const planBody = planText.length > 100 ? `${planText.slice(0, 97)}…` : planText;
+                    void (0, send_1.sendToUser)(session.actorEmail, {
+                        title: `${planChatLabel} — plan ready for review`,
+                        body: planBody,
+                        kind: "planProposal",
+                        url: nav_urls_1.navUrls.chat(session.id),
+                        tagKey: session.id,
+                        chatId: session.id,
+                    }, "planProposal");
                     const response = await this.waitForResponse(session, id);
                     this.setStatus(session, "thinking");
                     const approve = response.approve === true;
@@ -689,13 +976,18 @@ class SessionManager {
                         // Default behaviour after plan approval is to flip into
                         // acceptEdits so Claude can actually execute the plan it
                         // just proposed; the client can override by sending
-                        // newMode: "default" if the user wants to keep confirming.
-                        if (newMode === "default" || newMode === "plan" || newMode === "acceptEdits") {
-                            session.permissionMode = newMode;
-                        }
-                        else {
-                            session.permissionMode = "acceptEdits";
-                        }
+                        // newMode: "default" | "plan" | "auto" if the user wants
+                        // different follow-up behaviour.
+                        const nextMode = newMode === "default" ||
+                            newMode === "plan" ||
+                            newMode === "acceptEdits" ||
+                            newMode === "auto"
+                            ? newMode
+                            : "acceptEdits";
+                        // Broadcast so the client toolbar flips to the new mode —
+                        // without this, the UI stays stuck on Plan Mode even though
+                        // the agent is now in acceptEdits/auto.
+                        this.setSessionMode(session, nextMode, "plan_approved");
                         return { behavior: "allow", updatedInput: input };
                     }
                     return {
@@ -722,8 +1014,12 @@ class SessionManager {
                 ]);
                 const EDIT_TOOLS = new Set(["Write", "Edit"]);
                 const mode = session.permissionMode;
-                if (mode === "acceptEdits") {
-                    // Auto-allow safe tools + edit tools, ask for Bash and others
+                if (mode === "acceptEdits" || mode === "auto") {
+                    // Auto-allow safe tools + edit tools, ask for Bash and others.
+                    // "auto" mode additionally lets the SDK's native classifier
+                    // pre-approve calls before they reach canUseTool — when it
+                    // does intercept us, we mirror acceptEdits semantics so the
+                    // UX is consistent and we never surprise-execute shell.
                     if (SAFE_TOOLS.has(toolName) || EDIT_TOOLS.has(toolName)) {
                         return { behavior: "allow", updatedInput: input };
                     }
@@ -738,18 +1034,70 @@ class SessionManager {
                     }
                 }
                 // Default mode (or tools not auto-handled above): ask the user
-                const id = `req-${++session.requestCounter}`;
+                const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
                 const description = getToolDescription(toolName, input);
                 this.broadcast(session, { type: "permission_request", id, toolName, input, description });
                 this.setStatus(session, "awaiting_permission");
+                const chatLabel = chatLabelFor(session);
+                const detail = description ? `${toolName}: ${description}` : `${toolName}`;
+                void (0, send_1.sendToUser)(session.actorEmail, {
+                    title: `${chatLabel} needs approval`,
+                    body: detail.length > 100 ? `${detail.slice(0, 97)}…` : detail,
+                    kind: "permissionRequest",
+                    url: nav_urls_1.navUrls.chat(session.id),
+                    tagKey: session.id,
+                    chatId: session.id,
+                }, "permissionRequest");
+                (0, writer_1.getAuditWriter)()
+                    .session({
+                    type: "permission_requested",
+                    severity: "info",
+                    actor: session.actorEmail,
+                    subject: `Permission requested: ${toolName}`,
+                    durationMs: null,
+                    sessionId: session.id,
+                    claudeSessionId: session.claudeSessionId,
+                    turnId,
+                    toolName,
+                    details: { requestId: id },
+                })
+                    .catch(() => { });
                 const response = await this.waitForResponse(session, id);
                 this.setStatus(session, "tool_running");
                 if (response.allow) {
                     if (response.allowSession) {
                         session.sessionAllowedTools.add(toolName);
                     }
+                    (0, writer_1.getAuditWriter)()
+                        .session({
+                        type: "permission_granted",
+                        severity: "info",
+                        actor: session.actorEmail,
+                        subject: `Permission granted: ${toolName}`,
+                        durationMs: null,
+                        sessionId: session.id,
+                        claudeSessionId: session.claudeSessionId,
+                        turnId,
+                        toolName,
+                        details: { requestId: id, allowSession: Boolean(response.allowSession) },
+                    })
+                        .catch(() => { });
                     return { behavior: "allow", updatedInput: input };
                 }
+                (0, writer_1.getAuditWriter)()
+                    .session({
+                    type: "permission_denied",
+                    severity: "warn",
+                    actor: session.actorEmail,
+                    subject: `Permission denied: ${toolName}`,
+                    durationMs: null,
+                    sessionId: session.id,
+                    claudeSessionId: session.claudeSessionId,
+                    turnId,
+                    toolName,
+                    details: { requestId: id },
+                })
+                    .catch(() => { });
                 return { behavior: "deny", message: response.message || "User denied this action" };
             },
             ...(session.effort ? { effort: session.effort } : {}),
@@ -824,7 +1172,10 @@ class SessionManager {
             try {
                 messageStream = query(queryParams);
                 // Stash the Query handle so the `stop` client message can call
-                // .interrupt() on it for a graceful SDK-level stop.
+                // .interrupt() on it for a graceful SDK-level stop, and so the
+                // ExitPlanMode approval / client mode switches can call
+                // .setPermissionMode() on it to tell the SDK's internal gate to
+                // stop enforcing plan mode mid-turn.
                 session.currentQuery = messageStream;
                 // Try to get the first message to detect resume failures early
                 const first = await messageStream.next();
@@ -849,6 +1200,18 @@ class SessionManager {
                         // lands on THIS session.
                         this.aliasClaudeSessionId(session);
                         this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
+                        (0, writer_1.getAuditWriter)()
+                            .session({
+                            type: "sdk_init",
+                            severity: "info",
+                            actor: session.actorEmail,
+                            subject: `SDK session init ${msg.session_id}`,
+                            durationMs: null,
+                            sessionId: session.id,
+                            claudeSessionId: session.claudeSessionId,
+                            details: {},
+                        })
+                            .catch(() => { });
                     }
                 }
             }
@@ -866,6 +1229,13 @@ class SessionManager {
                 }
             }
             for await (const message of messageStream) {
+                // Bail out immediately if the user hit Stop. The SDK's
+                // abortController.abort() kills the subprocess, but the async
+                // iterator may still yield buffered messages for a second or two
+                // — leaving the turn visibly unresponsive to the user. This
+                // check short-circuits the loop the moment a stop arrives.
+                if (session.userAborted || abortController.signal.aborted)
+                    break;
                 const msg = message;
                 // Session init
                 if (msg.type === "system" && msg.subtype === "init") {
@@ -876,6 +1246,18 @@ class SessionManager {
                     // Same alias trick as the probe path — see comment above.
                     this.aliasClaudeSessionId(session);
                     this.broadcast(session, { type: "session_init", sessionId: msg.session_id });
+                    (0, writer_1.getAuditWriter)()
+                        .session({
+                        type: "sdk_init",
+                        severity: "info",
+                        actor: session.actorEmail,
+                        subject: `SDK session init ${msg.session_id}`,
+                        durationMs: null,
+                        sessionId: session.id,
+                        claudeSessionId: session.claudeSessionId,
+                        details: {},
+                    })
+                        .catch(() => { });
                     continue;
                 }
                 // Compact boundary — SDK compacted the context window. Surface it
@@ -932,11 +1314,38 @@ class SessionManager {
                                 name: pendingToolUse.name,
                                 input: parsedInput,
                             });
+                            (0, writer_1.getAuditWriter)()
+                                .session({
+                                type: "tool_use_start",
+                                severity: "info",
+                                actor: session.actorEmail,
+                                subject: `Tool ${pendingToolUse.name}`,
+                                durationMs: null,
+                                sessionId: session.id,
+                                claudeSessionId: session.claudeSessionId,
+                                turnId,
+                                toolName: pendingToolUse.name,
+                                details: { toolId: pendingToolUse.id, inputKeys: Object.keys(parsedInput) },
+                            })
+                                .catch(() => { });
                             pendingToolUse = null;
                             toolInputAccum = "";
                         }
                         continue;
                     }
+                    continue;
+                }
+                // Subscriber rate-limit windows. One event per window type; we
+                // merge into session.rateLimits so the HUD always has the full
+                // 5h + 7d picture even when only one window changed.
+                if (msg.type === "rate_limit_event") {
+                    // Account-scoped: the 5h / 7d windows are per-Anthropic-account,
+                    // not per-session. One global cache on disk is the source of
+                    // truth; the HUD popup fetches it via GET /chat/api/rate-limits.
+                    // Fire-and-forget — a write failure must not block the turn.
+                    void (0, account_rate_limits_1.applyRateLimitEvent)(msg.rate_limit_info).catch(() => {
+                        /* swallow I/O errors; next event retries */
+                    });
                     continue;
                 }
                 // Tool results (user messages with tool_result content)
@@ -967,8 +1376,9 @@ class SessionManager {
                     // Broadcast live context usage from assistant usage field.
                     // The assistant.message.usage has input_tokens, cache_read_input_tokens, cache_creation_input_tokens.
                     const usage = assistantMsg?.usage;
+                    const model = typeof assistantMsg?.model === "string" ? assistantMsg.model : undefined;
                     if (usage) {
-                        this.broadcastAssistantUsage(session, usage);
+                        this.broadcastAssistantUsage(session, usage, model);
                     }
                     const content = assistantMsg?.content;
                     // Broadcast tool_use_complete for any tool calls in this message.
@@ -987,6 +1397,25 @@ class SessionManager {
                                     name: block.name,
                                     input: block.input,
                                 });
+                                (0, writer_1.getAuditWriter)()
+                                    .session({
+                                    type: "tool_use_complete",
+                                    severity: "info",
+                                    actor: session.actorEmail,
+                                    subject: `Tool ${block.name} complete`,
+                                    durationMs: null,
+                                    sessionId: session.id,
+                                    claudeSessionId: session.claudeSessionId,
+                                    turnId,
+                                    toolName: block.name,
+                                    details: {
+                                        toolId: block.id,
+                                        inputKeys: block.input && typeof block.input === "object"
+                                            ? Object.keys(block.input)
+                                            : [],
+                                    },
+                                })
+                                    .catch(() => { });
                             }
                         }
                     }
@@ -994,7 +1423,7 @@ class SessionManager {
                 }
                 // Result — turn complete
                 if (msg.type === "result") {
-                    // If resume failed, retry without resume
+                    // If resume failed, retry without resume (bounded by retryCount guard)
                     if (msg.is_error &&
                         typeof msg.result === "string" &&
                         msg.result.includes("No conversation found")) {
@@ -1003,10 +1432,12 @@ class SessionManager {
                         delete queryParams.options.resume;
                         session.isProcessing = false;
                         session.currentQuery = null;
+                        session.retryCount += 1;
                         this.handleUserMessage(session, text);
                         return;
                     }
                     session.claudeSessionId = msg.session_id;
+                    session.retryCount = 0; // reset on successful result
                     session.accumulatedText = "";
                     this.broadcast(session, {
                         type: "result",
@@ -1016,6 +1447,50 @@ class SessionManager {
                         subtype: msg.subtype,
                         permissionDenials: msg.permission_denials || [],
                     });
+                    // Re-detect the branch in case the agent's run included a
+                    // checkout — keeps the branch-list chip accurate.
+                    void this.refreshBranchName(session);
+                    (0, writer_1.getAuditWriter)()
+                        .session({
+                        type: "turn_complete",
+                        severity: msg.is_error ? "error" : "info",
+                        actor: session.actorEmail,
+                        subject: msg.is_error ? `Turn error ${turnId}` : `Turn complete ${turnId}`,
+                        durationMs: Date.now() - turnStartedAt,
+                        sessionId: session.id,
+                        claudeSessionId: session.claudeSessionId,
+                        turnId,
+                        isError: Boolean(msg.is_error),
+                        details: {
+                            subtype: msg.subtype,
+                            permissionDenials: msg.permission_denials || [],
+                        },
+                    })
+                        .catch(() => { });
+                    // Web Push: notify subscribed devices that the turn finished.
+                    // Errors fire on the "error" channel instead so users can opt
+                    // out of one without losing the other.
+                    const chatLabel = chatLabelFor(session);
+                    if (msg.is_error) {
+                        void (0, send_1.sendToUser)(session.actorEmail, {
+                            title: `${chatLabel} — error`,
+                            body: "The turn ended with an error. Open the chat to see details.",
+                            kind: "error",
+                            url: nav_urls_1.navUrls.chat(session.id),
+                            tagKey: session.id,
+                            chatId: session.id,
+                        }, "error");
+                    }
+                    else {
+                        void (0, send_1.sendToUser)(session.actorEmail, {
+                            title: `${chatLabel} — finished`,
+                            body: "Ready for your next message.",
+                            kind: "turnComplete",
+                            url: nav_urls_1.navUrls.chat(session.id),
+                            tagKey: session.id,
+                            chatId: session.id,
+                        }, "turnComplete");
+                    }
                     this.broadcast(session, {
                         type: "turn_end",
                         turnId,
@@ -1125,6 +1600,36 @@ class SessionManager {
                         .slice(-10)
                         .join("\n")
                     : undefined;
+                (0, writer_1.getAuditWriter)()
+                    .session({
+                    type: "error",
+                    severity: "error",
+                    actor: session.actorEmail,
+                    subject: authError
+                        ? "Claude session auth error"
+                        : setupRequired
+                            ? "Claude setup error"
+                            : "Claude session error",
+                    durationMs: Date.now() - turnStartedAt,
+                    sessionId: session.id,
+                    claudeSessionId: session.claudeSessionId,
+                    turnId,
+                    isError: true,
+                    details: { errorCode: errnoErr.code ?? null, message: rawMessage },
+                })
+                    .catch(() => { });
+                void (0, send_1.sendToUser)(session.actorEmail, {
+                    title: authError
+                        ? `${chatLabelFor(session)} — sign in again`
+                        : setupRequired
+                            ? `${chatLabelFor(session)} — setup error`
+                            : `${chatLabelFor(session)} — error`,
+                    body: rawMessage.slice(0, 120),
+                    kind: "error",
+                    url: nav_urls_1.navUrls.chat(session.id),
+                    tagKey: session.id,
+                    chatId: session.id,
+                }, "error");
                 if (authError) {
                     this.broadcast(session, {
                         type: "auth_required",
@@ -1209,8 +1714,11 @@ class SessionManager {
     }
     broadcast(session, event) {
         session.lastActivity = Date.now();
-        // Save to history for reconnecting clients (skip transient status events)
-        if (event.type !== "status") {
+        // Save to history for reconnecting clients — store only structural
+        // events needed for replay, skip high-frequency streaming events
+        // (text_delta, thinking_delta, tool_use_start, tool_result, status).
+        const eventType = event.type;
+        if (SessionManager.HISTORY_EVENT_TYPES.has(eventType)) {
             session.eventHistory.push(event);
             // Cap history to prevent unbounded growth (keep last 500 events)
             if (session.eventHistory.length > 500) {
@@ -1234,22 +1742,32 @@ class SessionManager {
             }
         }
         const data = JSON.stringify(event);
+        const bytes = Buffer.byteLength(data, "utf-8");
         for (const client of session.clients) {
             if (client.readyState === ws_1.WebSocket.OPEN) {
                 client.send(data);
+                (0, ws_session_store_1.wsRecordOutgoing)(session.id, bytes);
             }
         }
+        (0, ws_session_store_1.wsUpdateSession)(session.id, {
+            queueDepth: session.messageQueue.length,
+            pendingRequests: session.pendingRequests.size,
+            lastActivityAt: Date.now(),
+        });
     }
     send(ws, event) {
         if (ws.readyState === ws_1.WebSocket.OPEN) {
-            ws.send(JSON.stringify(event));
+            const data = JSON.stringify(event);
+            ws.send(data);
         }
     }
     /** Broadcast context usage from the final `result.modelUsage` (authoritative). */
     broadcastContextUsage(session, modelUsage) {
         if (!modelUsage || typeof modelUsage !== "object")
             return;
-        const firstModel = Object.values(modelUsage)[0];
+        const entries = Object.entries(modelUsage);
+        const [modelId, firstModelRaw] = entries[0] ?? [];
+        const firstModel = firstModelRaw;
         if (!firstModel || !firstModel.contextWindow)
             return;
         const used = (firstModel.inputTokens || 0) +
@@ -1261,10 +1779,15 @@ class SessionManager {
             used,
             max,
             percentage: Math.round((used / max) * 100),
+            model: modelId ?? null,
+            inputTokens: firstModel.inputTokens || 0,
+            outputTokens: firstModel.outputTokens || 0,
+            cacheReadTokens: firstModel.cacheReadInputTokens || 0,
+            cacheCreateTokens: firstModel.cacheCreationInputTokens || 0,
         });
     }
     /** Broadcast live context usage from an assistant message's `usage` field. */
-    broadcastAssistantUsage(session, usage) {
+    broadcastAssistantUsage(session, usage, model) {
         // The assistant message has raw API usage (input_tokens snake_case).
         const used = (usage.input_tokens || 0) +
             (usage.cache_read_input_tokens || 0) +
@@ -1287,6 +1810,11 @@ class SessionManager {
             used,
             max,
             percentage: Math.round((used / max) * 100),
+            model: model ?? null,
+            inputTokens: usage.input_tokens || 0,
+            outputTokens: usage.output_tokens || 0,
+            cacheReadTokens: usage.cache_read_input_tokens || 0,
+            cacheCreateTokens: usage.cache_creation_input_tokens || 0,
         });
     }
     /**
@@ -1347,7 +1875,44 @@ class SessionManager {
             this.handleUserMessage(session, args.prompt);
         });
     }
+    /**
+     * Force-disconnect every WebSocket attached to a session. Used by the
+     * monitoring "Disconnect" admin action.
+     */
+    forceDisconnect(sessionId) {
+        const session = this.sessions.get(sessionId);
+        if (!session)
+            return false;
+        for (const client of session.clients) {
+            try {
+                client.close(1000, "Force-disconnected by operator");
+            }
+            catch {
+                /* already dead */
+            }
+        }
+        return true;
+    }
 }
+/**
+ * Event types that carry structural replay value. High-frequency streaming
+ * events (text_delta, thinking_delta, tool_use_start, tool_result) are
+ * excluded so eventHistory doesn't fill up during a long turn and get
+ * pruned before the important bookmarks (turn_start/end, result, etc.)
+ * are preserved.
+ */
+SessionManager.HISTORY_EVENT_TYPES = new Set([
+    "session_init",
+    "turn_start",
+    "turn_end",
+    "result",
+    "permission_request",
+    "permission_resolved",
+    "ask_question",
+    "plan_proposal",
+    "interrupted",
+    "error",
+]);
 /* ------------------------------------------------------------------ */
 /*  Terminal (PTY over WebSocket)                                      */
 /* ------------------------------------------------------------------ */
@@ -1449,14 +2014,9 @@ function isOriginAllowed(origin) {
     if (ALLOWED_ORIGINS.size > 0) {
         return ALLOWED_ORIGINS.has(origin);
     }
-    // Default: allow same-host origins (any port)
-    try {
-        const url = new URL(origin);
-        return (url.hostname === "localhost" || url.hostname === "127.0.0.1" || origin.includes(".viksi.ai"));
-    }
-    catch {
-        return false;
-    }
+    // Production with no allowlist: reject all cross-origin connections.
+    // A startup warning is logged at boot (see ALLOWED_ORIGINS check below).
+    return false;
 }
 /* ------------------------------------------------------------------ */
 /*  Start                                                              */
@@ -1470,6 +2030,19 @@ const sessionManager = new SessionManager();
 // only handle API routes had, and any transient bootstrap failure made
 // manual runs unrunnable.
 (0, session_manager_singleton_1.setSessionManager)(sessionManager);
+// Same trick for the HTTP /api/chat/send route — gives it a way to call
+// SessionManager.enqueueUserMessage without importing server.ts (which
+// would create a build cycle).
+(0, chat_send_singleton_1.setChatSendHandle)({
+    enqueueUserMessage: sessionManager.enqueueUserMessage.bind(sessionManager),
+});
+// Expose force-disconnect for the monitoring admin API. Anchored on
+// globalThis so the bundled API route module can reach it across the
+// Next.js standalone module boundary.
+globalThis.__clawForceDisconnectSession = (id) => sessionManager.forceDisconnect(id);
+// Expose a slim per-session view (with branchName) so the
+// /api/sessions/branches route can mark active chats in the branch list.
+globalThis.__clawListSessionBranches = () => sessionManager.listBranchSnapshots();
 // Rehydrate session state from disk so a container restart doesn't
 // wipe every in-flight conversation. Runs synchronously (well, fire
 // and log) before we start listening — if it fails we still come up,
@@ -1500,19 +2073,137 @@ const sessionManager = new SessionManager();
         console.warn(`!! Could not start reports scheduler: ${err.message}`);
     }
 })();
+// Ensure the projects root exists so the Projects API doesn't 500 on a
+// fresh install. Sibling IIFE for the same isolation reason as above.
+(async () => {
+    try {
+        await (0, paths_1.ensureProjectsTree)();
+    }
+    catch (err) {
+        console.warn(`!! Could not init projects tree: ${err.message}`);
+    }
+})();
+// Bootstrap the audit log: ensure /root/.audit exists, run a one-shot
+// purge to sweep anything past retention that lingered through a crash,
+// then schedule a 6-hour recurring purge so we don't drift out of
+// retention while the container keeps running.
+(async () => {
+    try {
+        await (0, paths_2.ensureAuditTree)();
+        await (0, retention_1.purgeOldAuditFiles)();
+        node_cron_1.default.schedule("0 */6 * * *", () => {
+            (0, retention_1.purgeOldAuditFiles)().catch((err) => {
+                console.warn(`[audit] scheduled purge failed: ${err.message}`);
+            });
+        }, { timezone: "UTC" });
+        console.log(`> Audit log ready at /root/.audit (30-day retention)`);
+    }
+    catch (err) {
+        console.warn(`!! Could not initialize audit log: ${err.message}`);
+    }
+})();
+// Bootstrap monitoring subsystem (collectors, alert engine, /ws/monitoring
+// broadcaster). Independent of audit init; failures are non-fatal.
+(() => {
+    try {
+        (0, bootstrap_1.bootstrapMonitoring)();
+    }
+    catch (err) {
+        console.warn(`!! Could not initialize monitoring: ${err.message}`);
+    }
+})();
+// One-shot migration: rewrite legacy `--tool-tier` args in ~/.claude.json
+// for users who connected the Google Workspace MCP before we expanded the
+// tool set. Idempotent; non-fatal on error.
+(async () => {
+    try {
+        const result = await (0, google_custom_config_1.migrateGoogleMcpTier)();
+        if (result.migrated) {
+            console.log(`> Google MCP tier migrated: ${result.oldTier} → complete`);
+        }
+    }
+    catch (err) {
+        console.warn(`!! Google MCP tier migration skipped: ${err.message}`);
+    }
+})();
+// Preview proxy caches (unfurl metadata + external images). Boot-time sweep
+// + recurring 12h trim so /root/.cache doesn't grow without bound.
+(async () => {
+    try {
+        await Promise.all([(0, unfurl_cache_1.purgeOldUnfurls)(), (0, image_cache_1.purgeOldImages)()]);
+        node_cron_1.default.schedule("30 */12 * * *", () => {
+            (0, unfurl_cache_1.purgeOldUnfurls)().catch((err) => {
+                console.warn(`[preview] unfurl cache purge failed: ${err.message}`);
+            });
+            (0, image_cache_1.purgeOldImages)().catch((err) => {
+                console.warn(`[preview] image cache purge failed: ${err.message}`);
+            });
+        }, { timezone: "UTC" });
+        console.log(`> Preview caches ready at /root/.cache (unfurl 24h, images 7d)`);
+    }
+    catch (err) {
+        console.warn(`!! Could not initialize preview caches: ${err.message}`);
+    }
+})();
 app.prepare().then(() => {
     const server = (0, http_1.createServer)((req, res) => {
+        // Preview reverse proxy — short-circuit Next.js for /chat/preview/<port>/*
+        // so localhost dev servers can be iframed inside item canvases. Auth +
+        // port validation live in `forwardHttp`.
+        if (req.url && req.url.startsWith(`${http_forward_1.PREVIEW_PREFIX}/`)) {
+            const match = (0, http_forward_1.matchPreviewPath)(req.url);
+            if (match) {
+                (0, http_forward_1.forwardHttp)(req, res, match, { selfPort: port });
+                return;
+            }
+        }
         const parsedUrl = (0, url_1.parse)(req.url || "/", true);
         handle(req, res, parsedUrl);
     });
     const wss = new ws_1.WebSocketServer({ noServer: true });
+    // Global in-app notification channel. Every authenticated client that
+    // connects to /ws/notifications is added here and receives a JSON frame
+    // for every dispatched push event so the frontend can show in-app toasts
+    // regardless of which chat the user has open or whether the OS delivers
+    // the system notification.
+    const notificationClients = new Set();
+    (0, send_1.onNotificationDispatched)((payload) => {
+        if (notificationClients.size === 0)
+            return;
+        const frame = JSON.stringify({ type: "notification", payload });
+        for (const ws of notificationClients) {
+            if (ws.readyState === ws_1.WebSocket.OPEN) {
+                try {
+                    ws.send(frame);
+                }
+                catch {
+                    /* ignore */
+                }
+            }
+            else {
+                notificationClients.delete(ws);
+            }
+        }
+    });
     // Let Next.js handle its own upgrade requests (HMR etc.)
     const nextUpgradeHandler = app.getUpgradeHandler();
     server.on("upgrade", async (req, socket, head) => {
         const { pathname, query: qs } = (0, url_1.parse)(req.url || "/", true);
+        // Preview proxy WS upgrade — dev-server HMR clients connect through
+        // here. Auth + port validation live in `forwardWs`. Handled before
+        // the chat-route branches so they don't have to know about it.
+        if (req.url && req.url.startsWith(`${http_forward_1.PREVIEW_PREFIX}/`)) {
+            const match = (0, http_forward_1.matchPreviewPath)(req.url);
+            if (match) {
+                (0, ws_forward_1.forwardWs)(req, socket, head, match, { selfPort: port, wss });
+                return;
+            }
+        }
         const isChatWs = pathname === "/ws/chat" || pathname === "/chat/ws/chat";
         const isTerminalWs = pathname === "/ws/terminal" || pathname === "/chat/ws/terminal";
-        if (!isChatWs && !isTerminalWs) {
+        const isMonitoringWs = pathname === "/ws/monitoring" || pathname === "/chat/ws/monitoring";
+        const isNotificationsWs = pathname === "/ws/notifications" || pathname === "/chat/ws/notifications";
+        if (!isChatWs && !isTerminalWs && !isMonitoringWs && !isNotificationsWs) {
             // Pass to Next.js for HMR and other internal WebSockets
             nextUpgradeHandler(req, socket, head);
             return;
@@ -1532,39 +2223,107 @@ app.prepare().then(() => {
             return;
         }
         // Authenticate: try signed session cookie first (fast, local HMAC check),
-        // then fall back to validating access token via the Spring backend.
+        // then fall back to a short-lived WS ticket (?ticket=<uuid>) issued by
+        // POST /api/auth/ws-ticket. Bearer tokens in URLs are intentionally NOT
+        // supported here — they appear in server logs and browser history.
+        const wsRoute = isTerminalWs
+            ? "/ws/terminal"
+            : isMonitoringWs
+                ? "/ws/monitoring"
+                : isNotificationsWs
+                    ? "/ws/notifications"
+                    : "/ws/chat";
         const sessionPayload = (0, auth_server_1.extractSessionFromCookieHeader)(req.headers.cookie);
-        if (!sessionPayload) {
-            const queryToken = qs.token;
-            if (!queryToken) {
+        let actorEmail;
+        if (sessionPayload) {
+            actorEmail = sessionPayload.email;
+        }
+        else {
+            const queryTicket = qs.ticket;
+            if (!queryTicket) {
                 socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
                 socket.destroy();
+                (0, api_wrap_1.logWsUpgrade)({
+                    route: wsRoute,
+                    statusCode: 401,
+                    actor: "anonymous",
+                    errorMessage: "Missing credentials",
+                }).catch(() => { });
                 return;
             }
-            const valid = await validateAccessToken(queryToken);
-            if (!valid) {
+            const ticketEmail = (0, ws_ticket_store_1.consumeWsTicket)(queryTicket);
+            if (!ticketEmail) {
                 socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
                 socket.destroy();
+                (0, api_wrap_1.logWsUpgrade)({
+                    route: wsRoute,
+                    statusCode: 401,
+                    actor: "anonymous",
+                    errorMessage: "Invalid or expired WS ticket",
+                }).catch(() => { });
                 return;
             }
+            actorEmail = ticketEmail;
         }
         if (isTerminalWs) {
-            const email = sessionPayload?.email ?? "anonymous";
             wss.handleUpgrade(req, socket, head, (ws) => {
-                handleTerminalConnection(ws, email);
+                handleTerminalConnection(ws, actorEmail);
             });
+            (0, api_wrap_1.logWsUpgrade)({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => { });
+            return;
+        }
+        if (isMonitoringWs) {
+            const broadcaster = (0, ws_broadcast_1.getMonitoringBroadcaster)();
+            wss.handleUpgrade(req, socket, head, (ws) => {
+                broadcaster.register(ws);
+                ws.on("message", (data) => {
+                    try {
+                        const frame = JSON.parse(data.toString());
+                        broadcaster.handleFrame(ws, frame);
+                    }
+                    catch {
+                        /* ignore malformed frames */
+                    }
+                });
+            });
+            (0, api_wrap_1.logWsUpgrade)({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => { });
+            return;
+        }
+        if (isNotificationsWs) {
+            wss.handleUpgrade(req, socket, head, (ws) => {
+                notificationClients.add(ws);
+                ws.on("close", () => notificationClients.delete(ws));
+                ws.on("error", () => notificationClients.delete(ws));
+            });
+            (0, api_wrap_1.logWsUpgrade)({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => { });
             return;
         }
         const sessionId = qs.session || "default";
         const cwdParam = qs.cwd || undefined;
+        const ipHeader = req.headers["x-forwarded-for"] ?? req.socket.remoteAddress ?? "";
+        const userAgent = req.headers["user-agent"]?.slice(0, 80);
         wss.handleUpgrade(req, socket, head, (ws) => {
-            sessionManager.connect(ws, sessionId, cwdParam);
+            sessionManager.connect(ws, sessionId, cwdParam, actorEmail, {
+                client: userAgent,
+                ip: ipHeader.split(",")[0]?.trim(),
+            });
         });
+        (0, api_wrap_1.logWsUpgrade)({
+            route: wsRoute,
+            statusCode: 101,
+            actor: actorEmail,
+            target: sessionId,
+        }).catch(() => { });
     });
     server.listen(port, () => {
         console.log(`> Claw Chat ready on http://localhost:${port}`);
         console.log(`> WebSocket endpoint: ws://localhost:${port}/ws/chat`);
         console.log(`> API_ORIGIN: ${API_ORIGIN}`);
+        // Bootstrap + periodically refresh the account-level rate-limit cache
+        // via a cheap /v1/messages ping. Keeps the HUD popup populated even
+        // before the user has sent their first chat message this boot, and
+        // after long idle periods. Noop when no OAuth token is available.
+        (0, rate_limit_probe_1.startRateLimitProbe)();
         // SDK sanity probe. If the bundled entry can't be resolved, every chat
         // query dies with a non-obvious ENOENT. Logging the resolved path + SDK
         // version on boot means the operator sees the problem immediately.

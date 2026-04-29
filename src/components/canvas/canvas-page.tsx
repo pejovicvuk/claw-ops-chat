@@ -6,7 +6,12 @@ import { detectSnapZone, type OtherWindow, type SnapResult } from "@/lib/canvas/
 import { DraggableWindow } from "./draggable-window";
 import { DockStrip } from "./dock-strip";
 import { WindowHost } from "./window-host";
-import { DOCK_H, type WindowDescriptor, type WindowGeometry } from "./canvas-types";
+import {
+  DOCK_H,
+  type WindowDescriptor,
+  type WindowGeometry,
+  type WindowState,
+} from "./canvas-types";
 import { SnapOverlay } from "./snap-overlay";
 
 interface CanvasPageProps {
@@ -18,6 +23,8 @@ interface CanvasPageProps {
   onClose: (id: string) => void;
   onFocus: (id: string) => void;
   onSessionCreated: (id: string, claudeSessionId: string) => void;
+  /** Optional in-window state mutation (e.g. preview port edits). */
+  onStateChange?: (id: string, patch: Partial<WindowState>) => void;
 }
 
 /**
@@ -49,6 +56,7 @@ export function CanvasPage({
   onClose,
   onFocus,
   onSessionCreated,
+  onStateChange,
 }: CanvasPageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [bounds, setBounds] = useState({ width: 0, height: 0 });
@@ -174,7 +182,11 @@ export function CanvasPage({
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
           >
-            <WindowHost descriptor={win} onSessionCreated={onSessionCreated} />
+            <WindowHost
+              descriptor={win}
+              onSessionCreated={onSessionCreated}
+              onStateChange={onStateChange}
+            />
           </DraggableWindow>
         );
       })}
@@ -189,5 +201,6 @@ function titleFor(win: WindowDescriptor): string {
     if (win.state.sessionId.startsWith("new-")) return "New chat";
     return `Chat · ${win.state.sessionId.slice(0, 8)}`;
   }
+  if (win.state.kind === "preview") return `Preview · :${win.state.port}`;
   return win.id;
 }

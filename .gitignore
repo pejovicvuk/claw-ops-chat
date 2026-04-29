@@ -60,3 +60,4 @@ src/components/monitoring/**/*.js
 # Claude Code local settings (not shared)
 .claude/settings.local.json
 .claude/agent-memory-local/
+.claude/scheduled_tasks.lock

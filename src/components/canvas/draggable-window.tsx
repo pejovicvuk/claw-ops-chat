@@ -5,6 +5,8 @@ import { FiMaximize2, FiMinimize2, FiMinus, FiX } from "react-icons/fi";
 import { clampRectToViewport, type Rect } from "@/lib/clamp-to-viewport";
 import { MIN_H, MIN_W, type WindowGeometry } from "./canvas-types";
 
+type ResizeEdge = "se" | "e" | "s";
+
 interface DraggableWindowProps {
   title: string;
   /** Geometry source-of-truth from the canvas state. */
@@ -17,6 +19,19 @@ interface DraggableWindowProps {
   onChange: (geometry: WindowGeometry, prev?: WindowGeometry) => void;
   onClose: () => void;
   onFocus: () => void;
+  /**
+   * Drag-tracking hooks consumed by the canvas page to compute snap
+   * previews. Optional — when absent the window still drags freely, just
+   * without snap suggestions.
+   */
+  onDragStart?: () => void;
+  onDragMove?: (clientX: number, clientY: number) => void;
+  /**
+   * Returns the snap target the page wants to apply on release, or null
+   * to commit the pointer-derived geometry as usual. Called once on
+   * pointer-up; the window writes the result through `onChange`.
+   */
+  onDragEnd?: () => WindowGeometry | null;
   children: React.ReactNode;
 }
 
@@ -39,12 +54,16 @@ export function DraggableWindow({
   onChange,
   onClose,
   onFocus,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
   children,
 }: DraggableWindowProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStateRef = useRef<{
     pointerId: number;
     mode: "drag" | "resize";
+    edge?: ResizeEdge;
     startPointer: { x: number; y: number };
     startRect: Rect;
     pending: Rect | null;
@@ -86,15 +105,19 @@ export function DraggableWindow({
       const dy = e.clientY - ds.startPointer.y;
       if (ds.mode === "drag") {
         queueRect({ ...ds.startRect, x: ds.startRect.x + dx, y: ds.startRect.y + dy });
+        onDragMove?.(e.clientX, e.clientY);
       } else {
+        // Resize: which axes the handle touches
+        const allowW = ds.edge === "se" || ds.edge === "e";
+        const allowH = ds.edge === "se" || ds.edge === "s";
         queueRect({
           ...ds.startRect,
-          w: Math.max(MIN_W, ds.startRect.w + dx),
-          h: Math.max(MIN_H, ds.startRect.h + dy),
+          w: allowW ? Math.max(MIN_W, ds.startRect.w + dx) : ds.startRect.w,
+          h: allowH ? Math.max(MIN_H, ds.startRect.h + dy) : ds.startRect.h,
         });
       }
     },
-    [queueRect],
+    [onDragMove, queueRect],
   );
 
   const onPointerUp = useCallback(
@@ -111,13 +134,23 @@ export function DraggableWindow({
       } catch {
         /* releasePointerCapture can throw if element was unmounted */
       }
+      const wasDrag = ds.mode === "drag";
       dragStateRef.current = null;
+      if (wasDrag) {
+        const snap = onDragEnd?.() ?? null;
+        if (snap) {
+          // Apply the snap target instead of (or on top of) the
+          // pointer-derived geometry. Clear maximized/minimized so the
+          // window can be dragged out again to break the snap.
+          onChange({ ...geometry, ...snap, maximized: false, minimized: false });
+        }
+      }
     },
-    [flush],
+    [flush, geometry, onChange, onDragEnd],
   );
 
   const beginDrag = useCallback(
-    (e: React.PointerEvent, mode: "drag" | "resize") => {
+    (e: React.PointerEvent, mode: "drag" | "resize", edge?: ResizeEdge) => {
       if (e.button !== 0) return;
       if (isMaximized || isMinimized) return;
       onFocus();
@@ -130,13 +163,28 @@ export function DraggableWindow({
       dragStateRef.current = {
         pointerId: e.pointerId,
         mode,
+        edge,
         startPointer: { x: e.clientX, y: e.clientY },
         startRect: { x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h },
         pending: null,
         rafHandle: null,
       };
+      if (mode === "drag") {
+        onDragStart?.();
+        onDragMove?.(e.clientX, e.clientY);
+      }
     },
-    [geometry.h, geometry.w, geometry.x, geometry.y, isMaximized, isMinimized, onFocus],
+    [
+      geometry.h,
+      geometry.w,
+      geometry.x,
+      geometry.y,
+      isMaximized,
+      isMinimized,
+      onDragMove,
+      onDragStart,
+      onFocus,
+    ],
   );
 
   const handleMaximize = useCallback(() => {
@@ -214,23 +262,103 @@ export function DraggableWindow({
           </ChromeButton>
         </div>
       </header>
-      <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
+      {/*
+        BUG FIX: this wrapper was previously plain block-level, which
+        meant ChatView's outer FileDropzone (`flex flex-1`) couldn't
+        grow — its parent wasn't a flex container. Adding `flex
+        flex-col` here gives FileDropzone something to grow against,
+        so the chat now fills the available height instead of
+        squashing at the top.
+      */}
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
       {!isMaximized && (
-        <span
-          onPointerDown={(e) => beginDrag(e, "resize")}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerCancel={onPointerUp}
-          className="absolute bottom-0 right-0 h-4 w-4 cursor-nwse-resize"
-          style={{
-            background:
-              "linear-gradient(135deg, transparent 50%, var(--canvas-muted) 50%, var(--canvas-muted) 60%, transparent 60%, transparent 70%, var(--canvas-muted) 70%, var(--canvas-muted) 80%, transparent 80%)",
-            opacity: 0.5,
-          }}
-          aria-label="Resize"
-        />
+        <>
+          <ResizeHandle
+            edge="e"
+            onPointerDown={(e) => beginDrag(e, "resize", "e")}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+          />
+          <ResizeHandle
+            edge="s"
+            onPointerDown={(e) => beginDrag(e, "resize", "s")}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+          />
+          <ResizeHandle
+            edge="se"
+            onPointerDown={(e) => beginDrag(e, "resize", "se")}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+          />
+        </>
       )}
     </div>
+  );
+}
+
+interface ResizeHandleProps {
+  edge: ResizeEdge;
+  onPointerDown: (e: React.PointerEvent) => void;
+  onPointerMove: (e: React.PointerEvent) => void;
+  onPointerUp: (e: React.PointerEvent) => void;
+}
+
+/**
+ * Per-edge resize handle. Sized generously enough to grab without
+ * pixel-hunting:
+ *
+ *   se → 20×20 corner with a visible diagonal grip
+ *   e  → 8 px wide × full height (between header and corner)
+ *   s  → full width × 8 px tall (between left and corner)
+ *
+ * The corner sits ON TOP of the edges (z-stacked via render order)
+ * so pointer-down at the very corner unambiguously hits the SE handle.
+ */
+function ResizeHandle({ edge, onPointerDown, onPointerMove, onPointerUp }: ResizeHandleProps) {
+  if (edge === "se") {
+    return (
+      <span
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        className="absolute bottom-0 right-0 h-5 w-5 cursor-nwse-resize"
+        style={{
+          background:
+            "linear-gradient(135deg, transparent 50%, var(--canvas-muted) 50%, var(--canvas-muted) 60%, transparent 60%, transparent 70%, var(--canvas-muted) 70%, var(--canvas-muted) 80%, transparent 80%)",
+          opacity: 0.5,
+        }}
+        aria-label="Resize from corner"
+      />
+    );
+  }
+  if (edge === "e") {
+    return (
+      <span
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+        // Header is h-9 = 36 px; SE corner is h-5 = 20 px. Sit between them.
+        className="absolute right-0 top-9 w-2 cursor-ew-resize"
+        style={{ bottom: 20 }}
+        aria-label="Resize width"
+      />
+    );
+  }
+  // edge === "s"
+  return (
+    <span
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      className="absolute bottom-0 left-0 h-2 cursor-ns-resize"
+      // SE corner is w-5 = 20 px; leave room for it.
+      style={{ right: 20 }}
+      aria-label="Resize height"
+    />
   );
 }
 

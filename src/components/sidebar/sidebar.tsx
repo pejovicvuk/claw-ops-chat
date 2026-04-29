@@ -212,7 +212,7 @@ export function Sidebar({
               }}
               placeholder="Search chats..."
               aria-label="Search conversations"
-              className="w-full rounded-md border border-canvas-border bg-canvas-surface-hover/40 py-1.5 pl-7 pr-7 text-[12px] text-canvas-fg placeholder:text-canvas-muted focus:border-accent/40 focus:bg-canvas-surface-hover focus:outline-none [&::-webkit-search-cancel-button]:appearance-none"
+              className="w-full rounded-full border border-canvas-border bg-canvas-surface-hover/40 py-1.5 pl-8 pr-8 text-[12px] text-canvas-fg placeholder:text-canvas-muted focus:border-accent/40 focus:bg-canvas-surface-hover focus:outline-none [&::-webkit-search-cancel-button]:appearance-none"
             />
             {chatSearchQuery && (
               <button

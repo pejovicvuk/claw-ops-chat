@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { EDGE_BAND, SNAP_INSET, TOP_BAND, detectSnapZone, type CanvasBounds } from "./snap-zones";
+import {
+  EDGE_BAND,
+  SNAP_INSET,
+  TOP_BAND,
+  detectSnapZone,
+  type CanvasBounds,
+  type OtherWindow,
+} from "./snap-zones";
 
 const BOUNDS: CanvasBounds = { width: 1000, height: 800 };
 
@@ -120,5 +127,114 @@ describe("detectSnapZone", () => {
     if (!r) throw new Error("expected snap");
     expect(r.geometry.x + r.geometry.w).toBe(BOUNDS.width - SNAP_INSET);
     expect(r.geometry.y + r.geometry.h).toBe(BOUNDS.height - SNAP_INSET);
+  });
+});
+
+describe("detectSnapZone — gap zones", () => {
+  it("vertical gap between two stacked windows: pointer in gap → 'gap'", () => {
+    // Window A on top half, Window B on bottom — leaving a 100px gap at y=300..400.
+    const a: OtherWindow = { x: 100, y: 100, w: 800, h: 200 };
+    const b: OtherWindow = { x: 100, y: 400, w: 800, h: 300 };
+    const r = detectSnapZone({ x: 500, y: 350 }, BOUNDS, { otherWindows: [a, b] });
+    expect(r?.kind).toBe("gap");
+    // Geometry should fill the gap (with inset)
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.y).toBeGreaterThanOrEqual(300);
+    expect(r.geometry.y + r.geometry.h).toBeLessThanOrEqual(400);
+  });
+
+  it("horizontal gap between two side-by-side windows: pointer in gap → 'gap'", () => {
+    const a: OtherWindow = { x: 100, y: 200, w: 200, h: 400 };
+    const b: OtherWindow = { x: 400, y: 200, w: 300, h: 400 };
+    const r = detectSnapZone({ x: 350, y: 400 }, BOUNDS, { otherWindows: [a, b] });
+    expect(r?.kind).toBe("gap");
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.x).toBeGreaterThanOrEqual(300);
+    expect(r.geometry.x + r.geometry.w).toBeLessThanOrEqual(400);
+  });
+
+  it("non-overlapping pair (no shared axis) produces no gap", () => {
+    // A is top-left, B is bottom-right — no clean horizontal or vertical gap.
+    const a: OtherWindow = { x: 0, y: 0, w: 200, h: 200 };
+    const b: OtherWindow = { x: 600, y: 500, w: 200, h: 200 };
+    const r = detectSnapZone({ x: 400, y: 350 }, BOUNDS, { otherWindows: [a, b] });
+    expect(r).toBeNull();
+  });
+
+  it("trivial gaps (< MIN_GAP) produce no zone", () => {
+    // 20px-tall vertical gap — too small to fit a window.
+    const a: OtherWindow = { x: 100, y: 100, w: 800, h: 200 };
+    const b: OtherWindow = { x: 100, y: 320, w: 800, h: 300 };
+    const r = detectSnapZone({ x: 500, y: 310 }, BOUNDS, { otherWindows: [a, b] });
+    expect(r).toBeNull();
+  });
+});
+
+describe("detectSnapZone — split zones", () => {
+  // Window centered, far from the canvas edges so we don't trip the edge family.
+  const win: OtherWindow = { x: 200, y: 200, w: 600, h: 400 };
+
+  it("right third × middle third → split-r (right half of window)", () => {
+    const r = detectSnapZone({ x: 700, y: 400 }, BOUNDS, { otherWindows: [win] });
+    expect(r?.kind).toBe("split-r");
+    // Right half starts at win.x + halfW (300)
+    expect(r?.geometry.x).toBeGreaterThanOrEqual(win.x + win.w / 2 - 1);
+  });
+
+  it("top-left third × top third → split-tl (top-left quarter of window)", () => {
+    const r = detectSnapZone({ x: 250, y: 250 }, BOUNDS, { otherWindows: [win] });
+    expect(r?.kind).toBe("split-tl");
+  });
+
+  it("top-right third × top third → split-tr", () => {
+    const r = detectSnapZone({ x: 750, y: 250 }, BOUNDS, { otherWindows: [win] });
+    expect(r?.kind).toBe("split-tr");
+  });
+
+  it("bottom-left third × bottom third → split-bl", () => {
+    const r = detectSnapZone({ x: 250, y: 550 }, BOUNDS, { otherWindows: [win] });
+    expect(r?.kind).toBe("split-bl");
+  });
+
+  it("dead centre of a window → no zone", () => {
+    const r = detectSnapZone({ x: 500, y: 400 }, BOUNDS, { otherWindows: [win] });
+    expect(r).toBeNull();
+  });
+
+  it("pointer outside any window and outside edge bands → no zone", () => {
+    // Pointer at (200, 200) — well clear of canvas edges (32 px band) and
+    // outside the lone window at (500, 500). Nothing should match.
+    const r = detectSnapZone({ x: 200, y: 200 }, BOUNDS, {
+      otherWindows: [{ x: 500, y: 500, w: 100, h: 100 }],
+    });
+    expect(r).toBeNull();
+  });
+});
+
+describe("detectSnapZone — priority ordering", () => {
+  it("canvas-edge wins over split when pointer is in the edge band AND inside a window", () => {
+    // Window covers the entire left-edge band — pointer at (10, 400) is in
+    // both the canvas-left band AND inside the window. Edge family wins.
+    const win: OtherWindow = { x: 0, y: 100, w: 400, h: 600 };
+    const r = detectSnapZone({ x: 10, y: 400 }, BOUNDS, { otherWindows: [win] });
+    expect(r?.kind).toBe("left");
+  });
+
+  it("gap wins over split when both could match (pointer in a gap that's also inside a third window's bounds)", () => {
+    // Two stacked windows leaving a vertical gap at y=300..400.
+    const a: OtherWindow = { x: 100, y: 100, w: 800, h: 200 };
+    const b: OtherWindow = { x: 100, y: 400, w: 800, h: 300 };
+    // A third window happens to cover the same area (e.g. an overlapping
+    // floating window) — shouldn't matter, gap detection runs over the
+    // same `others` list and finds the (a,b) gap first.
+    const c: OtherWindow = { x: 400, y: 250, w: 200, h: 200 };
+    const r = detectSnapZone({ x: 500, y: 350 }, BOUNDS, { otherWindows: [a, b, c] });
+    expect(r?.kind).toBe("gap");
+  });
+
+  it("split fires when the pointer is fully inside a window with no canvas-edge or gap match", () => {
+    const win: OtherWindow = { x: 300, y: 300, w: 400, h: 300 };
+    const r = detectSnapZone({ x: 350, y: 400 }, BOUNDS, { otherWindows: [win] });
+    expect(r?.kind).toBe("split-l");
   });
 });

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Z_INDEX } from "@/lib/z-index";
-import { detectSnapZone, type SnapResult } from "@/lib/canvas/snap-zones";
+import { detectSnapZone, type OtherWindow, type SnapResult } from "@/lib/canvas/snap-zones";
 import { DraggableWindow } from "./draggable-window";
 import { DockStrip } from "./dock-strip";
 import { WindowHost } from "./window-host";
@@ -21,6 +21,14 @@ interface CanvasPageProps {
 }
 
 /**
+ * Constant z-index for the snap-preview overlay. Has to sit above any
+ * dragged window — and the dragged window's z is `FLOATING + N` where
+ * `N <= PAGE_CAP`. Picking a fixed +1000 sidesteps the chance of the
+ * overlay ending up behind a dragged window if window counts ever grow.
+ */
+const SNAP_OVERLAY_Z = Z_INDEX.FLOATING + 1000;
+
+/**
  * Renders one page of the canvas: the visible windows (absolute-
  * positioned, z-stacked by `focusOrder`) plus the dock strip for
  * minimized windows. Measures its own bounds via ResizeObserver so
@@ -28,10 +36,11 @@ interface CanvasPageProps {
  *
  * Owns the snap-preview overlay: while a window is being dragged the
  * page tracks the pointer in canvas-relative coords, runs
- * `detectSnapZone`, and renders a translucent rectangle showing where
- * the window will land if the user releases now. On release it hands
- * the snap geometry back to the dragging window which writes it
- * through `onChange`.
+ * `detectSnapZone` (with the *other* visible windows passed through
+ * for gap / split detection), and renders a translucent rectangle
+ * showing where the window will land if released. On release it hands
+ * the snap geometry back to the dragging window via the existing
+ * `onDragEnd` return-value protocol.
  */
 export function CanvasPage({
   windows,
@@ -44,17 +53,11 @@ export function CanvasPage({
   const containerRef = useRef<HTMLDivElement>(null);
   const [bounds, setBounds] = useState({ width: 0, height: 0 });
 
-  /**
-   * Snap state lives in TWO places:
-   *   - `snapState`: triggers re-renders of the overlay
-   *   - `snapRef`: read synchronously by the dragging window's
-   *     `onDragEnd` callback (state updates are async)
-   * They're kept in sync — set both whenever the snap suggestion
-   * changes.
-   */
   const [snapState, setSnapState] = useState<SnapResult | null>(null);
   const snapRef = useRef<SnapResult | null>(null);
   const canvasRectRef = useRef<DOMRect | null>(null);
+  /** Id of the window currently being dragged — excluded from snap calculations. */
+  const draggingIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     const el = containerRef.current;
@@ -69,12 +72,32 @@ export function CanvasPage({
 
   const minimized = windows.filter((w) => w.geometry.minimized === true);
   const dockHeight = minimized.length > 0 ? DOCK_H : 0;
-  // Memoized so it's a stable dependency for `handleDragMove`'s callback —
-  // otherwise every render rebuilds the function and the snap detection
-  // loses the reference identity it needs for React's hook dep checks.
   const usableBounds = useMemo(
     () => ({ width: bounds.width, height: Math.max(0, bounds.height - dockHeight) }),
     [bounds.width, bounds.height, dockHeight],
+  );
+
+  /**
+   * Snapshot of the OTHER visible windows on this page in front-to-back
+   * focus order — what `detectSnapZone` reads for gap + split detection.
+   * Excludes minimized windows and the dragged one.
+   */
+  const otherWindowsForDrag = useCallback(
+    (draggingId: string | null): OtherWindow[] => {
+      const visible = windows.filter(
+        (w) => !w.geometry.minimized && (draggingId === null || w.id !== draggingId),
+      );
+      // Sort by focus z-order (frontmost first) so the split detector
+      // picks the topmost window under the pointer.
+      visible.sort((a, b) => focusOrder.indexOf(a.id) - focusOrder.indexOf(b.id));
+      return visible.map((w) => ({
+        x: w.geometry.x,
+        y: w.geometry.y,
+        w: w.geometry.w,
+        h: w.geometry.h,
+      }));
+    },
+    [focusOrder, windows],
   );
 
   const handleRestore = useCallback(
@@ -87,10 +110,9 @@ export function CanvasPage({
     [onChange, onFocus, windows],
   );
 
-  const handleDragStart = useCallback(() => {
-    // Cache the canvas's bounding rect once per drag so subsequent
-    // pointer-move events don't pay a layout cost.
+  const handleDragStart = useCallback((id: string) => {
     canvasRectRef.current = containerRef.current?.getBoundingClientRect() ?? null;
+    draggingIdRef.current = id;
   }, []);
 
   const handleDragMove = useCallback(
@@ -98,10 +120,10 @@ export function CanvasPage({
       const rect = canvasRectRef.current;
       if (!rect) return;
       const pointer = { x: clientX - rect.left, y: clientY - rect.top };
-      const result = detectSnapZone(pointer, usableBounds);
-      // Only re-render when the snap kind actually changes — otherwise
-      // every pointer-move tick would invalidate the overlay's CSS
-      // transition and we'd lose the smooth slide.
+      const others = otherWindowsForDrag(draggingIdRef.current);
+      const result = detectSnapZone(pointer, usableBounds, { otherWindows: others });
+      // Only re-render when the snap kind actually changes — preserves
+      // the overlay's CSS transition between zones.
       if (snapRef.current?.kind !== result?.kind) {
         snapRef.current = result;
         setSnapState(result);
@@ -109,13 +131,14 @@ export function CanvasPage({
         snapRef.current = result;
       }
     },
-    [usableBounds],
+    [otherWindowsForDrag, usableBounds],
   );
 
   const handleDragEnd = useCallback((): WindowGeometry | null => {
     const target = snapRef.current?.geometry ?? null;
     snapRef.current = null;
     canvasRectRef.current = null;
+    draggingIdRef.current = null;
     if (snapState !== null) setSnapState(null);
     return target;
   }, [snapState]);
@@ -147,7 +170,7 @@ export function CanvasPage({
             onChange={(geom, prev) => onChange(win.id, geom, prev)}
             onClose={() => onClose(win.id)}
             onFocus={() => onFocus(win.id)}
-            onDragStart={handleDragStart}
+            onDragStart={() => handleDragStart(win.id)}
             onDragMove={handleDragMove}
             onDragEnd={handleDragEnd}
           >
@@ -155,7 +178,7 @@ export function CanvasPage({
           </DraggableWindow>
         );
       })}
-      <SnapOverlay snap={snapState} zIndex={Z_INDEX.FLOATING + windows.length + 1} />
+      <SnapOverlay snap={snapState} zIndex={SNAP_OVERLAY_Z} />
       <DockStrip windows={minimized} onRestore={handleRestore} />
     </div>
   );

@@ -14,8 +14,9 @@ import { ChatView } from "./chat-view";
 import { MobileFileSheet } from "./mobile-file-sheet";
 import { FileBrowser, type FileBrowserHandle } from "./file-browser";
 import { ErrorBoundary } from "@/components/error-boundary";
-import { Sidebar } from "@/components/reports/sidebar";
+import { Sidebar } from "@/components/sidebar/sidebar";
 import { ReportsMainPane } from "@/components/reports/reports-main-pane";
+import { ProjectsMainPane } from "@/components/projects/projects-main-pane";
 
 // Lazy: CodeMirror core (~180kb gz) is pulled into this chunk. Only loads
 // when the user opens a file. ssr:false because the editor is pointer-driven.
@@ -292,7 +293,9 @@ export function ChatLayout({
           className="flex min-h-0 flex-1 flex-col"
           style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 0px)" }}
         >
-          {params.get("view") === "reports" ? (
+          {params.get("view") === "projects" ? (
+            <ProjectsMainPane onOpenSessions={() => setSidebarOpen(true)} />
+          ) : params.get("view") === "reports" ? (
             <ReportsMainPane onOpenSessions={() => setSidebarOpen(true)} />
           ) : (
             <ChatView
@@ -424,7 +427,9 @@ export function ChatLayout({
             with its own inline `height:100%;overflow:hidden` but the reports
             tree relied on the parent being bounded. */}
         <main className="flex min-h-0 min-w-0 flex-col overflow-hidden">
-          {params.get("view") === "reports" ? (
+          {params.get("view") === "projects" ? (
+            <ProjectsMainPane />
+          ) : params.get("view") === "reports" ? (
             <ReportsMainPane />
           ) : (
             <ChatView

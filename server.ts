@@ -39,6 +39,7 @@ import { decideCronTool, type ToolPolicy } from "./src/lib/reports/tool-policy";
 import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
+import { ensureProjectsTree } from "./src/lib/projects/paths";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
 import { navUrls } from "./src/lib/nav-urls";
@@ -2354,6 +2355,16 @@ setSessionManager(sessionManager);
     await scheduler.bootstrap();
   } catch (err) {
     console.warn(`!! Could not start reports scheduler: ${(err as Error).message}`);
+  }
+})();
+
+// Ensure the projects root exists so the Projects API doesn't 500 on a
+// fresh install. Sibling IIFE for the same isolation reason as above.
+(async () => {
+  try {
+    await ensureProjectsTree();
+  } catch (err) {
+    console.warn(`!! Could not init projects tree: ${(err as Error).message}`);
   }
 })();
 

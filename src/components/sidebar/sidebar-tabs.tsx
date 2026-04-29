@@ -1,6 +1,6 @@
 "use client";
 
-export type SidebarMode = "chats" | "reports";
+export type SidebarMode = "chats" | "reports" | "projects";
 
 interface SidebarTabsProps {
   mode: SidebarMode;
@@ -9,10 +9,10 @@ interface SidebarTabsProps {
 }
 
 /**
- * Segmented Chats/Reports toggle that replaces the static "Chats" label
- * at the top of the sidebar. Uses inline styles for the active-segment
- * background so the Tailwind JIT can't purge dynamically-built classes —
- * same defensive pattern SessionList uses for its status indicators.
+ * Segmented Chats / Reports / Projects toggle at the top of the sidebar.
+ * Uses inline styles for the active-segment background so the Tailwind
+ * JIT can't purge dynamically-built classes — same defensive pattern
+ * SessionList uses for its status indicators.
  */
 export function SidebarTabs({ mode, onChange, unreadReports }: SidebarTabsProps) {
   return (
@@ -33,6 +33,9 @@ export function SidebarTabs({ mode, onChange, unreadReports }: SidebarTabsProps)
             </span>
           )}
         </span>
+      </SegmentButton>
+      <SegmentButton active={mode === "projects"} onClick={() => onChange("projects")}>
+        Projects
       </SegmentButton>
     </div>
   );

@@ -626,7 +626,21 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   // success which atomically swaps in the new chat's messages with no
   // intermediate empty state, so the user perceives a clean cross-fade
   // instead of a flash to blank.
-  useEffect(() => {
+  //
+  // The reset runs DURING RENDER (React's "store info from previous
+  // renders" pattern) rather than in an effect. Why: chat-view's
+  // onSessionCreated notification effect inspects (claudeSessionId,
+  // sessionId) — if the reset waits until after commit, that effect
+  // fires once with the *previous* session's claudeSessionId paired
+  // with the new sessionId, mistakes it for "the SDK just promoted a
+  // fresh chat", and fires `onSessionCreated(<prev id>)` — which calls
+  // `setParam("chat", <prev id>)` and snaps the URL back to the chat
+  // the user just left. By resetting synchronously, the notify effect
+  // commits with claudeSessionId === null on every session swap and
+  // the spurious notification can't fire.
+  const [prevSessionIdForReset, setPrevSessionIdForReset] = useState(sessionId);
+  if (prevSessionIdForReset !== sessionId) {
+    setPrevSessionIdForReset(sessionId);
     setActiveTool(null);
     setClaudeSessionId(null);
     setContextUsage(null);
@@ -634,7 +648,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     setSetupRequired(false);
     currentAssistantRef.current = null;
     currentThinkingRef.current = null;
-  }, [sessionId]);
+  }
 
   /* ── Connect WebSocket ── */
   const connect = useCallback(() => {

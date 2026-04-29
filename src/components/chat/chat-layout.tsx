@@ -117,8 +117,11 @@ export function ChatLayout({
 
   const fileBrowserRef = useRef<FileBrowserHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // URL-driven: ?path=<folder-path> (defaults to "~")
-  const currentBrowserPath = params.get("path") || "~";
+  // URL-driven file browser scope:
+  //   ?root=<absolute-path>   — locks the browser to a folder (item canvas)
+  //   ?path=<folder-path>     — current directory (default "~", or root when locked)
+  const browserRoot = params.get("root") || null;
+  const currentBrowserPath = params.get("path") || browserRoot || "~";
   const setCurrentBrowserPath = useCallback(
     (path: string) => setParam("path", path === "~" ? null : path),
     [setParam],
@@ -360,6 +363,7 @@ export function ChatLayout({
           onCopyPath={handleCopyPath}
           onFileOpen={handleFileOpen}
           selectedSessionId={selectedSessionId}
+          rootPath={browserRoot}
         />
 
         {fileEditors}
@@ -433,7 +437,6 @@ export function ChatLayout({
             <ReportsMainPane />
           ) : (
             <ChatView
-              key={sessionId}
               sessionId={sessionId}
               resumeSessionId={selectedSessionId}
               onSessionCreated={onSessionCreated}
@@ -485,6 +488,7 @@ export function ChatLayout({
                     hideRunOption
                     onCopyPath={handleCopyPath}
                     selectedSessionId={selectedSessionId}
+                    rootPath={browserRoot}
                   />
                 </ErrorBoundary>
               </div>

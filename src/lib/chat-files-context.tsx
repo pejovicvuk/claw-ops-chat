@@ -6,7 +6,6 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -19,9 +18,12 @@ import {
  * paths the chat has already touched wins.
  *
  * Why per-chat (not global): two open chats in different sessions
- * shouldn't pollute each other's disambiguation. The provider is keyed
- * by `sessionId` in `chat-view.tsx`, so switching chats remounts the
- * provider and resets the set automatically.
+ * shouldn't pollute each other's disambiguation. The provider takes
+ * the current `sessionId` as a prop and resets its set when it
+ * changes — earlier we leaned on `key={sessionId}` for this in
+ * `chat-view.tsx`, but the resulting unmount-remount of every message
+ * caused a visible flash on session switch. The internal-effect reset
+ * is invisible because surrounding DOM stays mounted.
  *
  * Anchored paths (`/root/foo.md`) and resolved candidates both register
  * here on mount — see `useReportChatFile`. Deduplication is handled by
@@ -38,25 +40,44 @@ interface ChatFilesContextValue {
 
 const ChatFilesContext = createContext<ChatFilesContextValue | null>(null);
 
-export function ChatFilesProvider({ children }: { children: ReactNode }) {
-  // Set lives in a ref to avoid one re-render per `add` — we only emit
-  // to subscribers when the membership actually changes. State holds the
-  // sorted snapshot that consumers read; we reuse the previous reference
-  // when nothing was added so `useMemo([paths])` downstream stays cold.
-  const setRef = useRef<Set<string>>(new Set<string>());
+export function ChatFilesProvider({
+  children,
+  sessionId,
+}: {
+  children: ReactNode;
+  /** Reset trigger — clears the set when this changes (chat switch). */
+  sessionId?: string | null;
+}) {
+  // The ref+state pair: the ref backs the live Set so reportPath can
+  // dedupe synchronously without queuing a re-render per add; the state
+  // holds the sorted snapshot consumers read.
+  // Hold the live Set in state too so the React-recommended "reset state
+  // when prop changes" pattern works without an effect (which would trip
+  // the react-hooks/set-state-in-effect rule). On sessionId change we
+  // detect it during render and re-init both pieces synchronously.
+  const [setHolder, setSetHolder] = useState<{ set: Set<string>; sessionId: string | null }>(
+    () => ({ set: new Set<string>(), sessionId: sessionId ?? null }),
+  );
   const [paths, setPaths] = useState<readonly string[]>([]);
+  const currentId = sessionId ?? null;
+  if (setHolder.sessionId !== currentId) {
+    setSetHolder({ set: new Set<string>(), sessionId: currentId });
+    setPaths(EMPTY_PATHS_INTERNAL);
+  }
 
   const reportPath = useCallback((path: string) => {
     if (!path) return;
-    if (setRef.current.has(path)) return;
-    setRef.current.add(path);
-    setPaths(Array.from(setRef.current).sort());
-  }, []);
+    if (setHolder.set.has(path)) return;
+    setHolder.set.add(path);
+    setPaths(Array.from(setHolder.set).sort());
+  }, [setHolder]);
 
   const value = useMemo<ChatFilesContextValue>(() => ({ paths, reportPath }), [paths, reportPath]);
 
   return <ChatFilesContext.Provider value={value}>{children}</ChatFilesContext.Provider>;
 }
+
+const EMPTY_PATHS_INTERNAL: readonly string[] = [];
 
 const EMPTY_PATHS: readonly string[] = [];
 

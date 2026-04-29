@@ -17,6 +17,8 @@ interface MobileFileSheetProps {
   onPathChange?: (path: string) => void;
   /** Forwarded to FileBrowser so the branch list can highlight the active chat. */
   selectedSessionId?: string | null;
+  /** Lock the sheet to a folder (item canvas scope). */
+  rootPath?: string | null;
 }
 
 export function MobileFileSheet({
@@ -27,6 +29,7 @@ export function MobileFileSheet({
   initialPath,
   onPathChange,
   selectedSessionId,
+  rootPath,
 }: MobileFileSheetProps) {
   useEffect(() => {
     if (!open) return;
@@ -70,6 +73,7 @@ export function MobileFileSheet({
             onFileClick={onCopyPath}
             onFileOpen={onFileOpen}
             selectedSessionId={selectedSessionId}
+            rootPath={rootPath}
           />
         </div>
       </div>

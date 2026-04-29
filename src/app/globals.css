@@ -511,6 +511,11 @@ html:not(.dark) {
 
 .animate-msg-in {
   animation: messageFadeIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  /* Poor-man's virtualization: browser skips rendering off-screen bubbles.
+     `auto 160px` lets the browser remember last layout size so scroll-height
+     stays accurate. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 160px;
 }
 
 /* ── Session-row active border glow ──

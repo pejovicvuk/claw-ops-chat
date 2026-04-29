@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAccessToken } from "@/lib/apiClient";
+import { authFetch } from "@/lib/auth";
 import type { ChatMessage, ClaudeStatus, ActiveToolInfo } from "@/lib/types";
+
+const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
 /** Max reconnection delay in ms. */
 const MAX_RECONNECT_DELAY = 30_000;
@@ -75,13 +78,6 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   /** Ref to break circular dependency between connect ↔ scheduleReconnect. */
   const scheduleReconnectRef = useRef<() => void>(() => {});
   /**
-   * Messages typed by the user before the WebSocket was open. Flushed
-   * when the server's "ready" event arrives. Fixes the "first message
-   * on a new chat disappears" bug — previously sendMessage returned
-   * silently if ws.readyState wasn't OPEN.
-   */
-  const pendingSendsRef = useRef<string[]>([]);
-  /**
    * Permission IDs the user has already approved/denied in this tab.
    * Survives refreshes via sessionStorage keyed by sessionId. Belt-and-
    * suspenders against stale permission_request replay when the server
@@ -130,21 +126,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "ready") {
         setStatus("idle");
-        // Flush any messages the user typed before the WS finished
-        // connecting. Fire-and-forget — the server queues them on its
-        // side too if this session was already processing a turn.
-        const queued = pendingSendsRef.current;
-        if (queued.length > 0) {
-          pendingSendsRef.current = [];
-          for (const text of queued) {
-            if (wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: "message", text }));
-              // Only the first message kicks us into "thinking"; the
-              // server will serialise the rest via its messageQueue.
-              setStatus("thinking");
-            }
-          }
-        }
+        // No pending-send buffer to flush — every send goes through
+        // /api/chat/send (HTTP POST + keepalive) so the message is
+        // delivered server-side before any WS handshake completes.
+        // The WS only carries the streaming response back to the client.
         return;
       }
 
@@ -328,11 +313,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "permission_request") {
         const reqId = evt.id as string;
-        // Transient in-memory guard — the server normally purges resolved
-        // prompts from eventHistory before replay, but a millisecond-level
-        // race during a flaky reconnect can still surface a prompt we
-        // already answered. The set is per-connection and per-session,
-        // not persisted; cross-device truth lives in `pending_approvals`.
+        // If the user already answered this prompt in a previous tab /
+        // page-load, the server's filter (piece 4 in plan) should have
+        // stripped it from eventHistory — but cover the container-
+        // restart edge case with a local set too.
         if (resolvedPermissionsRef.current.has(reqId)) {
           return;
         }
@@ -365,6 +349,8 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         const resolvedId = evt.id as string;
         if (resolvedId) {
           resolvedPermissionsRef.current.add(resolvedId);
+          // eslint-disable-next-line react-hooks/immutability -- persistResolved is a useCallback declared later in the file; the closure only runs at event time (long after render), so the TDZ warning is a false positive here.
+          persistResolved();
           setMessages((prev) =>
             prev.map((m) => {
               if (m.permissionId === resolvedId) return { ...m, permissionResolved: true };
@@ -407,119 +393,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         return;
       }
 
-      if (type === "pending_approvals") {
-        // Authoritative snapshot of currently-pending approval / plan / ask
-        // prompts from the server. Sent on every connect. Treated as a
-        // setter, not an appender:
-        //   • Anything we have locally that the server says is no longer
-        //     pending → mark resolved. Covers "another device answered
-        //     while we were disconnected."
-        //   • Anything the server says is pending that we don't have →
-        //     add it. Covers fresh-connect / second-device-mid-flow / the
-        //     race window where a live broadcast was missed.
-        const approvals = Array.isArray(evt.approvals)
-          ? (evt.approvals as Array<Record<string, unknown>>)
-          : [];
-        const incomingIds = new Set<string>();
-        for (const a of approvals) {
-          const aid = a.id;
-          if (typeof aid === "string") incomingIds.add(aid);
-        }
-
-        setMessages((prev) => {
-          let next = prev.map((m) => {
-            if (
-              m.type === "permission_request" &&
-              !m.permissionResolved &&
-              m.permissionId &&
-              !incomingIds.has(m.permissionId)
-            ) {
-              return { ...m, permissionResolved: true };
-            }
-            if (
-              m.type === "plan_proposal" &&
-              !m.planResolved &&
-              m.planId &&
-              !incomingIds.has(m.planId)
-            ) {
-              return { ...m, planResolved: true };
-            }
-            if (
-              m.type === "ask_question" &&
-              !m.askResolved &&
-              m.askId &&
-              !incomingIds.has(m.askId)
-            ) {
-              return { ...m, askResolved: true };
-            }
-            return m;
-          });
-
-          for (const a of approvals) {
-            const aid = a.id as string;
-            if (next.some((m) => m.permissionId === aid || m.planId === aid || m.askId === aid)) {
-              continue;
-            }
-            const aType = a.type as string;
-            if (aType === "permission_request") {
-              next = [
-                ...next,
-                {
-                  id: crypto.randomUUID(),
-                  role: "system" as const,
-                  type: "permission_request" as const,
-                  content: (a.description as string) || "",
-                  toolName: a.toolName as string,
-                  permissionId: aid,
-                  permissionInput: a.input as Record<string, unknown>,
-                  permissionResolved: false,
-                  timestamp: Date.now(),
-                },
-              ];
-            } else if (aType === "plan_proposal") {
-              next = [
-                ...next,
-                {
-                  id: crypto.randomUUID(),
-                  role: "system" as const,
-                  type: "plan_proposal" as const,
-                  content: "",
-                  planId: aid,
-                  planContent: (a.plan as string) || "",
-                  planResolved: false,
-                  timestamp: Date.now(),
-                },
-              ];
-            } else if (aType === "ask_question") {
-              next = [
-                ...next,
-                {
-                  id: crypto.randomUUID(),
-                  role: "system" as const,
-                  type: "ask_question" as const,
-                  content: "",
-                  askId: aid,
-                  askQuestions: a.questions as ChatMessage["askQuestions"],
-                  askResolved: false,
-                  timestamp: Date.now(),
-                },
-              ];
-            }
-          }
-          return next;
-        });
-
-        if (approvals.length > 0) {
-          const last = approvals[approvals.length - 1];
-          setStatus(last.type === "ask_question" ? "awaiting_input" : "awaiting_permission");
-        }
-        return;
-      }
-
       if (type === "plan_proposal") {
         const planId = evt.id as string;
         if (resolvedPermissionsRef.current.has(planId)) {
-          // Transient in-connection dedup against live + replay race.
+          // Already resolved in a previous tab / page load — skip replay.
           return;
         }
         currentAssistantRef.current = null;
@@ -667,15 +544,39 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     }
   }, []);
 
-  // Reset the in-memory resolved set when the active session changes —
-  // the set is purely a transient guard against the same prompt arriving
-  // twice within a single connection (e.g. live broadcast races the
-  // history replay milliseconds apart). The server's `pending_approvals`
-  // snapshot is the cross-tab / cross-device source of truth, so we
-  // intentionally do not persist this set anywhere.
+  /* ── Load/persist resolved-permission IDs per session ── */
+  const resolvedStorageKey = sessionId ? `claw-chat-resolved:v1:${sessionId}` : null;
+
+  const persistResolved = useCallback(() => {
+    if (!resolvedStorageKey) return;
+    try {
+      sessionStorage.setItem(
+        resolvedStorageKey,
+        JSON.stringify(Array.from(resolvedPermissionsRef.current)),
+      );
+    } catch {
+      /* storage full / private mode — degrade gracefully */
+    }
+  }, [resolvedStorageKey]);
+
+  // Hydrate resolved set when sessionId changes (new chat / load chat).
   useEffect(() => {
-    resolvedPermissionsRef.current = new Set();
-  }, [sessionId]);
+    if (!resolvedStorageKey) {
+      resolvedPermissionsRef.current = new Set();
+      return;
+    }
+    try {
+      const raw = sessionStorage.getItem(resolvedStorageKey);
+      if (raw) {
+        const arr = JSON.parse(raw) as string[];
+        resolvedPermissionsRef.current = new Set(Array.isArray(arr) ? arr : []);
+      } else {
+        resolvedPermissionsRef.current = new Set();
+      }
+    } catch {
+      resolvedPermissionsRef.current = new Set();
+    }
+  }, [resolvedStorageKey]);
 
   /* ── Per-session mode + elapsed-timer sync ── */
   // Remember the last sessionId we saw so we can detect the "null → real"
@@ -713,6 +614,41 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     // would cause this effect to rerun on every toolbar change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
+
+  /* ── Reset transient per-turn state when switching sessions ── */
+  // Previously the parent component remounted ChatView via `key={sessionId}`
+  // which reset everything for free — but caused a visible blank-out flash
+  // between unmount and the new history fetch. Now ChatView stays mounted
+  // and we explicitly null out the bits that are scoped to a single turn:
+  // the in-flight assistant message id, tool indicator, claudeSessionId,
+  // context usage, and auth/setup banners. `messages` is intentionally
+  // left alone — chat-view's history fetch calls `setInitialMessages` on
+  // success which atomically swaps in the new chat's messages with no
+  // intermediate empty state, so the user perceives a clean cross-fade
+  // instead of a flash to blank.
+  //
+  // The reset runs DURING RENDER (React's "store info from previous
+  // renders" pattern) rather than in an effect. Why: chat-view's
+  // onSessionCreated notification effect inspects (claudeSessionId,
+  // sessionId) — if the reset waits until after commit, that effect
+  // fires once with the *previous* session's claudeSessionId paired
+  // with the new sessionId, mistakes it for "the SDK just promoted a
+  // fresh chat", and fires `onSessionCreated(<prev id>)` — which calls
+  // `setParam("chat", <prev id>)` and snaps the URL back to the chat
+  // the user just left. By resetting synchronously, the notify effect
+  // commits with claudeSessionId === null on every session swap and
+  // the spurious notification can't fire.
+  const [prevSessionIdForReset, setPrevSessionIdForReset] = useState(sessionId);
+  if (prevSessionIdForReset !== sessionId) {
+    setPrevSessionIdForReset(sessionId);
+    setActiveTool(null);
+    setClaudeSessionId(null);
+    setContextUsage(null);
+    setAuthRequired(null);
+    setSetupRequired(false);
+    currentAssistantRef.current = null;
+    currentThinkingRef.current = null;
+  }
 
   /* ── Connect WebSocket ── */
   const connect = useCallback(() => {
@@ -797,7 +733,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       if (!trimmed) return;
       // Allow send while "connecting" — the most common case where
       // a user hits send on a brand-new chat before the WS has finished
-      // its handshake. The "ready" handler flushes pendingSendsRef.
+      // its handshake. The HTTP POST below is what actually delivers it.
       // Disallow only when a turn is already streaming / a tool is
       // running / waiting for input.
       const blocking =
@@ -806,9 +742,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         status === "awaiting_permission" ||
         status === "awaiting_input";
       if (blocking) return;
+      if (!sessionId) return;
 
-      // Optimistic UI — user sees their message immediately whether or
-      // not the socket is up.
+      // Optimistic UI — user sees their message immediately even if the
+      // tab is about to close.
       setMessages((prev) => [
         ...prev,
         {
@@ -823,17 +760,41 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       currentAssistantRef.current = null;
       currentThinkingRef.current = null;
       setActiveTool(null);
+      setStatus("thinking");
 
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        setStatus("thinking");
-        sendToServer({ type: "message", text: trimmed });
-      } else {
-        // Buffer — the "ready" handler will drain this once the server
-        // says hello.
-        pendingSendsRef.current.push(trimmed);
-      }
+      // Deliver via HTTP POST with `keepalive: true` so the request
+      // survives tab-close / navigation. The browser keeps the request
+      // alive in the background until it completes (up to 64 KB body,
+      // which our messages are well under). This replaces the previous
+      // ws.send() path which was vulnerable to two race conditions:
+      //   (a) message buffered in pendingSendsRef while the WS handshake
+      //       was still in flight — lost on unmount.
+      //   (b) ws.send() called but the bytes hadn't been flushed by the
+      //       browser when the user navigated away.
+      // The streaming response still arrives over the WebSocket — when
+      // the user reopens the chat (or switches tabs), the server replays
+      // eventHistory so they pick up wherever the SDK got to.
+      const clientMessageId = crypto.randomUUID();
+      void authFetch(`${BASE}/api/chat/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          text: trimmed,
+          clientMessageId,
+          sessionCwd: sessionCwd ?? null,
+        }),
+        keepalive: true,
+      }).catch(() => {
+        // keepalive guarantees the browser tries; surface failures to the
+        // user only if we're still mounted (otherwise nothing to show).
+        // The optimistic message stays in the list — server-side rate
+        // limit / idempotency rejection is rare and will manifest as the
+        // assistant simply never replying. A retry button on a stuck
+        // message could be added later if this proves common.
+      });
     },
-    [status, sendToServer],
+    [status, sessionId, sessionCwd],
   );
 
   /* ── Plan-proposal response ── */
@@ -851,6 +812,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         message: opts?.message,
       });
       resolvedPermissionsRef.current.add(planId);
+      persistResolved();
 
       const outcome: NonNullable<ChatMessage["planOutcome"]> = approve
         ? opts?.newMode === "default"
@@ -873,7 +835,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         ),
       );
     },
-    [sendToServer],
+    [sendToServer, persistResolved],
   );
 
   /* ── Permission response ── */
@@ -887,12 +849,12 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         message: message || undefined,
       });
 
-      // In-memory dedup so a milliseconds-apart live broadcast and
-      // history replay during a flaky reconnect can't re-surface the
-      // prompt we just answered. Cross-tab / cross-device truth comes
-      // from the server's `permission_resolved` broadcast and the
-      // `pending_approvals` snapshot on connect — no need to persist.
+      // Remember locally so a subsequent refresh doesn't re-show this
+      // prompt if the server's eventHistory replay still contains it
+      // (e.g. during a server restart that wiped pendingRequests but
+      // the client caught the request in-flight).
       resolvedPermissionsRef.current.add(permissionId);
+      persistResolved();
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -912,6 +874,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     (askId: string, answers: Record<string, string | string[]>) => {
       sendToServer({ type: "ask_response", id: askId, answers });
       resolvedPermissionsRef.current.add(askId);
+      persistResolved();
       setMessages((prev) => prev.map((m) => (m.askId === askId ? { ...m, askResolved: true } : m)));
       setStatus("thinking");
     },

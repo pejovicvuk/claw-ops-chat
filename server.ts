@@ -41,6 +41,7 @@ import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { ensureProjectsTree } from "./src/lib/projects/paths";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
+import { setChatSendHandle } from "./src/lib/chat-send-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
 import { navUrls } from "./src/lib/nav-urls";
 import { onNotificationDispatched, sendToUser } from "./src/lib/push/send";
@@ -204,16 +205,6 @@ interface ChatSession {
   isProcessing: boolean;
   messageQueue: Array<{ text: string }>;
   pendingRequests: Map<string, (response: Record<string, unknown>) => void>;
-  /**
-   * Original broadcast payloads of currently-pending approval / plan / ask
-   * prompts, keyed by request id. Mirrors the keys of `pendingRequests`.
-   * Sent to every client on connect as a `pending_approvals` snapshot so
-   * a fresh tab — especially a second device opened mid-flow — hydrates
-   * deterministically rather than racing the live broadcast and the
-   * eventHistory replay. Cleared whenever the matching pendingRequests
-   * resolver is called or the turn is aborted.
-   */
-  pendingApprovalEvents: Map<string, Record<string, unknown>>;
   sessionAllowedTools: Set<string>;
   permissionMode: string;
   effort: string | null;
@@ -313,6 +304,14 @@ interface ChatSession {
    * stable label. Falls back to "Chat" when empty.
    */
   displayPreview: string;
+  /**
+   * Idempotency cache of clientMessageIds seen recently. Both the
+   * /api/chat/send HTTP path and the legacy WebSocket "message" path
+   * check this before queuing/processing so a fetch retry (e.g. browser
+   * replaying after a flaky network) never delivers the same message
+   * twice. Capped at 50 entries — FIFO eviction in enqueueUserMessage.
+   */
+  recentClientMessageIds: Set<string>;
 }
 
 /**
@@ -383,7 +382,6 @@ class SessionManager {
         isProcessing: false,
         messageQueue: [],
         pendingRequests: new Map(),
-        pendingApprovalEvents: new Map(),
         sessionAllowedTools: new Set(),
         permissionMode: "default",
         effort: null,
@@ -408,6 +406,7 @@ class SessionManager {
         retryCount: 0,
         actorEmail: "anonymous",
         displayPreview: "",
+        recentClientMessageIds: new Set(),
       };
       this.sessions.set(sessionId, session);
       setSessionStatus(sessionId, "idle");
@@ -464,25 +463,13 @@ class SessionManager {
       isProcessing: false,
       messageQueue: [],
       pendingRequests: new Map(),
-      pendingApprovalEvents: new Map(),
       sessionAllowedTools: new Set(persisted.sessionAllowedTools ?? []),
       permissionMode: persisted.permissionMode || "default",
       effort: persisted.effort ?? null,
       requestCounter: 0,
       accumulatedText: persisted.accumulatedText ?? "",
       messageTimestamps: [],
-      // Stale request prompts have no resolver after a server restart —
-      // clicking Allow on a replayed `permission_request` from the
-      // previous boot would go nowhere. Strip them on restore so the
-      // `interrupted` banner is the only signal the user sees about the
-      // lost turn. `pendingApprovalEvents` starts empty for the same
-      // reason — there is nothing pending until the agent asks again.
-      eventHistory: (Array.isArray(persisted.eventHistory) ? persisted.eventHistory : []).filter(
-        (e) =>
-          e.type !== "permission_request" &&
-          e.type !== "ask_question" &&
-          e.type !== "plan_proposal",
-      ),
+      eventHistory: Array.isArray(persisted.eventHistory) ? persisted.eventHistory : [],
       lastActivity: persisted.lastActivity || Date.now(),
       abortController: null,
       currentQuery: null,
@@ -503,6 +490,7 @@ class SessionManager {
       retryCount: 0,
       actorEmail: "anonymous",
       displayPreview: persisted.lastUserMessage ? persisted.lastUserMessage.slice(0, 80) : "",
+      recentClientMessageIds: new Set(),
     };
     this.sessions.set(session.id, session);
     setSessionStatus(session.id, "idle");
@@ -707,18 +695,6 @@ class SessionManager {
       }
     }
 
-    // Authoritative snapshot of currently-pending approval / plan / ask
-    // prompts. The client uses this to reconcile its message list on
-    // every connect — covering second-device-opened-mid-flow, page
-    // reload, and the narrow race where the live broadcast and the
-    // eventHistory replay disagree because a sibling client just
-    // answered. Always sent (even when empty) so the client can clear
-    // any stale-locally-staged pending state.
-    this.send(ws, {
-      type: "pending_approvals",
-      approvals: Array.from(session.pendingApprovalEvents.values()),
-    });
-
     // Always send the current status snapshot on reconnect. Without this,
     // a browser that reconnected after a status change (e.g. after a
     // tool finished running) would sit on whatever state it had before
@@ -836,6 +812,52 @@ class SessionManager {
     return true;
   }
 
+  /**
+   * Public entry point used by the HTTP `/api/chat/send` route to deliver
+   * a user message into a chat session. Mirrors the WebSocket "message"
+   * handler but with idempotency on `clientMessageId` so a fetch retry
+   * (the browser's `keepalive` flag survives navigation but the response
+   * may never reach the originating tab) doesn't double-send.
+   *
+   * Returns:
+   *   - { ok: true }                  → queued / processing started
+   *   - { ok: true, duplicate: true } → same clientMessageId already seen
+   *   - { ok: false, rateLimited }    → too many sends in 1s window
+   */
+  public enqueueUserMessage(args: {
+    sessionId: string;
+    text: string;
+    clientMessageId: string;
+    actorEmail: string;
+    sessionCwd?: string | null;
+  }): { ok: boolean; duplicate?: boolean; rateLimited?: boolean } {
+    const session = this.getOrCreateSession(args.sessionId);
+    if (args.actorEmail) session.actorEmail = args.actorEmail;
+    if (args.sessionCwd && !session.sessionCwd) session.sessionCwd = args.sessionCwd;
+
+    if (session.recentClientMessageIds.has(args.clientMessageId)) {
+      return { ok: true, duplicate: true };
+    }
+    session.recentClientMessageIds.add(args.clientMessageId);
+    if (session.recentClientMessageIds.size > 50) {
+      const oldest = session.recentClientMessageIds.values().next().value;
+      if (oldest !== undefined) session.recentClientMessageIds.delete(oldest);
+    }
+
+    if (!this.checkRateLimit(session)) {
+      return { ok: false, rateLimited: true };
+    }
+
+    session.lastUserMessage = args.text;
+    this.queuePersist(session);
+    if (session.isProcessing) {
+      session.messageQueue.push({ text: args.text });
+    } else {
+      this.handleUserMessage(session, args.text);
+    }
+    return { ok: true };
+  }
+
   private handleMessage(session: ChatSession, _ws: WebSocket, msg: Record<string, unknown>) {
     const type = msg.type as string;
 
@@ -859,7 +881,6 @@ class SessionManager {
         resolver(msg);
         session.pendingRequests.delete(id);
       }
-      session.pendingApprovalEvents.delete(id);
       // Purge the original prompt from eventHistory so a reconnecting
       // client (or another tab) doesn't re-surface an already-answered
       // modal. Without this, every route change / page reload showed
@@ -913,7 +934,6 @@ class SessionManager {
             answers: {},
             message: "Interrupted by user",
           });
-          session.pendingApprovalEvents.delete(id);
           this.broadcast(session, { type: "permission_resolved", id });
         }
         if (session.pendingRequests.size > 0) {
@@ -927,7 +947,6 @@ class SessionManager {
           }
         }
         session.pendingRequests.clear();
-        session.pendingApprovalEvents.clear();
 
         // AbortController is what actually kills the Claude CLI child
         // process — we pass `signal: abortController.signal` into
@@ -1131,9 +1150,7 @@ class SessionManager {
         // Handle AskUserQuestion
         if (toolName === "AskUserQuestion") {
           const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
-          const askEvent = { type: "ask_question", id, questions: input.questions || [] };
-          session.pendingApprovalEvents.set(id, askEvent);
-          this.broadcast(session, askEvent);
+          this.broadcast(session, { type: "ask_question", id, questions: input.questions || [] });
           this.setStatus(session, "awaiting_input");
           const chatLabel = chatLabelFor(session);
           const firstQ = Array.isArray(input.questions) ? String(input.questions[0] ?? "") : "";
@@ -1169,9 +1186,7 @@ class SessionManager {
         if (toolName === "ExitPlanMode") {
           const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
           const planText = typeof input.plan === "string" ? input.plan : JSON.stringify(input);
-          const planEvent = { type: "plan_proposal", id, plan: planText };
-          session.pendingApprovalEvents.set(id, planEvent);
-          this.broadcast(session, planEvent);
+          this.broadcast(session, { type: "plan_proposal", id, plan: planText });
           this.setStatus(session, "awaiting_permission");
           const planChatLabel = chatLabelFor(session);
           const planBody = planText.length > 100 ? `${planText.slice(0, 97)}…` : planText;
@@ -1261,9 +1276,7 @@ class SessionManager {
         // Default mode (or tools not auto-handled above): ask the user
         const id = `req-${SERVER_BOOT_ID}-${++session.requestCounter}`;
         const description = getToolDescription(toolName, input);
-        const permEvent = { type: "permission_request", id, toolName, input, description };
-        session.pendingApprovalEvents.set(id, permEvent);
-        this.broadcast(session, permEvent);
+        this.broadcast(session, { type: "permission_request", id, toolName, input, description });
         this.setStatus(session, "awaiting_permission");
         const chatLabel = chatLabelFor(session);
         const detail = description ? `${toolName}: ${description}` : `${toolName}`;
@@ -1988,8 +2001,6 @@ class SessionManager {
         RESPONSE_TIMEOUT_MS > 0
           ? setTimeout(() => {
               session.pendingRequests.delete(id);
-              session.pendingApprovalEvents.delete(id);
-              this.broadcast(session, { type: "permission_resolved", id });
               console.warn(`[session=${session.id}] Response timeout for request ${id}`);
               this.setStatus(session, "thinking");
               resolve({ allow: false, message: "Response timed out", answers: {} });
@@ -2358,6 +2369,12 @@ const sessionManager = new SessionManager();
 // only handle API routes had, and any transient bootstrap failure made
 // manual runs unrunnable.
 setSessionManager(sessionManager);
+// Same trick for the HTTP /api/chat/send route — gives it a way to call
+// SessionManager.enqueueUserMessage without importing server.ts (which
+// would create a build cycle).
+setChatSendHandle({
+  enqueueUserMessage: sessionManager.enqueueUserMessage.bind(sessionManager),
+});
 
 // Expose force-disconnect for the monitoring admin API. Anchored on
 // globalThis so the bundled API route module can reach it across the

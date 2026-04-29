@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  FiArrowDown,
   FiArrowLeft,
   FiShield,
   FiChevronDown,
@@ -161,6 +162,13 @@ interface ChatViewProps {
   /** Mobile-only: opens the Files panel. Mirrors `onOpenSessions` but at
       the opposite end of the Mode/Effort bar. */
   onOpenFiles?: () => void;
+  /**
+   * Initial working directory for a NEW chat (no resumeSessionId).
+   * Used by the per-item canvas to scope a session to the item's
+   * folder. Resumes still load `sessionCwd` from the persisted session
+   * metadata.
+   */
+  defaultCwd?: string | null;
 }
 
 export function ChatView({
@@ -171,9 +179,13 @@ export function ChatView({
   onSessionCreated,
   onOpenSessions,
   onOpenFiles,
+  defaultCwd,
 }: ChatViewProps) {
   const isMobile = useIsMobile();
-  const [sessionCwd, setSessionCwd] = useState<string | null>(null);
+  // `defaultCwd` seeds new chats with a scoped working directory (e.g.
+  // an item's folder under ~/projects). Resumes overwrite this with the
+  // persisted session metadata in the effect below.
+  const [sessionCwd, setSessionCwd] = useState<string | null>(defaultCwd ?? null);
   const {
     messages,
     status,
@@ -232,6 +244,15 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
+  // "↓ N new messages" pill state. Counts arrivals while the user is
+  // scrolled up so they don't miss that Claude finished. Coarse-grained
+  // — bumps only on `messages.length` increments, so streaming text into
+  // an existing assistant bubble doesn't tick wildly. Tool_use,
+  // tool_result, and a fresh assistant chunk each create a new array
+  // entry → +1 each. infoMessages (Shift+Tab banners) are user-driven
+  // and intentionally excluded.
+  const [unreadCount, setUnreadCount] = useState(0);
+  const prevMessagesLengthRef = useRef(0);
   // Stagger first-load history messages only; new streaming messages animate
   // without delay. Set captured once when loadingHistory flips false.
   const historyIdsRef = useRef<string[]>([]);
@@ -279,11 +300,25 @@ export function ChatView({
 
   /* Notify parent when SDK creates a new session (so page can update selected session) */
   useEffect(() => {
-    if (claudeSessionId && claudeSessionId !== notifiedSessionRef.current) {
+    // Only fire when the SDK assigns an id that differs from the URL's
+    // sessionId — i.e. a fresh chat just got promoted from its
+    // client-generated UUID to the SDK's real one. For chats the user
+    // is *resuming* (sessionId already === claudeSessionId), this would
+    // otherwise re-fire on every switch because my reset effect nulls
+    // claudeSessionId on session change and the next session_init then
+    // looks "new" relative to notifiedSessionRef. The parent's
+    // handleSessionCreated calls invalidateSessions + loadSessions,
+    // which flips the sidebar's loading state and was the visible flash
+    // in the conversation list.
+    if (
+      claudeSessionId &&
+      claudeSessionId !== sessionId &&
+      claudeSessionId !== notifiedSessionRef.current
+    ) {
       notifiedSessionRef.current = claudeSessionId;
       onSessionCreated?.(claudeSessionId);
     }
-  }, [claudeSessionId, onSessionCreated]);
+  }, [claudeSessionId, sessionId, onSessionCreated]);
 
   // On the first `idle` after reconnect, push our remembered per-session
   // mode to the server so a container restart doesn't land the session in
@@ -338,8 +373,28 @@ export function ChatView({
   }, [permissionMode, setPermissionMode, status, stopGeneration]);
 
   useEffect(() => {
-    if (!resumeSessionId) return;
+    // Switching to "+ New chat" — no history to load, just clear out any
+    // messages left over from the previous chat. Without this clear, when
+    // ChatView is no longer keyed on sessionId (it used to remount on
+    // every switch), the previous chat's messages would leak into the
+    // empty new-chat view.
+    if (!resumeSessionId) {
+      setInitialMessages([]);
+      setInitialContextUsage(null);
+      setSessionCwd(null);
+      setLoadingHistory(false);
+      capturedHistoryRef.current = false;
+      historyIdsRef.current = [];
+      return;
+    }
+    // Switching to an existing chat — show the loading skeleton WHILE
+    // keeping the old chat's messages on screen until the new ones land.
+    // setInitialMessages is called in the .then() below, atomically
+    // replacing the array so the user perceives a clean cross-fade
+    // instead of a flash to blank.
     let cancelled = false;
+    setLoadingHistory(true);
+    capturedHistoryRef.current = false;
     fetchSessionMessages(resumeSessionId)
       .then((data) => {
         if (!cancelled) {
@@ -351,14 +406,10 @@ export function ChatView({
       })
       .catch(() => {
         if (cancelled) return;
-        // 404 is the normal path when the user taps "+ New chat" on
-        // mobile: handleNewChat mints a brand-new UUID the server has
-        // never seen, so there's no JSONL to load. Without this reset,
-        // the *previous* chat's messages leaked into the new view —
-        // the drawer would close and the user would see the old chat
-        // unchanged, making the + button feel broken ("it just closes
-        // the chats section"). Clearing here gives the new chat the
-        // empty-state UI it should have.
+        // 404 — the SDK hasn't written a JSONL for this id yet. Could
+        // happen if the user lands on a session right after sending its
+        // very first message, before Claude has produced any output.
+        // Falling through to an empty list gives the empty-state UI.
         setInitialMessages([]);
         setInitialContextUsage(null);
         setSessionCwd(null);
@@ -373,8 +424,8 @@ export function ChatView({
   // approval id — even if the user has manually scrolled up, an arriving
   // permission / plan / ask prompt MUST be unmissable. Tracked by id so
   // we don't fight the user's subsequent scrolling on unrelated re-
-  // renders. Falls through to the normal "stick to bottom" behavior when
-  // nothing is pending.
+  // renders. Falls through to the unread-count + stick-to-bottom logic
+  // when nothing is pending.
   const lastScrolledApprovalIdRef = useRef<string | null>(null);
   useEffect(() => {
     let latestPending: string | null = null;
@@ -406,17 +457,69 @@ export function ChatView({
         if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
         else bottomRef.current?.scrollIntoView({ behavior: "smooth" });
       });
+      // We just scrolled the user to the bottom of the conversation; clear
+      // the unread pill so it doesn't linger over the approval card. Keep
+      // prevMessagesLengthRef in sync so the next non-approval render
+      // doesn't double-count messages added in this batch.
+      setUnreadCount(0);
+      prevMessagesLengthRef.current = messages.length;
       return;
     }
-    if (userScrolledUpRef.current) return;
+
+    const prev = prevMessagesLengthRef.current;
+    const curr = messages.length;
+    prevMessagesLengthRef.current = curr;
+    // Clamped at 0 to ignore wholesale message-array replacements (e.g.
+    // session switch into a shorter chat) — those wipe userScrolledUpRef
+    // separately and shouldn't show as "negative new messages."
+    const delta = Math.max(0, curr - prev);
+
+    if (userScrolledUpRef.current) {
+      // User is reading scrollback — surface the pill instead of yanking.
+      // infoMessages aren't part of `messages`, so triggering Shift+Tab
+      // while scrolled up doesn't bump the count.
+      if (delta > 0) setUnreadCount((c) => c + delta);
+      return;
+    }
+    // At bottom — keep the existing smooth follow-along behavior.
+    setUnreadCount(0);
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, infoMessages]);
+
+  // On chat switch, snap-jump to the bottom of the new chat once history
+  // finishes loading. Two reasons this needs its own effect rather than
+  // leaning on the message-change scroll above:
+  //   1. `userScrolledUpRef` is preserved across sessions — if the user
+  //      had scrolled up in the previous chat, the message-change effect
+  //      would silently skip the auto-scroll on the new one. We wipe the
+  //      lock here on every sessionId change.
+  //   2. Smooth-scrolling across a wholesale message replacement looks
+  //      janky; an instant `behavior: "auto"` jump fits the cross-fade
+  //      transition that `setInitialMessages` produces. The rAF defers
+  //      the call until the freshly-loaded messages have committed to
+  //      the DOM so `scrollHeight` reflects them.
+  useEffect(() => {
+    userScrolledUpRef.current = false;
+    // Drop any unread count carried over from the previous chat — the
+    // new chat is about to be snap-jumped to bottom, so a stale "N new
+    // messages" pill from another session would be misleading.
+    setUnreadCount(0);
+    if (loadingHistory) return;
+    const id = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [sessionId, loadingHistory]);
 
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     userScrolledUpRef.current = !atBottom;
+    // Auto-dismiss the unread pill once the user manually scrolls back
+    // into the at-bottom band — they've caught up, the pill would just
+    // linger.
+    if (atBottom) setUnreadCount(0);
   };
 
   /** Memoized sorted merge of chat messages and info messages. */
@@ -772,7 +875,7 @@ export function ChatView({
             onScroll={handleScroll}
             className="absolute inset-0 overflow-y-auto overflow-x-hidden"
           >
-            {loadingHistory && (
+            {loadingHistory && messages.length === 0 && (
               <div className="flex items-center justify-center py-8">
                 <div className="h-4 w-4 animate-spin rounded-full border-2 border-canvas-border border-t-canvas-muted" />
                 <span className="ml-2 text-[12px] text-canvas-muted">Loading conversation...</span>
@@ -782,7 +885,7 @@ export function ChatView({
               <EmptyState onSuggestionClick={handleSuggestionClick} />
             ) : (
               <SessionCwdProvider value={sessionCwd}>
-                <ChatFilesProvider key={sessionId}>
+                <ChatFilesProvider sessionId={sessionId}>
                   <div className="py-3">
                     {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
                     {sortedMessages.map((msg, idx) => {
@@ -791,16 +894,20 @@ export function ChatView({
                       // instantly. Capped at 12 * 25ms so a huge backlog doesn't
                       // visibly cascade for half a second.
                       const histIdx = historyIdsRef.current.indexOf(msg.id);
-                      const staggerStyle =
-                        histIdx >= 0
-                          ? { animationDelay: `${Math.min(histIdx, 12) * 25}ms` }
-                          : undefined;
+                      // History messages (loaded from JSONL on session switch
+                      // or initial mount) appear instantly — re-running the
+                      // fade-in for every message on every chat switch was
+                      // the visible "disappear and reappear" flash. Only
+                      // genuinely-new streaming messages animate in.
+                      const isHistory = histIdx >= 0;
+                      const enterAnim = isHistory ? "" : "animate-msg-in";
+                      const staggerStyle: React.CSSProperties | undefined = undefined;
 
                       if (msg._isInfo) {
                         return (
                           <div
                             key={msg.id}
-                            className="animate-msg-in flex justify-center px-4 py-1.5"
+                            className={`${enterAnim} flex justify-center px-4 py-1.5`}
                             style={staggerStyle}
                           >
                             <span className="rounded-full bg-canvas-surface-hover px-3 py-1 text-[11px] text-canvas-muted">
@@ -835,7 +942,7 @@ export function ChatView({
                       return (
                         <div
                           key={msg.id}
-                          className={`animate-msg-in ${
+                          className={`${enterAnim} ${
                             isTimelineNode ? "ml-4 border-l border-accent/15 pl-1" : ""
                           } ${isTimelineNode && !prevIsTimeline ? "mt-2 pt-1" : ""} ${
                             isTimelineNode && !nextIsTimeline ? "mb-2 pb-1" : ""
@@ -878,6 +985,26 @@ export function ChatView({
               the scroll container — it covers permission, plan, AND ask,
               and can't be content-visibility-skipped or overflow-clipped
               the way the old in-scroller floating pill could. */}
+
+          {/* "↓ N new messages" pill — appears only when the user is
+            scrolled up AND content has arrived since they scrolled up.
+            Click → smooth-scroll to bottom and reset the count. */}
+          {unreadCount > 0 && (
+            <button
+              type="button"
+              onClick={() => {
+                bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+                setUnreadCount(0);
+              }}
+              className="animate-msg-in absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/40 bg-canvas-bg/95 px-3 py-1.5 text-[11px] font-medium shadow-lg backdrop-blur"
+              style={{ color: "var(--accent)" }}
+            >
+              <FiArrowDown size={11} />
+              <span>
+                {unreadCount} new {unreadCount === 1 ? "message" : "messages"}
+              </span>
+            </button>
+          )}
         </div>
 
         <SetupGuard forceShow={setupRequired}>

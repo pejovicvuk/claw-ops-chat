@@ -35,6 +35,7 @@ import { useGitStatus } from "@/lib/use-git-status";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useToast } from "@/lib/use-toast";
 import { uploadBatch, type BatchProgress, type UploadEntry } from "@/lib/batch-upload";
+import { isInside } from "@/lib/canvas/path-scope";
 import type { GitFileStatus } from "@/lib/git/types";
 import type { FileEntry } from "@/lib/types";
 import { Breadcrumbs } from "./file-browser/breadcrumbs";
@@ -64,6 +65,13 @@ interface FileBrowserProps {
    * the git branch list so it can highlight the branch this chat is on.
    */
   selectedSessionId?: string | null;
+  /**
+   * When set, the browser is locked: navigation refuses any path that
+   * isn't inside this root, breadcrumbs above the root are clipped, and
+   * the keyboard "Up" shortcut stops at the root. Used by the per-item
+   * canvas so the file panel only sees that item's folder.
+   */
+  rootPath?: string | null;
 }
 
 const VIRTUALIZE_THRESHOLD = 500;
@@ -164,7 +172,7 @@ function ClampedMenu({ x, y, className, children, onClick }: ClampedMenuProps) {
 }
 
 export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(function FileBrowser(
-  { onFileClick, onFileOpen, onCopyPath, initialPath, onPathChange, selectedSessionId },
+  { onFileClick, onFileOpen, onCopyPath, initialPath, onPathChange, selectedSessionId, rootPath },
   ref,
 ) {
   const { toast } = useToast();
@@ -214,12 +222,16 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
    */
   const navigateTo = useCallback(
     (path: string) => {
+      // When a root is set, refuse any path outside it. The breadcrumb
+      // already clips upward segments — this catches keyboard / context-
+      // menu paths and the imperative ref handle.
+      if (rootPath && !isInside(rootPath, path)) return;
       setQuery("");
       setSelectedIndex(-1);
       setCurrentPath(path);
       onPathChange?.(path);
     },
-    [onPathChange],
+    [onPathChange, rootPath],
   );
 
   useImperativeHandle(ref, () => ({ navigateTo }));
@@ -474,10 +486,12 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
       } else if (e.key === "Backspace") {
         e.preventDefault();
         const parent = parentOf(currentPath);
+        // No-op when we'd cross the locked root boundary.
+        if (rootPath && !isInside(rootPath, parent)) return;
         navigateTo(parent);
       }
     },
-    [visibleEntries, selectedIndex, navigateTo, onFileOpen, parentOf, currentPath],
+    [visibleEntries, selectedIndex, navigateTo, onFileOpen, parentOf, currentPath, rootPath],
   );
 
   // Resolve a per-entry git status. Files use the direct lookup; folders
@@ -538,7 +552,7 @@ export const FileBrowser = forwardRef<FileBrowserHandle, FileBrowserProps>(funct
         onKeyDown={handleKeyDown}
         onClick={() => contextMenu && closeMenu()}
       >
-        <Breadcrumbs path={currentPath} onNavigate={navigateTo} />
+        <Breadcrumbs path={currentPath} onNavigate={navigateTo} rootPath={rootPath} />
         <FileToolbar
           key={currentPath}
           query={query}

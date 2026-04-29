@@ -345,6 +345,27 @@ export function ChatView({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, infoMessages]);
 
+  // On chat switch, snap-jump to the bottom of the new chat once history
+  // finishes loading. Two reasons this needs its own effect rather than
+  // leaning on the message-change scroll above:
+  //   1. `userScrolledUpRef` is preserved across sessions — if the user
+  //      had scrolled up in the previous chat, the message-change effect
+  //      would silently skip the auto-scroll on the new one. We wipe the
+  //      lock here on every sessionId change.
+  //   2. Smooth-scrolling across a wholesale message replacement looks
+  //      janky; an instant `behavior: "auto"` jump fits the cross-fade
+  //      transition that `setInitialMessages` produces. The rAF defers
+  //      the call until the freshly-loaded messages have committed to
+  //      the DOM so `scrollHeight` reflects them.
+  useEffect(() => {
+    userScrolledUpRef.current = false;
+    if (loadingHistory) return;
+    const id = requestAnimationFrame(() => {
+      bottomRef.current?.scrollIntoView({ behavior: "auto" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [sessionId, loadingHistory]);
+
   const handleScroll = () => {
     const el = scrollRef.current;
     if (!el) return;

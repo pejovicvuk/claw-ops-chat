@@ -86,3 +86,93 @@ export function assertProjectSlug(slug: string): void {
     throw new Error(`Invalid project slug: ${slug}`);
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────── */
+/*  Repo URL validation (item imports)                                   */
+/* ──────────────────────────────────────────────────────────────────── */
+
+export type RepoKind = "github" | "bitbucket";
+
+const REPO_HOSTS: Record<RepoKind, string> = {
+  github: "github.com",
+  bitbucket: "bitbucket.org",
+};
+
+export interface RepoUrlValidation {
+  ok: boolean;
+  error?: string;
+  /** Owner / workspace segment, present iff `ok`. */
+  owner?: string;
+  /** Repo name (with any `.git` suffix stripped), present iff `ok`. */
+  repo?: string;
+  /** Canonical clone URL `https://<host>/<owner>/<repo>.git`, present iff `ok`. */
+  normalizedUrl?: string;
+}
+
+/**
+ * Strict shape check for a clone URL. Accepts only:
+ *   - scheme `https`
+ *   - exact hostname (`github.com` or `bitbucket.org`, case-insensitive)
+ *   - path of exactly `/<owner>/<repo>` (trailing `.git` allowed, stripped)
+ *
+ * Rejects: ssh URLs, deeper paths (`/tree/main/...`), query strings,
+ * fragments, ports, embedded credentials, IDN/punycode hostnames.
+ *
+ * The strict shape is what lets us safely interpolate the URL into a
+ * `git clone` argv without an injection surface — there are no spaces,
+ * shell metachars, or unexpected schemes that could break out.
+ */
+export function validateRepoUrl(kind: RepoKind, raw: unknown): RepoUrlValidation {
+  if (typeof raw !== "string") return { ok: false, error: "Repo URL is required" };
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return { ok: false, error: "Repo URL is required" };
+  if (trimmed.length > 2048) return { ok: false, error: "Repo URL is too long" };
+
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return { ok: false, error: "Repo URL must be an https:// URL" };
+  }
+
+  if (url.protocol !== "https:") {
+    return { ok: false, error: "Only https:// URLs are supported (no SSH)" };
+  }
+  const expectedHost = REPO_HOSTS[kind];
+  if (url.hostname.toLowerCase() !== expectedHost) {
+    return { ok: false, error: `URL must be on ${expectedHost}` };
+  }
+  if (url.port) return { ok: false, error: "Repo URL must not include a port" };
+  if (url.username || url.password) {
+    return { ok: false, error: "Repo URL must not include credentials" };
+  }
+  if (url.search || url.hash) {
+    return { ok: false, error: "Repo URL must not include query string or fragment" };
+  }
+
+  const segments = url.pathname.split("/").filter(Boolean);
+  if (segments.length !== 2) {
+    return { ok: false, error: "URL must point to a repo (e.g. https://host/owner/repo)" };
+  }
+  const owner = segments[0];
+  let repo = segments[1];
+  if (repo.endsWith(".git")) repo = repo.slice(0, -".git".length);
+  if (owner.length === 0 || repo.length === 0) {
+    return { ok: false, error: "Owner and repo segments cannot be empty" };
+  }
+  // Repo / owner names on github & bitbucket can include underscores and
+  // dots; lock to a conservative charset to avoid weird argv shapes.
+  if (!/^[A-Za-z0-9._-]+$/.test(owner) || !/^[A-Za-z0-9._-]+$/.test(repo)) {
+    return { ok: false, error: "Owner and repo may only contain letters, numbers, '.', '_', '-'" };
+  }
+  if (owner === "." || owner === ".." || repo === "." || repo === "..") {
+    return { ok: false, error: "Owner and repo cannot be '.' or '..'" };
+  }
+
+  return {
+    ok: true,
+    owner,
+    repo,
+    normalizedUrl: `https://${expectedHost}/${owner}/${repo}.git`,
+  };
+}

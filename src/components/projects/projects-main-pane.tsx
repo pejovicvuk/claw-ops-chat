@@ -1,10 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { FiArrowLeft, FiFolder } from "react-icons/fi";
+import { FiArrowLeft } from "react-icons/fi";
 import { useUrlState } from "@/lib/use-url-state";
 import { fetchProjects, type ProjectMeta } from "@/lib/projects-api";
+import { useItems } from "@/lib/use-items";
+import { deleteItemApi, type ItemMeta } from "@/lib/items-api";
 import { ProjectsDashboard } from "./projects-dashboard";
+import { ItemsList } from "./items-list";
+import { AddItemTray } from "./add-item-tray";
+import { ItemDetailPlaceholder } from "./item-detail-placeholder";
 
 interface ProjectsMainPaneProps {
   onOpenSessions?: () => void;
@@ -13,24 +18,35 @@ interface ProjectsMainPaneProps {
 /**
  * Router for the main pane when `?view=projects`.
  *
- *   (no ?project)   → ProjectsDashboard (card grid + create flow)
- *   ?project=<slug> → ProjectDetail placeholder (future home for per-project features)
+ *   (no ?project)              → ProjectsDashboard (card grid + create flow)
+ *   ?project=<slug>             → ProjectDetail (items list + add-item tray)
+ *   ?project=<slug>&item=<slug> → ItemDetailPlaceholder
  */
 export function ProjectsMainPane({ onOpenSessions }: ProjectsMainPaneProps) {
   const { params } = useUrlState();
-  const slug = params.get("project");
+  const projectSlug = params.get("project");
+  const itemSlug = params.get("item");
 
-  if (slug) {
-    return <ProjectDetail slug={slug} onOpenSessions={onOpenSessions} />;
+  if (!projectSlug) {
+    return <ProjectsDashboard onOpenSessions={onOpenSessions} />;
   }
-  return <ProjectsDashboard onOpenSessions={onOpenSessions} />;
+  return <ProjectDetail slug={projectSlug} itemSlug={itemSlug} onOpenSessions={onOpenSessions} />;
 }
 
-function ProjectDetail({ slug, onOpenSessions }: { slug: string; onOpenSessions?: () => void }) {
+function ProjectDetail({
+  slug,
+  itemSlug,
+  onOpenSessions,
+}: {
+  slug: string;
+  itemSlug: string | null;
+  onOpenSessions?: () => void;
+}) {
   const { setParam } = useUrlState();
   const [project, setProject] = useState<ProjectMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [missing, setMissing] = useState(false);
+  const { items, loading: itemsLoading, refresh: refreshItems } = useItems(slug);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,7 +71,47 @@ function ProjectDetail({ slug, onOpenSessions }: { slug: string; onOpenSessions?
 
   const handleBack = useCallback(() => {
     setParam("project", null);
+    setParam("item", null);
   }, [setParam]);
+
+  const handleOpenItem = useCallback(
+    (itemSlug: string) => {
+      setParam("item", itemSlug);
+    },
+    [setParam],
+  );
+
+  const handleDeleteItem = useCallback(
+    async (item: ItemMeta) => {
+      if (
+        !confirm(`Delete item "${item.displayName}"? The folder and its contents will be removed.`)
+      ) {
+        return;
+      }
+      try {
+        await deleteItemApi(slug, item.slug);
+        refreshItems();
+      } catch (err) {
+        alert(`Failed to delete: ${(err as Error).message}`);
+      }
+    },
+    [refreshItems, slug],
+  );
+
+  const handleItemCreated = useCallback(() => {
+    refreshItems();
+  }, [refreshItems]);
+
+  if (itemSlug) {
+    return (
+      <ItemDetailPlaceholder
+        projectSlug={slug}
+        itemSlug={itemSlug}
+        projectDisplayName={project?.displayName ?? null}
+        onOpenSessions={onOpenSessions}
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-canvas-bg">
@@ -89,40 +145,53 @@ function ProjectDetail({ slug, onOpenSessions }: { slug: string; onOpenSessions?
         )}
       </header>
 
-      <div className="flex flex-1 items-center justify-center px-4 py-12">
+      <div className="flex-1 overflow-y-auto px-4 py-4">
         {missing ? (
-          <div className="text-center">
-            <p className="text-[14px] font-medium text-canvas-fg">Project not found</p>
-            <p className="mt-1 text-[12px] text-canvas-muted">
-              The folder for <span className="font-mono">{slug}</span> no longer exists.
-            </p>
-            <button
-              type="button"
-              onClick={handleBack}
-              className="btn-press mt-4 rounded-lg bg-accent px-3.5 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
-            >
-              Back to projects
-            </button>
-          </div>
-        ) : loading ? (
-          <p className="text-[12px] text-canvas-muted">Loading project…</p>
+          <ProjectMissing slug={slug} onBack={handleBack} />
+        ) : loading && !project ? (
+          <p className="py-12 text-center text-[12px] text-canvas-muted">Loading project…</p>
         ) : (
-          <div className="mx-auto flex max-w-md flex-col items-center text-center">
-            <div
-              className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl"
-              style={{ backgroundColor: "var(--canvas-surface-hover)" }}
-            >
-              <FiFolder size={24} className="text-canvas-muted" />
+          <div className="mx-auto flex max-w-3xl flex-col gap-3">
+            <div>
+              <h2 className="text-[13px] font-semibold text-canvas-fg">Items</h2>
+              <p className="mt-0.5 text-[11px] text-canvas-muted">
+                Each item is a folder under <span className="font-mono">~/projects/{slug}</span>.
+              </p>
             </div>
-            <h2 className="text-[15px] font-semibold text-canvas-fg">{project?.displayName}</h2>
-            <p className="mt-2 text-[13px] leading-relaxed text-canvas-muted">
-              Per-project features are coming soon. For now, this folder lives at{" "}
-              <span className="font-mono">~/projects/{slug}</span> on the device — drop files in
-              from the file browser to seed the project.
-            </p>
+            <AddItemTray projectSlug={slug} onCreated={handleItemCreated} />
+            <ItemsList
+              items={items}
+              loading={itemsLoading}
+              onOpen={handleOpenItem}
+              onDelete={handleDeleteItem}
+            />
+            {!itemsLoading && items.length === 0 && (
+              <p className="rounded-xl border border-dashed border-canvas-border px-4 py-8 text-center text-[12px] text-canvas-muted">
+                No items yet. Click <span className="font-medium text-canvas-fg">Add item</span> to
+                create a folder or import a repository.
+              </p>
+            )}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ProjectMissing({ slug, onBack }: { slug: string; onBack: () => void }) {
+  return (
+    <div className="py-12 text-center">
+      <p className="text-[14px] font-medium text-canvas-fg">Project not found</p>
+      <p className="mt-1 text-[12px] text-canvas-muted">
+        The folder for <span className="font-mono">{slug}</span> no longer exists.
+      </p>
+      <button
+        type="button"
+        onClick={onBack}
+        className="btn-press mt-4 rounded-lg bg-accent px-3.5 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
+      >
+        Back to projects
+      </button>
     </div>
   );
 }

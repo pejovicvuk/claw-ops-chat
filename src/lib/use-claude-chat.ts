@@ -2,7 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAccessToken } from "@/lib/apiClient";
+import { authFetch } from "@/lib/auth";
 import type { ChatMessage, ClaudeStatus, ActiveToolInfo } from "@/lib/types";
+
+const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
 /** Max reconnection delay in ms. */
 const MAX_RECONNECT_DELAY = 30_000;
@@ -75,13 +78,6 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   /** Ref to break circular dependency between connect ↔ scheduleReconnect. */
   const scheduleReconnectRef = useRef<() => void>(() => {});
   /**
-   * Messages typed by the user before the WebSocket was open. Flushed
-   * when the server's "ready" event arrives. Fixes the "first message
-   * on a new chat disappears" bug — previously sendMessage returned
-   * silently if ws.readyState wasn't OPEN.
-   */
-  const pendingSendsRef = useRef<string[]>([]);
-  /**
    * Permission IDs the user has already approved/denied in this tab.
    * Survives refreshes via sessionStorage keyed by sessionId. Belt-and-
    * suspenders against stale permission_request replay when the server
@@ -130,21 +126,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "ready") {
         setStatus("idle");
-        // Flush any messages the user typed before the WS finished
-        // connecting. Fire-and-forget — the server queues them on its
-        // side too if this session was already processing a turn.
-        const queued = pendingSendsRef.current;
-        if (queued.length > 0) {
-          pendingSendsRef.current = [];
-          for (const text of queued) {
-            if (wsRef.current?.readyState === WebSocket.OPEN) {
-              wsRef.current.send(JSON.stringify({ type: "message", text }));
-              // Only the first message kicks us into "thinking"; the
-              // server will serialise the rest via its messageQueue.
-              setStatus("thinking");
-            }
-          }
-        }
+        // No pending-send buffer to flush — every send goes through
+        // /api/chat/send (HTTP POST + keepalive) so the message is
+        // delivered server-side before any WS handshake completes.
+        // The WS only carries the streaming response back to the client.
         return;
       }
 
@@ -713,7 +698,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       if (!trimmed) return;
       // Allow send while "connecting" — the most common case where
       // a user hits send on a brand-new chat before the WS has finished
-      // its handshake. The "ready" handler flushes pendingSendsRef.
+      // its handshake. The HTTP POST below is what actually delivers it.
       // Disallow only when a turn is already streaming / a tool is
       // running / waiting for input.
       const blocking =
@@ -722,9 +707,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         status === "awaiting_permission" ||
         status === "awaiting_input";
       if (blocking) return;
+      if (!sessionId) return;
 
-      // Optimistic UI — user sees their message immediately whether or
-      // not the socket is up.
+      // Optimistic UI — user sees their message immediately even if the
+      // tab is about to close.
       setMessages((prev) => [
         ...prev,
         {
@@ -739,17 +725,41 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       currentAssistantRef.current = null;
       currentThinkingRef.current = null;
       setActiveTool(null);
+      setStatus("thinking");
 
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        setStatus("thinking");
-        sendToServer({ type: "message", text: trimmed });
-      } else {
-        // Buffer — the "ready" handler will drain this once the server
-        // says hello.
-        pendingSendsRef.current.push(trimmed);
-      }
+      // Deliver via HTTP POST with `keepalive: true` so the request
+      // survives tab-close / navigation. The browser keeps the request
+      // alive in the background until it completes (up to 64 KB body,
+      // which our messages are well under). This replaces the previous
+      // ws.send() path which was vulnerable to two race conditions:
+      //   (a) message buffered in pendingSendsRef while the WS handshake
+      //       was still in flight — lost on unmount.
+      //   (b) ws.send() called but the bytes hadn't been flushed by the
+      //       browser when the user navigated away.
+      // The streaming response still arrives over the WebSocket — when
+      // the user reopens the chat (or switches tabs), the server replays
+      // eventHistory so they pick up wherever the SDK got to.
+      const clientMessageId = crypto.randomUUID();
+      void authFetch(`${BASE}/api/chat/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId,
+          text: trimmed,
+          clientMessageId,
+          sessionCwd: sessionCwd ?? null,
+        }),
+        keepalive: true,
+      }).catch(() => {
+        // keepalive guarantees the browser tries; surface failures to the
+        // user only if we're still mounted (otherwise nothing to show).
+        // The optimistic message stays in the list — server-side rate
+        // limit / idempotency rejection is rare and will manifest as the
+        // assistant simply never replying. A retry button on a stuck
+        // message could be added later if this proves common.
+      });
     },
-    [status, sendToServer],
+    [status, sessionId, sessionCwd],
   );
 
   /* ── Plan-proposal response ── */

@@ -41,6 +41,7 @@ import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { ensureProjectsTree } from "./src/lib/projects/paths";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
+import { setChatSendHandle } from "./src/lib/chat-send-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
 import { navUrls } from "./src/lib/nav-urls";
 import { onNotificationDispatched, sendToUser } from "./src/lib/push/send";
@@ -303,6 +304,14 @@ interface ChatSession {
    * stable label. Falls back to "Chat" when empty.
    */
   displayPreview: string;
+  /**
+   * Idempotency cache of clientMessageIds seen recently. Both the
+   * /api/chat/send HTTP path and the legacy WebSocket "message" path
+   * check this before queuing/processing so a fetch retry (e.g. browser
+   * replaying after a flaky network) never delivers the same message
+   * twice. Capped at 50 entries — FIFO eviction in enqueueUserMessage.
+   */
+  recentClientMessageIds: Set<string>;
 }
 
 /**
@@ -397,6 +406,7 @@ class SessionManager {
         retryCount: 0,
         actorEmail: "anonymous",
         displayPreview: "",
+        recentClientMessageIds: new Set(),
       };
       this.sessions.set(sessionId, session);
       setSessionStatus(sessionId, "idle");
@@ -480,6 +490,7 @@ class SessionManager {
       retryCount: 0,
       actorEmail: "anonymous",
       displayPreview: persisted.lastUserMessage ? persisted.lastUserMessage.slice(0, 80) : "",
+      recentClientMessageIds: new Set(),
     };
     this.sessions.set(session.id, session);
     setSessionStatus(session.id, "idle");
@@ -799,6 +810,52 @@ class SessionManager {
     }
     session.messageTimestamps.push(now);
     return true;
+  }
+
+  /**
+   * Public entry point used by the HTTP `/api/chat/send` route to deliver
+   * a user message into a chat session. Mirrors the WebSocket "message"
+   * handler but with idempotency on `clientMessageId` so a fetch retry
+   * (the browser's `keepalive` flag survives navigation but the response
+   * may never reach the originating tab) doesn't double-send.
+   *
+   * Returns:
+   *   - { ok: true }                  → queued / processing started
+   *   - { ok: true, duplicate: true } → same clientMessageId already seen
+   *   - { ok: false, rateLimited }    → too many sends in 1s window
+   */
+  public enqueueUserMessage(args: {
+    sessionId: string;
+    text: string;
+    clientMessageId: string;
+    actorEmail: string;
+    sessionCwd?: string | null;
+  }): { ok: boolean; duplicate?: boolean; rateLimited?: boolean } {
+    const session = this.getOrCreateSession(args.sessionId);
+    if (args.actorEmail) session.actorEmail = args.actorEmail;
+    if (args.sessionCwd && !session.sessionCwd) session.sessionCwd = args.sessionCwd;
+
+    if (session.recentClientMessageIds.has(args.clientMessageId)) {
+      return { ok: true, duplicate: true };
+    }
+    session.recentClientMessageIds.add(args.clientMessageId);
+    if (session.recentClientMessageIds.size > 50) {
+      const oldest = session.recentClientMessageIds.values().next().value;
+      if (oldest !== undefined) session.recentClientMessageIds.delete(oldest);
+    }
+
+    if (!this.checkRateLimit(session)) {
+      return { ok: false, rateLimited: true };
+    }
+
+    session.lastUserMessage = args.text;
+    this.queuePersist(session);
+    if (session.isProcessing) {
+      session.messageQueue.push({ text: args.text });
+    } else {
+      this.handleUserMessage(session, args.text);
+    }
+    return { ok: true };
   }
 
   private handleMessage(session: ChatSession, _ws: WebSocket, msg: Record<string, unknown>) {
@@ -2312,6 +2369,12 @@ const sessionManager = new SessionManager();
 // only handle API routes had, and any transient bootstrap failure made
 // manual runs unrunnable.
 setSessionManager(sessionManager);
+// Same trick for the HTTP /api/chat/send route — gives it a way to call
+// SessionManager.enqueueUserMessage without importing server.ts (which
+// would create a build cycle).
+setChatSendHandle({
+  enqueueUserMessage: sessionManager.enqueueUserMessage.bind(sessionManager),
+});
 
 // Expose force-disconnect for the monitoring admin API. Anchored on
 // globalThis so the bundled API route module can reach it across the

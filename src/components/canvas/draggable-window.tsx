@@ -5,7 +5,8 @@ import { FiMaximize2, FiMinimize2, FiMinus, FiX } from "react-icons/fi";
 import { clampRectToViewport, type Rect } from "@/lib/clamp-to-viewport";
 import { MIN_H, MIN_W, type WindowGeometry } from "./canvas-types";
 
-type ResizeEdge = "se" | "e" | "s";
+/** All 8 compass directions plus the centre "drag" mode (handled separately). */
+type ResizeEdge = "n" | "e" | "s" | "w" | "ne" | "nw" | "se" | "sw";
 
 interface DraggableWindowProps {
   title: string;
@@ -37,13 +38,14 @@ interface DraggableWindowProps {
 
 /**
  * Reusable draggable / resizable / minimizable / maximizable window.
- * No content awareness — just chrome + state plumbing. The body lives in
- * `children` so future window kinds drop in without re-implementing
- * pointer math.
+ *
+ * Eight resize handles (4 edges + 4 corners), all routed through one
+ * pointer-event pipeline. The geometry math lives in `resizeFromEdge`
+ * so each handle is a couple of lines and adding more is trivial.
  *
  * Pointer-events drag (no library), RAF-batched to avoid layout
- * thrashing during fast drags. Geometry is clamped to `canvasBounds` so
- * a window can't escape the canvas surface.
+ * thrashing. Geometry is clamped to `canvasBounds` so a window can't
+ * escape the canvas surface.
  */
 export function DraggableWindow({
   title,
@@ -106,15 +108,8 @@ export function DraggableWindow({
       if (ds.mode === "drag") {
         queueRect({ ...ds.startRect, x: ds.startRect.x + dx, y: ds.startRect.y + dy });
         onDragMove?.(e.clientX, e.clientY);
-      } else {
-        // Resize: which axes the handle touches
-        const allowW = ds.edge === "se" || ds.edge === "e";
-        const allowH = ds.edge === "se" || ds.edge === "s";
-        queueRect({
-          ...ds.startRect,
-          w: allowW ? Math.max(MIN_W, ds.startRect.w + dx) : ds.startRect.w,
-          h: allowH ? Math.max(MIN_H, ds.startRect.h + dy) : ds.startRect.h,
-        });
+      } else if (ds.edge) {
+        queueRect(resizeFromEdge(ds.edge, ds.startRect, dx, dy));
       }
     },
     [onDragMove, queueRect],
@@ -228,6 +223,15 @@ export function DraggableWindow({
     ? { x: 0, y: 0, w: canvasBounds.width, h: canvasBounds.height }
     : { x: geometry.x, y: geometry.y, w: geometry.w, h: geometry.h };
 
+  // Build one handle factory so each <ResizeHandle> in the JSX below stays
+  // a single line. Closes over beginDrag / onPointerMove / onPointerUp.
+  const handleFor = (edge: ResizeEdge) => ({
+    edge,
+    onPointerDown: (e: React.PointerEvent) => beginDrag(e, "resize", edge),
+    onPointerMove,
+    onPointerUp,
+  });
+
   return (
     <div
       ref={containerRef}
@@ -263,39 +267,69 @@ export function DraggableWindow({
         </div>
       </header>
       {/*
-        BUG FIX: this wrapper was previously plain block-level, which
-        meant ChatView's outer FileDropzone (`flex flex-1`) couldn't
-        grow — its parent wasn't a flex container. Adding `flex
-        flex-col` here gives FileDropzone something to grow against,
-        so the chat now fills the available height instead of
-        squashing at the top.
+        Body wrapper is `flex flex-col` so children (e.g. ChatView's outer
+        `flex-1` FileDropzone) have a flex parent to grow against.
       */}
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{children}</div>
       {!isMaximized && (
         <>
-          <ResizeHandle
-            edge="e"
-            onPointerDown={(e) => beginDrag(e, "resize", "e")}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-          />
-          <ResizeHandle
-            edge="s"
-            onPointerDown={(e) => beginDrag(e, "resize", "s")}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-          />
-          <ResizeHandle
-            edge="se"
-            onPointerDown={(e) => beginDrag(e, "resize", "se")}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-          />
+          {/* Edges first (bottom of stack), corners last (top) so corner
+              hit-tests win at the very corner pixel. */}
+          <ResizeHandle {...handleFor("n")} />
+          <ResizeHandle {...handleFor("e")} />
+          <ResizeHandle {...handleFor("s")} />
+          <ResizeHandle {...handleFor("w")} />
+          <ResizeHandle {...handleFor("nw")} />
+          <ResizeHandle {...handleFor("ne")} />
+          <ResizeHandle {...handleFor("sw")} />
+          <ResizeHandle {...handleFor("se")} />
         </>
       )}
     </div>
   );
 }
+
+/* ───────────────────────── resize math ───────────────────────── */
+
+const EDGE_HIT_PX = 8; // px-thick hit zone for each side
+const CORNER_HIT_PX = 16; // square hit zone for each corner
+
+/**
+ * Translate a pointer delta into the next geometry given which edge /
+ * corner is being dragged. Edges that include "n" / "w" need to update
+ * x / y AND shrink h / w in lockstep; "s" / "e" only grow / shrink the
+ * facing dimension. Min-size enforcement clamps the delta so the
+ * shrunk axis can never go below MIN.
+ */
+function resizeFromEdge(edge: ResizeEdge, start: Rect, dx: number, dy: number): Rect {
+  let { x, y, w, h } = start;
+  const hasN = edge === "n" || edge === "ne" || edge === "nw";
+  const hasS = edge === "s" || edge === "se" || edge === "sw";
+  const hasE = edge === "e" || edge === "ne" || edge === "se";
+  const hasW = edge === "w" || edge === "nw" || edge === "sw";
+
+  if (hasW) {
+    // Drag left → x decreases, w increases. Shrinking via W is bounded
+    // by MIN_W: clamp dx so w stays at MIN_W.
+    const dxClamped = Math.min(dx, start.w - MIN_W);
+    x = start.x + dxClamped;
+    w = start.w - dxClamped;
+  }
+  if (hasE) {
+    w = Math.max(MIN_W, start.w + dx);
+  }
+  if (hasN) {
+    const dyClamped = Math.min(dy, start.h - MIN_H);
+    y = start.y + dyClamped;
+    h = start.h - dyClamped;
+  }
+  if (hasS) {
+    h = Math.max(MIN_H, start.h + dy);
+  }
+  return { x, y, w, h };
+}
+
+/* ───────────────────────── handle component ───────────────────────── */
 
 interface ResizeHandleProps {
   edge: ResizeEdge;
@@ -305,59 +339,133 @@ interface ResizeHandleProps {
 }
 
 /**
- * Per-edge resize handle. Sized generously enough to grab without
- * pixel-hunting:
+ * Per-edge / per-corner resize handle. Sized for fast pointer
+ * acquisition without pixel-hunting:
  *
- *   se → 20×20 corner with a visible diagonal grip
- *   e  → 8 px wide × full height (between header and corner)
- *   s  → full width × 8 px tall (between left and corner)
+ *   edges (n/e/s/w) → 8 px-thick along their side, occupying the length
+ *                     between corner reservations
+ *   corners         → 16 × 16 box at each corner, on TOP of the edges
+ *                     so the very corner pixel hits the corner handle
  *
- * The corner sits ON TOP of the edges (z-stacked via render order)
- * so pointer-down at the very corner unambiguously hits the SE handle.
+ * Corners get a visible diagonal hint via a CSS gradient (SE only —
+ * adding gradients to all 4 corners would over-decorate). Edges are
+ * invisible until hovered (cursor change is the affordance).
  */
 function ResizeHandle({ edge, onPointerDown, onPointerMove, onPointerUp }: ResizeHandleProps) {
-  if (edge === "se") {
+  const common = {
+    onPointerDown,
+    onPointerMove,
+    onPointerUp,
+    onPointerCancel: onPointerUp,
+  };
+
+  // Edge handles: thin strip along one side, with the opposite-axis
+  // length running from corner-end to corner-end.
+  if (edge === "n") {
     return (
       <span
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        className="absolute bottom-0 right-0 h-5 w-5 cursor-nwse-resize"
+        {...common}
+        aria-label="Resize from top"
+        className="absolute top-0 cursor-ns-resize"
         style={{
-          background:
-            "linear-gradient(135deg, transparent 50%, var(--canvas-muted) 50%, var(--canvas-muted) 60%, transparent 60%, transparent 70%, var(--canvas-muted) 70%, var(--canvas-muted) 80%, transparent 80%)",
-          opacity: 0.5,
+          left: CORNER_HIT_PX,
+          right: CORNER_HIT_PX,
+          height: EDGE_HIT_PX,
         }}
-        aria-label="Resize from corner"
+      />
+    );
+  }
+  if (edge === "s") {
+    return (
+      <span
+        {...common}
+        aria-label="Resize from bottom"
+        className="absolute bottom-0 cursor-ns-resize"
+        style={{
+          left: CORNER_HIT_PX,
+          right: CORNER_HIT_PX,
+          height: EDGE_HIT_PX,
+        }}
       />
     );
   }
   if (edge === "e") {
     return (
       <span
-        onPointerDown={onPointerDown}
-        onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerUp}
-        // Header is h-9 = 36 px; SE corner is h-5 = 20 px. Sit between them.
-        className="absolute right-0 top-9 w-2 cursor-ew-resize"
-        style={{ bottom: 20 }}
-        aria-label="Resize width"
+        {...common}
+        aria-label="Resize from right"
+        className="absolute right-0 cursor-ew-resize"
+        style={{
+          top: CORNER_HIT_PX,
+          bottom: CORNER_HIT_PX,
+          width: EDGE_HIT_PX,
+        }}
       />
     );
   }
-  // edge === "s"
+  if (edge === "w") {
+    return (
+      <span
+        {...common}
+        aria-label="Resize from left"
+        className="absolute left-0 cursor-ew-resize"
+        style={{
+          top: CORNER_HIT_PX,
+          bottom: CORNER_HIT_PX,
+          width: EDGE_HIT_PX,
+        }}
+      />
+    );
+  }
+
+  // Corner handles: 16×16 box. SE keeps the diagonal grip glyph for
+  // visual continuity with the previous design.
+  const cornerStyle: React.CSSProperties = {
+    width: CORNER_HIT_PX,
+    height: CORNER_HIT_PX,
+  };
+  if (edge === "se") {
+    return (
+      <span
+        {...common}
+        aria-label="Resize from bottom-right"
+        className="absolute bottom-0 right-0 cursor-nwse-resize"
+        style={{
+          ...cornerStyle,
+          background:
+            "linear-gradient(135deg, transparent 50%, var(--canvas-muted) 50%, var(--canvas-muted) 60%, transparent 60%, transparent 70%, var(--canvas-muted) 70%, var(--canvas-muted) 80%, transparent 80%)",
+          opacity: 0.5,
+        }}
+      />
+    );
+  }
+  if (edge === "sw") {
+    return (
+      <span
+        {...common}
+        aria-label="Resize from bottom-left"
+        className="absolute bottom-0 left-0 cursor-nesw-resize"
+        style={cornerStyle}
+      />
+    );
+  }
+  if (edge === "ne") {
+    return (
+      <span
+        {...common}
+        aria-label="Resize from top-right"
+        className="absolute top-0 right-0 cursor-nesw-resize"
+        style={cornerStyle}
+      />
+    );
+  }
+  // edge === "nw"
   return (
     <span
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-      className="absolute bottom-0 left-0 h-2 cursor-ns-resize"
-      // SE corner is w-5 = 20 px; leave room for it.
-      style={{ right: 20 }}
-      aria-label="Resize height"
+      {...common}
+      aria-label="Resize from top-left"
+      className="absolute top-0 left-0 cursor-nwse-resize"
+      style={cornerStyle}
     />
   );
 }

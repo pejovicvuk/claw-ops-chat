@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  FiArrowDown,
   FiArrowLeft,
   FiShield,
   FiChevronDown,
@@ -184,6 +185,15 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
+  // "↓ N new messages" pill state. Counts arrivals while the user is
+  // scrolled up so they don't miss that Claude finished. Coarse-grained
+  // — bumps only on `messages.length` increments, so streaming text into
+  // an existing assistant bubble doesn't tick wildly. Tool_use,
+  // tool_result, and a fresh assistant chunk each create a new array
+  // entry → +1 each. infoMessages (Shift+Tab banners) are user-driven
+  // and intentionally excluded.
+  const [unreadCount, setUnreadCount] = useState(0);
+  const prevMessagesLengthRef = useRef(0);
   // Stagger first-load history messages only; new streaming messages animate
   // without delay. Set captured once when loadingHistory flips false.
   const historyIdsRef = useRef<string[]>([]);
@@ -352,7 +362,23 @@ export function ChatView({
   }, [resumeSessionId, setInitialMessages, setInitialContextUsage]);
 
   useEffect(() => {
-    if (userScrolledUpRef.current) return;
+    const prev = prevMessagesLengthRef.current;
+    const curr = messages.length;
+    prevMessagesLengthRef.current = curr;
+    // Clamped at 0 to ignore wholesale message-array replacements (e.g.
+    // session switch into a shorter chat) — those wipe userScrolledUpRef
+    // separately and shouldn't show as "negative new messages."
+    const delta = Math.max(0, curr - prev);
+
+    if (userScrolledUpRef.current) {
+      // User is reading scrollback — surface the pill instead of yanking.
+      // infoMessages aren't part of `messages`, so triggering Shift+Tab
+      // while scrolled up doesn't bump the count.
+      if (delta > 0) setUnreadCount((c) => c + delta);
+      return;
+    }
+    // At bottom — keep the existing smooth follow-along behavior.
+    setUnreadCount(0);
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, infoMessages]);
 
@@ -370,6 +396,10 @@ export function ChatView({
   //      the DOM so `scrollHeight` reflects them.
   useEffect(() => {
     userScrolledUpRef.current = false;
+    // Drop any unread count carried over from the previous chat — the
+    // new chat is about to be snap-jumped to bottom, so a stale "N new
+    // messages" pill from another session would be misleading.
+    setUnreadCount(0);
     if (loadingHistory) return;
     const id = requestAnimationFrame(() => {
       bottomRef.current?.scrollIntoView({ behavior: "auto" });
@@ -382,6 +412,10 @@ export function ChatView({
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     userScrolledUpRef.current = !atBottom;
+    // Auto-dismiss the unread pill once the user manually scrolls back
+    // into the at-bottom band — they've caught up, the pill would just
+    // linger.
+    if (atBottom) setUnreadCount(0);
   };
 
   /** Memoized sorted merge of chat messages and info messages. */
@@ -849,7 +883,14 @@ export function ChatView({
             the stream, so the modal was redundant. This pill is a
             no-JS-deps fallback: it always shows while a permission is
             pending, and a tap scrolls to the bottom (where the latest
-            inline card lives). */}
+            inline card lives).
+
+            Stacking with the "↓ N new messages" pill below: when both
+            would render, the permission pill wins and the unread pill
+            is suppressed. Permissions block forward progress and are
+            strictly more urgent than "you missed some content" —
+            stacking two pills in the same anchor spot would just make
+            both harder to read. */}
           {(() => {
             const pending = messages.find(
               (m) => m.type === "permission_request" && !m.permissionResolved,
@@ -868,6 +909,28 @@ export function ChatView({
               </button>
             );
           })()}
+
+          {/* "↓ N new messages" pill — appears only when the user is
+            scrolled up AND content has arrived since they scrolled up.
+            Click → smooth-scroll to bottom and reset the count.
+            Suppressed when a permission pill is up (see comment above). */}
+          {unreadCount > 0 &&
+            !messages.some((m) => m.type === "permission_request" && !m.permissionResolved) && (
+              <button
+                type="button"
+                onClick={() => {
+                  bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+                  setUnreadCount(0);
+                }}
+                className="animate-msg-in absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/40 bg-canvas-bg/95 px-3 py-1.5 text-[11px] font-medium shadow-lg backdrop-blur"
+                style={{ color: "var(--accent)" }}
+              >
+                <FiArrowDown size={11} />
+                <span>
+                  {unreadCount} new {unreadCount === 1 ? "message" : "messages"}
+                </span>
+              </button>
+            )}
         </div>
 
         <SetupGuard forceShow={setupRequired}>

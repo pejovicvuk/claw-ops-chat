@@ -222,7 +222,7 @@ export function ChatInput({
         }`}
       >
         <div
-          className={`glass-input flex flex-col rounded-2xl transition-all duration-300 ease-out ${
+          className={`glass-input flex flex-col rounded-[28px] transition-all duration-300 ease-out ${
             hasContent
               ? "-translate-y-1 px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
               : "px-2.5 py-1.5 focus-within:-translate-y-1 focus-within:px-3 focus-within:py-2 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]"

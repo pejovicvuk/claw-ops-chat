@@ -4,9 +4,11 @@ import { useCallback } from "react";
 import { FiPlus, FiRefreshCw, FiSettings } from "react-icons/fi";
 import { SessionList } from "@/components/chat/session-list";
 import { SidebarTabs, type SidebarMode } from "./sidebar-tabs";
-import { ReportsList } from "./reports-list";
+import { ReportsList } from "@/components/reports/reports-list";
+import { ProjectsList } from "@/components/projects/projects-list";
 import { useUrlState } from "@/lib/use-url-state";
 import { useReportRuns } from "@/lib/use-reports";
+import { useProjects } from "@/lib/use-projects";
 import type { ChatSession } from "@/lib/types";
 
 interface SidebarProps {
@@ -43,18 +45,26 @@ export function Sidebar({
 }: SidebarProps) {
   const { params, setParam } = useUrlState();
   // Derive mode from BOTH ?view and ?sidebar so any URL that targets the
-  // reports area (e.g. a deep-linked report runId) consistently shows the
-  // reports list instead of silently falling back to chats.
+  // reports/projects area (e.g. a deep-linked report runId or project
+  // slug) consistently shows the right list instead of silently falling
+  // back to chats.
+  const view = params.get("view");
+  const sidebarParam = params.get("sidebar");
   const mode: SidebarMode =
-    params.get("view") === "reports" || params.get("sidebar") === "reports" ? "reports" : "chats";
+    view === "projects" || sidebarParam === "projects"
+      ? "projects"
+      : view === "reports" || sidebarParam === "reports"
+        ? "reports"
+        : "chats";
   const selectedReportId = params.get("report");
+  const selectedProjectSlug = params.get("project");
 
   const openSettings = useCallback(() => setParam("settings", "main"), [setParam]);
 
   // Flip to fast polling while the user is looking at the reports list or
   // the reports view overall — 3s lag vs 30s lag makes running indicators
   // feel live without any WebSocket plumbing.
-  const fastPoll = mode === "reports" || params.get("view") === "reports";
+  const fastPoll = mode === "reports" || view === "reports";
   const {
     feed,
     loading: reportsLoading,
@@ -62,6 +72,8 @@ export function Sidebar({
   } = useReportRuns({
     fast: fastPoll,
   });
+
+  const { projects, loading: projectsLoading, refresh: refreshProjects } = useProjects();
 
   const handleNewReport = useCallback(() => {
     // Navigate to Reports view + open the New Job drawer. The
@@ -80,29 +92,53 @@ export function Sidebar({
     [setParam],
   );
 
+  const handleNewProject = useCallback(() => {
+    setParam("view", "projects");
+    setParam("sidebar", "projects");
+    setParam("newProject", "1");
+  }, [setParam]);
+
+  const handleSelectProject = useCallback(
+    (slug: string) => {
+      setParam("view", "projects");
+      setParam("sidebar", "projects");
+      setParam("project", slug);
+    },
+    [setParam],
+  );
+
   const handleChangeMode = useCallback(
     (next: SidebarMode) => {
+      // Clicking a tab must flip BOTH the sidebar list AND the main pane,
+      // and clear params scoped to the OTHER sections so deep-link state
+      // doesn't bleed across (e.g. a stale ?report= surviving into
+      // Projects view).
       if (next === "reports") {
-        // Clicking the Reports tab must flip BOTH the sidebar list AND
-        // the main pane — the previous behavior (only setting ?sidebar)
-        // left the main pane on chat, which users correctly perceived as
-        // broken: "I clicked Reports but nothing happened."
         setParam("sidebar", "reports");
         setParam("view", "reports");
+        setParam("project", null);
+        setParam("newProject", null);
+      } else if (next === "projects") {
+        setParam("sidebar", "projects");
+        setParam("view", "projects");
+        setParam("report", null);
+        setParam("newReport", null);
       } else {
-        // Leaving reports clears every reports-scoped URL param so a
-        // stale ?report=… doesn't resurrect on the next switch-back.
         setParam("sidebar", null);
         setParam("view", null);
         setParam("report", null);
         setParam("newReport", null);
+        setParam("project", null);
+        setParam("newProject", null);
       }
     },
     [setParam],
   );
 
-  const handleRefresh = mode === "chats" ? onRefreshSessions : refreshReports;
-  const handlePlus = mode === "chats" ? onNewChat : handleNewReport;
+  const handleRefresh =
+    mode === "chats" ? onRefreshSessions : mode === "reports" ? refreshReports : refreshProjects;
+  const handlePlus =
+    mode === "chats" ? onNewChat : mode === "reports" ? handleNewReport : handleNewProject;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -113,7 +149,13 @@ export function Sidebar({
             type="button"
             onClick={handleRefresh}
             className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-            aria-label={mode === "chats" ? "Refresh chats" : "Refresh reports"}
+            aria-label={
+              mode === "chats"
+                ? "Refresh chats"
+                : mode === "reports"
+                  ? "Refresh reports"
+                  : "Refresh projects"
+            }
           >
             <FiRefreshCw size={13} />
           </button>
@@ -121,7 +163,9 @@ export function Sidebar({
             type="button"
             onClick={handlePlus}
             className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-accent hover:bg-canvas-surface-hover"
-            aria-label={mode === "chats" ? "New chat" : "New report"}
+            aria-label={
+              mode === "chats" ? "New chat" : mode === "reports" ? "New report" : "New project"
+            }
           >
             <FiPlus size={15} />
           </button>
@@ -129,7 +173,7 @@ export function Sidebar({
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-2">
-        {mode === "chats" ? (
+        {mode === "chats" && (
           <SessionList
             selectedSessionId={selectedSessionId}
             sessions={sessions}
@@ -142,12 +186,21 @@ export function Sidebar({
             hideHeader
             hideFooter
           />
-        ) : (
+        )}
+        {mode === "reports" && (
           <ReportsList
             runs={feed.runs}
             selectedRunId={selectedReportId}
             onSelect={handleSelectReport}
             loading={reportsLoading}
+          />
+        )}
+        {mode === "projects" && (
+          <ProjectsList
+            projects={projects}
+            selectedSlug={selectedProjectSlug}
+            onSelect={handleSelectProject}
+            loading={projectsLoading}
           />
         )}
       </div>

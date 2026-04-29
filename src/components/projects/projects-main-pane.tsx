@@ -9,7 +9,7 @@ import { deleteItemApi, type ItemMeta } from "@/lib/items-api";
 import { ProjectsDashboard } from "./projects-dashboard";
 import { ItemsList } from "./items-list";
 import { AddItemTray } from "./add-item-tray";
-import { ItemDetailPlaceholder } from "./item-detail-placeholder";
+import { ItemCanvas } from "@/components/canvas/item-canvas";
 
 interface ProjectsMainPaneProps {
   onOpenSessions?: () => void;
@@ -20,7 +20,7 @@ interface ProjectsMainPaneProps {
  *
  *   (no ?project)              → ProjectsDashboard (card grid + create flow)
  *   ?project=<slug>             → ProjectDetail (items list + add-item tray)
- *   ?project=<slug>&item=<slug> → ItemDetailPlaceholder
+ *   ?project=<slug>&item=<slug> → ItemCanvas (per-item draggable window canvas)
  */
 export function ProjectsMainPane({ onOpenSessions }: ProjectsMainPaneProps) {
   const { params } = useUrlState();
@@ -104,10 +104,9 @@ function ProjectDetail({
 
   if (itemSlug) {
     return (
-      <ItemDetailPlaceholder
+      <ItemCanvas
         projectSlug={slug}
         itemSlug={itemSlug}
-        projectDisplayName={project?.displayName ?? null}
         onOpenSessions={onOpenSessions}
       />
     );

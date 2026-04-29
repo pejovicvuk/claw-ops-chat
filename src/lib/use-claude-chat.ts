@@ -349,8 +349,6 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         const resolvedId = evt.id as string;
         if (resolvedId) {
           resolvedPermissionsRef.current.add(resolvedId);
-          // eslint-disable-next-line react-hooks/immutability -- persistResolved is a useCallback declared later in the file; the closure only runs at event time (long after render), so the TDZ warning is a false positive here.
-          persistResolved();
           setMessages((prev) =>
             prev.map((m) => {
               if (m.permissionId === resolvedId) return { ...m, permissionResolved: true };
@@ -544,39 +542,15 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     }
   }, []);
 
-  /* ── Load/persist resolved-permission IDs per session ── */
-  const resolvedStorageKey = sessionId ? `claw-chat-resolved:v1:${sessionId}` : null;
-
-  const persistResolved = useCallback(() => {
-    if (!resolvedStorageKey) return;
-    try {
-      sessionStorage.setItem(
-        resolvedStorageKey,
-        JSON.stringify(Array.from(resolvedPermissionsRef.current)),
-      );
-    } catch {
-      /* storage full / private mode — degrade gracefully */
-    }
-  }, [resolvedStorageKey]);
-
-  // Hydrate resolved set when sessionId changes (new chat / load chat).
+  // Reset the in-memory resolved set when the active session changes —
+  // the set is purely a transient guard against the same prompt arriving
+  // twice within a single connection (e.g. live broadcast races the
+  // history replay milliseconds apart). The server's `pending_approvals`
+  // snapshot is the cross-tab / cross-device source of truth, so we
+  // intentionally do not persist this set anywhere.
   useEffect(() => {
-    if (!resolvedStorageKey) {
-      resolvedPermissionsRef.current = new Set();
-      return;
-    }
-    try {
-      const raw = sessionStorage.getItem(resolvedStorageKey);
-      if (raw) {
-        const arr = JSON.parse(raw) as string[];
-        resolvedPermissionsRef.current = new Set(Array.isArray(arr) ? arr : []);
-      } else {
-        resolvedPermissionsRef.current = new Set();
-      }
-    } catch {
-      resolvedPermissionsRef.current = new Set();
-    }
-  }, [resolvedStorageKey]);
+    resolvedPermissionsRef.current = new Set();
+  }, [sessionId]);
 
   /* ── Per-session mode + elapsed-timer sync ── */
   // Remember the last sessionId we saw so we can detect the "null → real"
@@ -812,7 +786,6 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         message: opts?.message,
       });
       resolvedPermissionsRef.current.add(planId);
-      persistResolved();
 
       const outcome: NonNullable<ChatMessage["planOutcome"]> = approve
         ? opts?.newMode === "default"
@@ -835,7 +808,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         ),
       );
     },
-    [sendToServer, persistResolved],
+    [sendToServer],
   );
 
   /* ── Permission response ── */
@@ -849,12 +822,12 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         message: message || undefined,
       });
 
-      // Remember locally so a subsequent refresh doesn't re-show this
-      // prompt if the server's eventHistory replay still contains it
-      // (e.g. during a server restart that wiped pendingRequests but
-      // the client caught the request in-flight).
+      // In-memory dedup so a milliseconds-apart live broadcast and
+      // history replay during a flaky reconnect can't re-surface the
+      // prompt we just answered. Cross-tab / cross-device truth comes
+      // from the server's `permission_resolved` broadcast and the
+      // `pending_approvals` snapshot on connect — no need to persist.
       resolvedPermissionsRef.current.add(permissionId);
-      persistResolved();
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -874,7 +847,6 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     (askId: string, answers: Record<string, string | string[]>) => {
       sendToServer({ type: "ask_response", id: askId, answers });
       resolvedPermissionsRef.current.add(askId);
-      persistResolved();
       setMessages((prev) => prev.map((m) => (m.askId === askId ? { ...m, askResolved: true } : m)));
       setStatus("thinking");
     },

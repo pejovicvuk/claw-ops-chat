@@ -115,36 +115,39 @@ function ToastRow({ item }: { item: ToastItem }) {
     dismiss(item.id);
   };
 
+  // Solid background + white foreground for every kind. The previous
+  // info variant used `bg-canvas-surface` (theme-aware) with hardcoded
+  // `text-white`, which made notification toasts read as white-on-white
+  // in light mode. Using a solid Tailwind color keeps the contrast high
+  // and identical across light/dark themes — same approach as error /
+  // success — and makes the in-app notification surface visible at a
+  // glance whichever theme the user is on.
   const color =
-    item.kind === "error"
-      ? "bg-red-600"
-      : item.kind === "success"
-        ? "bg-green-600"
-        : "bg-canvas-surface border border-canvas-border";
+    item.kind === "error" ? "bg-red-600" : item.kind === "success" ? "bg-green-600" : "bg-blue-600";
   const Icon = item.kind === "error" ? FiAlertTriangle : item.kind === "success" ? FiCheck : FiInfo;
 
   return (
     <div
-      className={`animate-menu-in flex min-w-0 max-w-[360px] items-center rounded-full shadow-lg ${color}`}
+      className={`animate-menu-in flex min-w-0 max-w-[380px] items-center rounded-full shadow-xl ring-1 ring-black/10 ${color}`}
     >
       <button
         type="button"
         onClick={onPrimary}
-        className="flex min-w-0 flex-1 items-center gap-2 rounded-l-full px-3 py-1.5 text-left"
+        className="flex min-w-0 flex-1 items-center gap-2 rounded-l-full px-3.5 py-2 text-left"
         aria-label={item.onClick ? "Open" : "Dismiss notification"}
       >
-        <Icon size={13} className="shrink-0 text-white" />
-        <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-white">
+        <Icon size={14} className="shrink-0 text-white" />
+        <span className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white">
           {item.message}
         </span>
       </button>
       <button
         type="button"
         onClick={onDismiss}
-        className="rounded-r-full px-2 py-1.5 text-white/70 hover:text-white"
+        className="rounded-r-full px-2.5 py-2 text-white/80 hover:text-white"
         aria-label="Dismiss notification"
       >
-        <FiX size={11} className="shrink-0" />
+        <FiX size={12} className="shrink-0" />
       </button>
     </div>
   );

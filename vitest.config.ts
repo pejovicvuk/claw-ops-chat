@@ -23,5 +23,10 @@ export default defineConfig({
     env: {
       NODE_ENV: "test",
     },
+    // Runs once per worker before any test file is imported. We use it
+    // to set CLAUDE_CWD so safe-path.ts picks up a sandbox BASE_DIR
+    // instead of production's permissive root default. See
+    // vitest.setup.ts for the why.
+    setupFiles: ["./vitest.setup.ts"],
   },
 });

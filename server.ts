@@ -27,7 +27,6 @@ import {
   type SessionStatus,
 } from "./src/lib/session-status-store";
 import {
-  deleteSessionFile,
   loadAllSessions,
   persistSession,
   type PersistedSession,

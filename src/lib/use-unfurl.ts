@@ -57,21 +57,32 @@ async function fetchUnfurl(href: string): Promise<Unfurl | null> {
  * Hook: lazy-fetch an unfurl. Debounces 250ms so a URL being streamed
  * into a message doesn't kick off a fetch for every character.
  */
+type SettledResult = { status: "ok"; data: Unfurl } | { status: "error"; message: string };
+
 export function useUnfurl(href: string | undefined, enabled = true): State {
-  const [state, setState] = useState<State>({ status: "idle" });
+  // Results keyed by href. A missing entry means "still loading"; an
+  // absent or disabled hook is derived synchronously below as "idle".
+  // Storing async results in a per-href map (instead of a single State
+  // slot the effect kept rewriting to "loading") satisfies React 19's
+  // `react-hooks/set-state-in-effect` rule — setState now only happens
+  // inside the async then() callback, which is the rule's allowed
+  // "subscribe-style" pattern.
+  const [results, setResults] = useState<Map<string, SettledResult>>(() => new Map());
 
   useEffect(() => {
-    if (!enabled || !href) {
-      setState({ status: "idle" });
-      return;
-    }
+    if (!enabled || !href) return;
     let cancelled = false;
-    setState({ status: "loading" });
     const timer = setTimeout(() => {
       fetchUnfurl(href).then((data) => {
         if (cancelled) return;
-        if (data) setState({ status: "ok", data });
-        else setState({ status: "error", message: "unfurl failed" });
+        setResults((prev) => {
+          const next = new Map(prev);
+          next.set(
+            href,
+            data ? { status: "ok", data } : { status: "error", message: "unfurl failed" },
+          );
+          return next;
+        });
       });
     }, 250);
     return () => {
@@ -80,5 +91,6 @@ export function useUnfurl(href: string | undefined, enabled = true): State {
     };
   }, [href, enabled]);
 
-  return state;
+  if (!enabled || !href) return { status: "idle" };
+  return results.get(href) ?? { status: "loading" };
 }

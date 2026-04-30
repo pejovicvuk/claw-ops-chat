@@ -16,6 +16,33 @@ export function formatRelativeTime(ts: number): string {
 }
 
 /**
+ * Compact elapsed-duration formatter for HUD-style live counters. Receives a
+ * positive millisecond delta (typically `Date.now() - sessionStartedAt`) and
+ * collapses it to:
+ *
+ *   < 60s   → "12s"
+ *   < 60m   → "5m 23s"
+ *   < 24h   → "2h 14m"
+ *   ≥ 24h   → "1d 4h"
+ *
+ * Negative or non-finite inputs return "0s" so the HUD never flashes a
+ * misleading huge number on the very first render before the timer seed
+ * arrives over the WebSocket.
+ */
+export function formatElapsed(deltaMs: number): string {
+  if (!Number.isFinite(deltaMs) || deltaMs <= 0) return "0s";
+  const totalSec = Math.floor(deltaMs / 1000);
+  const days = Math.floor(totalSec / 86400);
+  const hours = Math.floor((totalSec % 86400) / 3600);
+  const mins = Math.floor((totalSec % 3600) / 60);
+  const secs = totalSec % 60;
+  if (days >= 1) return `${days}d ${hours}h`;
+  if (hours >= 1) return `${hours}h ${mins}m`;
+  if (mins >= 1) return `${mins}m ${secs}s`;
+  return `${secs}s`;
+}
+
+/**
  * Forward-looking variant of formatRelativeTime — collapses "time until X"
  * to a short phrase like "in 4h 12m" / "in 3d 5h" / "in <1m".
  *

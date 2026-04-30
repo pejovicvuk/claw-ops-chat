@@ -29,6 +29,40 @@ interface HudPopupProps {
   status: ClaudeStatus;
   /** Number of user-sent text messages in the current session — drives the Turns counter. */
   turnCount: number;
+  /**
+   * Per-session model override. `null` means Auto (let the SDK use the
+   * subscription default; the active model still shows beside the
+   * dropdown via `contextUsage.model`).
+   */
+  model: string | null;
+  setModel: (next: string | null) => void;
+}
+
+/**
+ * Picker options. We surface the SDK's stable family aliases rather than
+ * concrete versions so the picker keeps working when Anthropic ships a
+ * new minor (e.g. Sonnet 4.6 → 4.7) without a code change. Empty string
+ * = Auto (no override; the SDK uses whatever default the subscription
+ * comes with).
+ */
+const MODEL_OPTIONS = [
+  { value: "", label: "Auto" },
+  { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" },
+  { value: "haiku", label: "Haiku" },
+];
+
+/**
+ * Map the SDK's full model id (e.g. `claude-opus-4-7-20260301`) to its
+ * family alias so the dropdown can show what's actually running when the
+ * user has Auto selected. Returns null if we can't classify it.
+ */
+function modelFamily(id: string | null | undefined): "opus" | "sonnet" | "haiku" | null {
+  if (!id) return null;
+  if (id.includes("opus")) return "opus";
+  if (id.includes("sonnet")) return "sonnet";
+  if (id.includes("haiku")) return "haiku";
+  return null;
 }
 
 /**
@@ -55,6 +89,8 @@ export function HudPopup({
   activeTool,
   status,
   turnCount,
+  model,
+  setModel,
 }: HudPopupProps) {
   const [cache, setCache] = useState<RateLimitsCache | null>(null);
   const [now, setNow] = useState(() => Date.now());
@@ -95,11 +131,16 @@ export function HudPopup({
   // Derived session values. All gracefully handle the "no data yet" state
   // so the very first render of a brand-new chat doesn't crash or flash
   // bogus zeros.
-  const modelLabel = (() => {
+  const runningModelLabel = (() => {
     const r = ratesFor(contextUsage?.model);
     if (r) return r.label;
-    return contextUsage?.model ?? "—";
+    return contextUsage?.model ?? null;
   })();
+  // When the user has Auto selected we surface the actual family the SDK
+  // chose to the right of the dropdown (e.g. "Auto · Sonnet 4.6") so the
+  // picker still answers the question "what am I running right now?"
+  // without forcing the user to remember the SDK's default.
+  const autoHint = !model && runningModelLabel ? runningModelLabel : null;
   const elapsed = sessionStartedAt ? formatElapsed(now - sessionStartedAt) : "—";
   const isToolRunning = status === "tool_running" && activeTool;
   const cost = contextUsage
@@ -118,7 +159,38 @@ export function HudPopup({
         Session
       </p>
       <div className="space-y-1.5">
-        <SessionRow label="Model" value={modelLabel} />
+        <SessionRow
+          label="Model"
+          value={
+            <span className="inline-flex items-center gap-1.5">
+              <select
+                value={model ?? ""}
+                onChange={(e) => setModel(e.target.value || null)}
+                aria-label="Model"
+                className="rounded-md border border-canvas-border bg-canvas-bg px-1.5 py-0.5 text-[11px] font-medium text-canvas-fg outline-none transition-colors hover:bg-canvas-surface-hover focus:border-accent"
+              >
+                {MODEL_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              {autoHint && (
+                <span className="text-[10px] text-canvas-muted" title="Currently running">
+                  · {autoHint}
+                </span>
+              )}
+              {model && runningModelLabel && modelFamily(contextUsage?.model) !== model && (
+                <span
+                  className="text-[10px] text-canvas-muted"
+                  title="The change applies on the next turn"
+                >
+                  · pending
+                </span>
+              )}
+            </span>
+          }
+        />
         {isToolRunning && (
           <SessionRow
             label="Active tool"

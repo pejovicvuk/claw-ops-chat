@@ -26,9 +26,6 @@ export const SPAWN_STAGGER = 24;
 /** Top toolbar height, in px. */
 export const TOOLBAR_H = 48;
 
-/** Bottom dock strip height, in px. Visible iff at least one window is minimized on the current page. */
-export const DOCK_H = 44;
-
 /** Discriminator for window kinds. Add a new variant to `WindowState` below alongside any new entry here. */
 export type WindowKind = "chat" | "preview";
 

@@ -119,7 +119,7 @@ describe("extractContextWindow", () => {
     expect(extractContextWindow({})).toBeNull();
   });
 
-  it("extracts the contextWindow of the first model entry", () => {
+  it("extracts the contextWindow from a single-model payload", () => {
     const result = extractContextWindow({
       "claude-sonnet-4-5-20250929": {
         contextWindow: 1_000_000,
@@ -150,5 +150,79 @@ describe("extractContextWindow", () => {
   it("returns null when the first entry's value is not an object", () => {
     expect(extractContextWindow({ "claude-x": null })).toBeNull();
     expect(extractContextWindow({ "claude-x": "garbage" })).toBeNull();
+  });
+
+  // ── Preferred-model hint + multi-model handling ────────────────
+  // result.modelUsage frequently contains BOTH the user's main model
+  // and Haiku (from a Task subagent). Picking arbitrarily was bug #2
+  // behind the "95 % of 200 K" symptom — when Haiku appeared first,
+  // the cap would be set to 200 K and a legitimate 190 K Sonnet
+  // session would render as 95 %.
+
+  it("returns the entry matching preferredModelId when present", () => {
+    const result = extractContextWindow(
+      {
+        "claude-haiku-4-5-20251001": { contextWindow: 200_000 },
+        "claude-sonnet-4-5-20250929": { contextWindow: 1_000_000 },
+      },
+      "claude-sonnet-4-5-20250929",
+    );
+    expect(result).toEqual({
+      model: "claude-sonnet-4-5-20250929",
+      contextWindow: 1_000_000,
+    });
+  });
+
+  it("falls back to the largest-window entry when preferredModelId doesn't match", () => {
+    const result = extractContextWindow(
+      {
+        "claude-haiku-4-5-20251001": { contextWindow: 200_000 },
+        "claude-sonnet-4-5-20250929": { contextWindow: 1_000_000 },
+      },
+      "claude-some-other-model-not-in-payload",
+    );
+    expect(result).toEqual({
+      model: "claude-sonnet-4-5-20250929",
+      contextWindow: 1_000_000,
+    });
+  });
+
+  it("falls back to the largest-window entry when no hint is given", () => {
+    // Reverses insertion order on purpose: Haiku first means the old
+    // Object.entries[0] code would have picked it. The largest-window
+    // fallback must still return Sonnet.
+    const result = extractContextWindow({
+      "claude-haiku-4-5-20251001": { contextWindow: 200_000 },
+      "claude-sonnet-4-5-20250929": { contextWindow: 1_000_000 },
+    });
+    expect(result).toEqual({
+      model: "claude-sonnet-4-5-20250929",
+      contextWindow: 1_000_000,
+    });
+  });
+
+  it("REGRESSION: subagent Haiku entry no longer hijacks the cap when Sonnet is the active model", () => {
+    // Worst-case payload from the real-world bug: Haiku entry first,
+    // both have positive contextWindow, the user's session is Sonnet.
+    const payload = {
+      "claude-haiku-4-5-20251001": { contextWindow: 200_000, inputTokens: 5_000 },
+      "claude-sonnet-4-5-20250929": { contextWindow: 1_000_000, inputTokens: 195_000 },
+    };
+    const result = extractContextWindow(payload, "claude-sonnet-4-5-20250929");
+    expect(result?.contextWindow).toBe(1_000_000);
+    // Confirms the bug is gone: a 195 K Sonnet snapshot would now be
+    // 19 % (195/1000), not 97 % (195/200).
+    const usedSnapshot = 195_000;
+    const correctPercent = Math.round((usedSnapshot / result!.contextWindow) * 100);
+    expect(correctPercent).toBe(20); // ~19.5 → rounds to 20
+  });
+
+  it("ignores entries with invalid contextWindow when finding the largest", () => {
+    const result = extractContextWindow({
+      bad: { contextWindow: 0 },
+      good: { contextWindow: 1_000_000 },
+      malformed: "not-an-object",
+    });
+    expect(result).toEqual({ model: "good", contextWindow: 1_000_000 });
   });
 });

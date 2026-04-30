@@ -36,6 +36,7 @@ export function WindowHost({ descriptor, onSessionCreated, onStateChange }: Wind
             port,
             path: previewState.path,
             quality: previewState.quality,
+            muted: previewState.muted,
           })
         }
         onPathChange={(path) =>
@@ -44,6 +45,7 @@ export function WindowHost({ descriptor, onSessionCreated, onStateChange }: Wind
             port: previewState.port,
             path,
             quality: previewState.quality,
+            muted: previewState.muted,
           })
         }
         onQualityChange={(quality) =>
@@ -52,6 +54,16 @@ export function WindowHost({ descriptor, onSessionCreated, onStateChange }: Wind
             port: previewState.port,
             path: previewState.path,
             quality,
+            muted: previewState.muted,
+          })
+        }
+        onMutedChange={(muted) =>
+          onStateChange?.(descriptor.id, {
+            kind: "preview",
+            port: previewState.port,
+            path: previewState.path,
+            quality: previewState.quality,
+            muted,
           })
         }
       />

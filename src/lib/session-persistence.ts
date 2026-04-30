@@ -22,6 +22,13 @@ export interface PersistedSession {
   status: string;
   permissionMode: string;
   effort: string | null;
+  /**
+   * Per-session model override. `null` (or absent on older session
+   * files) means "Auto" — let the SDK use the subscription default.
+   * Otherwise one of the SDK's family aliases: `opus`/`sonnet`/`haiku`.
+   * Optional so older session files load without a migration.
+   */
+  model?: string | null;
   claudeSessionId: string | null;
   sessionCwd: string | null;
   /**

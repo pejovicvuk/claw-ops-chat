@@ -213,6 +213,14 @@ interface ChatSession {
   sessionAllowedTools: Set<string>;
   permissionMode: string;
   effort: string | null;
+  /**
+   * Per-session model override. `null` means "Auto" — let the SDK pick
+   * its default for the user's subscription. Otherwise one of the SDK's
+   * model aliases (`opus` / `sonnet` / `haiku`) which the SDK resolves
+   * to the latest concrete version on each turn — durable across
+   * Anthropic version bumps without server code changes.
+   */
+  model: string | null;
   requestCounter: number;
   accumulatedText: string;
   /** Rate limiting: message timestamps in the current sliding window. */
@@ -232,6 +240,7 @@ interface ChatSession {
   currentQuery: {
     interrupt?: () => Promise<void>;
     setPermissionMode?: (mode: string) => Promise<void>;
+    setModel?: (model?: string) => Promise<void>;
   } | null;
   /**
    * Set to true when the `stop` client message aborts the current turn.
@@ -390,6 +399,7 @@ class SessionManager {
         sessionAllowedTools: new Set(),
         permissionMode: "default",
         effort: null,
+        model: null,
         requestCounter: 0,
         accumulatedText: "",
         messageTimestamps: [],
@@ -471,6 +481,7 @@ class SessionManager {
       sessionAllowedTools: new Set(persisted.sessionAllowedTools ?? []),
       permissionMode: persisted.permissionMode || "default",
       effort: persisted.effort ?? null,
+      model: persisted.model ?? null,
       requestCounter: 0,
       accumulatedText: persisted.accumulatedText ?? "",
       messageTimestamps: [],
@@ -555,6 +566,7 @@ class SessionManager {
       status: session.status,
       permissionMode: session.permissionMode,
       effort: session.effort,
+      model: session.model,
       claudeSessionId: session.claudeSessionId,
       sessionCwd: session.sessionCwd,
       branchName: session.branchName,
@@ -989,6 +1001,35 @@ class SessionManager {
       return;
     }
 
+    if (type === "set_model") {
+      // Allow only the SDK's stable family aliases. The SDK resolves these
+      // to the latest concrete version (e.g. `sonnet` → claude-sonnet-4-6
+      // today, claude-sonnet-4-7 tomorrow) so picker values keep working
+      // across Anthropic version bumps without a server change. Anything
+      // else (including "" for Auto) becomes null and the SDK falls back
+      // to its subscription default.
+      const raw = typeof msg.model === "string" ? msg.model : "";
+      const allowed = new Set(["opus", "sonnet", "haiku"]);
+      session.model = allowed.has(raw) ? raw : null;
+      // Live mid-turn switch. Without `query.setModel()` the new value
+      // only takes effect on the NEXT turn — calling it here lets the
+      // currently-running query (if any) pick up the change immediately.
+      // Fire-and-forget: session state + UI stay correct even if the
+      // SDK call lands after the query has already finished.
+      const setModelOnQuery = session.currentQuery?.setModel;
+      if (typeof setModelOnQuery === "function") {
+        try {
+          void setModelOnQuery.call(session.currentQuery, session.model ?? undefined).catch(() => {
+            /* SDK rejected — we already updated our own state */
+          });
+        } catch {
+          /* synchronous throw — ignore */
+        }
+      }
+      this.broadcast(session, { type: "model_changed", model: session.model });
+      return;
+    }
+
     if (type === "set_mode") {
       this.setSessionMode(session, (msg.mode as string) || "default", "client");
       return;
@@ -1351,6 +1392,10 @@ class SessionManager {
         return { behavior: "deny", message: response.message || "User denied this action" };
       },
       ...(session.effort ? { effort: session.effort } : {}),
+      // Per-session model override. `null` → omit the key so the SDK uses
+      // its subscription default. Aliases (`opus`/`sonnet`/`haiku`) are
+      // resolved by the SDK to the latest concrete version on each call.
+      ...(session.model ? { model: session.model } : {}),
       ...(() => {
         // Fresh read per-turn so MCP servers the user just wired up in
         // Settings (Google, Bitbucket, Notion, etc.) land on their very

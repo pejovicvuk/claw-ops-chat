@@ -197,12 +197,14 @@ export function ChatView({
     contextUsage,
     permissionMode,
     effort,
+    model,
     sessionStartedAt,
     respondPermission,
     respondQuestion,
     respondPlan,
     setPermissionMode,
     setEffort,
+    setModel,
     reconnect,
     setInitialMessages,
     setInitialContextUsage,
@@ -590,6 +592,8 @@ export function ChatView({
               contextUsage={contextUsage}
               sessionStartedAt={sessionStartedAt}
               turnCount={turnCount}
+              model={model}
+              setModel={setModel}
               reconnect={reconnect}
             />
           </div>
@@ -681,6 +685,8 @@ export function ChatView({
                 contextUsage={contextUsage}
                 sessionStartedAt={sessionStartedAt}
                 turnCount={turnCount}
+                model={model}
+                setModel={setModel}
                 reconnect={reconnect}
               />
             </div>

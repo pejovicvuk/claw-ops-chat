@@ -22,6 +22,11 @@ function effortStorageKey(sessionId: string | null): string {
   return sessionId ? `claw-chat-effort:${sessionId}:v1` : "claw-chat-effort:new:v1";
 }
 
+/** Per-session localStorage key for the chat's model override. Empty string means Auto (SDK default). */
+function modelStorageKey(sessionId: string | null): string {
+  return sessionId ? `claw-chat-model:${sessionId}:v1` : "claw-chat-model:new:v1";
+}
+
 export interface ContextUsage {
   used: number;
   max: number;
@@ -60,6 +65,18 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     if (typeof window === "undefined") return null;
     try {
       return localStorage.getItem(effortStorageKey(sessionId)) || null;
+    } catch {
+      return null;
+    }
+  });
+  // Per-session model family override ("opus" | "sonnet" | "haiku" | null).
+  // null means Auto = let the SDK pick the subscription default. Persisted
+  // under modelStorageKey(sessionId); the empty string in storage round-trips
+  // to null exactly like effort.
+  const [model, setModelState] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      return localStorage.getItem(modelStorageKey(sessionId)) || null;
     } catch {
       return null;
     }
@@ -165,6 +182,21 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         setEffortState(next);
         try {
           localStorage.setItem(effortStorageKey(sessionId), next ?? "");
+        } catch {
+          /* ignore storage errors */
+        }
+        return;
+      }
+
+      if (type === "model_changed") {
+        // Authoritative model update from the server. Mirrors
+        // `effort_changed` exactly: server echoes our own `set_model` and
+        // also broadcasts when another tab on this session changes it,
+        // so we just sync local state + persist.
+        const next = typeof evt.model === "string" && evt.model ? evt.model : null;
+        setModelState(next);
+        try {
+          localStorage.setItem(modelStorageKey(sessionId), next ?? "");
         } catch {
           /* ignore storage errors */
         }
@@ -567,18 +599,24 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     setSessionStartedAt(null);
     try {
       if (prev === null && sessionId !== null) {
-        // New chat just got a real id — carry the user's current mode
-        // and effort choices onto the real key and clear the transient slot.
+        // New chat just got a real id — carry the user's current mode,
+        // effort and model choices onto the real key and clear the
+        // transient "new" slot.
         localStorage.setItem(modeStorageKey(sessionId), permissionMode);
         localStorage.removeItem(modeStorageKey(null));
         localStorage.setItem(effortStorageKey(sessionId), effort ?? "");
         localStorage.removeItem(effortStorageKey(null));
+        localStorage.setItem(modelStorageKey(sessionId), model ?? "");
+        localStorage.removeItem(modelStorageKey(null));
       } else {
-        // Switched to a different session — load its persisted mode + effort.
+        // Switched to a different session — load its persisted mode,
+        // effort and model.
         const saved = localStorage.getItem(modeStorageKey(sessionId)) || "default";
         setPermissionModeState(saved);
         const savedEffort = localStorage.getItem(effortStorageKey(sessionId)) || null;
         setEffortState(savedEffort);
+        const savedModel = localStorage.getItem(modelStorageKey(sessionId)) || null;
+        setModelState(savedModel);
       }
     } catch {
       /* ignore storage failures */
@@ -887,6 +925,21 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     [sendToServer, sessionId],
   );
 
+  const setModel = useCallback(
+    (next: string | null) => {
+      // Identical pattern to setEffort: optimistic local + persist + ship,
+      // server echoes `model_changed` which our handler treats as a no-op.
+      setModelState(next);
+      try {
+        localStorage.setItem(modelStorageKey(sessionId), next ?? "");
+      } catch {
+        /* ignore */
+      }
+      sendToServer({ type: "set_model", model: next });
+    },
+    [sendToServer, sessionId],
+  );
+
   /* ── Reconnect ── */
   const reconnect = useCallback(() => {
     reconnectAttemptRef.current = 0;
@@ -948,6 +1001,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     contextUsage,
     permissionMode,
     effort,
+    model,
     sessionStartedAt,
     sendMessage,
     stopGeneration,
@@ -956,6 +1010,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     respondPlan,
     setPermissionMode,
     setEffort,
+    setModel,
     reconnect,
     setInitialMessages,
     setInitialContextUsage,

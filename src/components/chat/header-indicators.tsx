@@ -26,6 +26,9 @@ interface HeaderIndicatorsProps {
   contextUsage: ContextUsage | null;
   sessionStartedAt: number | null;
   turnCount: number;
+  /** Per-session model override; null = Auto (SDK default). */
+  model: string | null;
+  setModel: (next: string | null) => void;
   reconnect: () => void;
 }
 
@@ -52,6 +55,8 @@ export function HeaderIndicators({
   contextUsage,
   sessionStartedAt,
   turnCount,
+  model,
+  setModel,
   reconnect,
 }: HeaderIndicatorsProps) {
   const [openPopup, setOpenPopup] = useState<PopupKind | null>(null);
@@ -136,6 +141,8 @@ export function HeaderIndicators({
           activeTool={activeTool}
           status={status}
           turnCount={turnCount}
+          model={model}
+          setModel={setModel}
         />
       )}
     </div>

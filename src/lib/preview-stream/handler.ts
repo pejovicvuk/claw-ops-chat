@@ -4,11 +4,13 @@ import { startScreencast, type Screencast } from "./cdp-screencast";
 import {
   forwardKey,
   forwardMouse,
+  forwardTouch,
   forwardResize,
   forwardWheel,
   type KeyEvent,
   type MouseEvent,
   type ResizeEvent,
+  type TouchEvent,
   type WheelEvent,
 } from "./input-forward";
 
@@ -32,10 +34,46 @@ import {
 
 const BUFFER_HIGH_WATERMARK = 4 * 1024 * 1024; // 4 MB
 
+export type QualityPreset = "performance" | "balanced" | "quality";
+
 export interface PreviewStreamRoute {
   projectSlug: string;
   itemSlug: string;
   port: number;
+  /**
+   * Quality preset selected by the user. Trades bandwidth for visual
+   * fidelity / frame rate. Defaults to `balanced` when absent.
+   */
+  quality?: QualityPreset;
+}
+
+interface ScreencastSettings {
+  everyNthFrame: number;
+  jpegQuality: number;
+}
+
+/**
+ * Quality presets — each is one (frame-rate, JPEG-quality) pair.
+ * DSF=2 doubles bytes per frame relative to DSF=1, so the bandwidth
+ * targets below already account for it.
+ *   performance: ~0.6–1 MB/s, mobile / slow links
+ *   balanced  : ~1.5–2 MB/s, default for most home connections
+ *   quality   : ~3–5 MB/s, LAN / fiber for smooth animation
+ */
+const QUALITY_PRESETS: Record<QualityPreset, ScreencastSettings> = {
+  performance: { everyNthFrame: 6, jpegQuality: 70 },
+  balanced: { everyNthFrame: 4, jpegQuality: 82 },
+  quality: { everyNthFrame: 2, jpegQuality: 92 },
+};
+
+function resolveQuality(input: QualityPreset | undefined): ScreencastSettings {
+  // Env var lets ops override the default in production without a
+  // code change. Format: PREVIEW_QUALITY=balanced (or one of the
+  // preset names). Anything else falls back to "balanced".
+  const envOverride = process.env.PREVIEW_QUALITY as QualityPreset | undefined;
+  const chosen: QualityPreset =
+    input ?? (envOverride && QUALITY_PRESETS[envOverride] ? envOverride : "balanced");
+  return QUALITY_PRESETS[chosen] ?? QUALITY_PRESETS.balanced;
 }
 
 interface ClientFrame {
@@ -118,21 +156,16 @@ export async function handlePreviewStream(
     return;
   }
 
-  // PREVIEW_FPS_EVERY_NTH controls the screencast frame rate: every
-  // Nth paint becomes a frame, so smaller N = smoother. Default of 2
-  // gives ~30 fps on a 60 fps page (vs. the prior default of 6 which
-  // made animations look stepped). Tunable in production without a
-  // code change if a tight VPS uplink struggles with the bandwidth.
-  const everyNthFrame = Math.max(
-    1,
-    Math.min(60, Number.parseInt(process.env.PREVIEW_FPS_EVERY_NTH ?? "2", 10) || 2),
-  );
+  const { everyNthFrame, jpegQuality } = resolveQuality(route.quality);
   try {
     screencast = await startScreencast(page, {
       format: "jpeg",
-      quality: 80,
-      maxWidth: 1280,
-      maxHeight: 800,
+      quality: jpegQuality,
+      // Bumped for DSF=2: a 1440×900 viewport at DSF=2 produces a
+      // 2880×1800 bitmap. CDP clamps to maxWidth/maxHeight, so we
+      // need headroom for HiDPI rendering at typical desktop sizes.
+      maxWidth: 3200,
+      maxHeight: 2000,
       everyNthFrame,
     });
   } catch (err) {
@@ -226,6 +259,9 @@ async function dispatchClientFrame(
         return;
       case "key":
         await forwardKey(session, frame as unknown as KeyEvent);
+        return;
+      case "touch":
+        await forwardTouch(session, frame as unknown as TouchEvent);
         return;
       case "resize":
         await forwardResize(page, frame as unknown as ResizeEvent);

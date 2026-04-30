@@ -51,6 +51,11 @@ export type WindowState =
        * actual URL whenever the previewed app navigates.
        */
       path?: string;
+      /**
+       * Streaming quality preset. Trades bandwidth for visual fidelity
+       * + frame rate. Defaults to `balanced` when absent.
+       */
+      quality?: "performance" | "balanced" | "quality";
     };
 
 export interface WindowDescriptor {

@@ -31,10 +31,28 @@ export function WindowHost({ descriptor, onSessionCreated, onStateChange }: Wind
       <PreviewWindow
         descriptor={descriptor}
         onPortChange={(port) =>
-          onStateChange?.(descriptor.id, { kind: "preview", port, path: previewState.path })
+          onStateChange?.(descriptor.id, {
+            kind: "preview",
+            port,
+            path: previewState.path,
+            quality: previewState.quality,
+          })
         }
         onPathChange={(path) =>
-          onStateChange?.(descriptor.id, { kind: "preview", port: previewState.port, path })
+          onStateChange?.(descriptor.id, {
+            kind: "preview",
+            port: previewState.port,
+            path,
+            quality: previewState.quality,
+          })
+        }
+        onQualityChange={(quality) =>
+          onStateChange?.(descriptor.id, {
+            kind: "preview",
+            port: previewState.port,
+            path: previewState.path,
+            quality,
+          })
         }
       />
     );

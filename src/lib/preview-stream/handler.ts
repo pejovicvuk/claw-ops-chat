@@ -1,6 +1,8 @@
 import type { WebSocket } from "ws";
 import { acquirePage, type AcquiredPage } from "./chromium-pool";
 import { startScreencast, type Screencast } from "./cdp-screencast";
+import { H264Encoder, type SegmentEvent } from "./h264-encoder";
+import { decodePngToRgb24 } from "./png-decoder";
 import {
   forwardKey,
   forwardMouse,
@@ -18,23 +20,36 @@ import {
  * WebSocket handler for `/ws/preview-stream/<projectSlug>/<itemSlug>/<port>`.
  *
  * Server → client:
- *   - text JSON `{type: "ready", deviceWidth, deviceHeight}` once
- *     Chromium has the page open and screencast is running
+ *   - text JSON `{type: "ready", deviceWidth, deviceHeight, codec}` once
+ *     Chromium has the page open and the chosen codec pipeline is up.
  *   - text JSON `{type: "error", message}` on fatal upstream issues
  *   - text JSON `{type: "status", state: ...}` on lifecycle changes
- *   - binary frames — raw JPEG buffers from CDP screencast
+ *   - binary frames:
+ *       JPEG codec  — raw JPEG bytes (Phase 1 path, no envelope)
+ *       H.264 codec — 1-byte tag + payload:
+ *                     0x00 = fMP4 init segment (ftyp + moov)
+ *                     0x01 = fMP4 media segment (moof + mdat)
  *
  * Client → server:
  *   - text JSON `{type: "mouse" | "wheel" | "key" | "resize" | "reload" | "navigate", ...}`
  *
- * Backpressure: before each frame we check ws.bufferedAmount; if it's
- * over BUFFER_HIGH_WATERMARK we skip the frame AND skip the
- * `Page.screencastFrameAck` so CDP pauses the stream until we drain.
+ * Backpressure (both codecs): before consuming the next CDP frame we
+ * check ws.bufferedAmount; if it's over BUFFER_HIGH_WATERMARK we skip
+ * the `Page.screencastFrameAck` (so CDP pauses) AND skip handing the
+ * frame to the codec layer. For JPEG that means dropping a frame; for
+ * H.264 it means ffmpeg's stdin briefly stalls, which naturally
+ * propagates upstream without breaking the GOP.
  */
 
 const BUFFER_HIGH_WATERMARK = 4 * 1024 * 1024; // 4 MB
 
+/** 1-byte tag added in front of every binary frame in H.264 mode. */
+const H264_TAG_INIT = 0x00;
+const H264_TAG_MEDIA = 0x01;
+
 export type QualityPreset = "performance" | "balanced" | "quality";
+
+export type CodecChoice = "jpeg" | "h264";
 
 export interface PreviewStreamRoute {
   projectSlug: string;
@@ -45,25 +60,43 @@ export interface PreviewStreamRoute {
    * fidelity / frame rate. Defaults to `balanced` when absent.
    */
   quality?: QualityPreset;
+  /**
+   * Wire codec selected by the client. The client capability-detects
+   * `MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E"')`
+   * and asks for `h264` if true, `jpeg` otherwise. When absent the
+   * server defaults to `jpeg` so Phase 1 clients keep working.
+   */
+  codec?: CodecChoice;
 }
 
 interface ScreencastSettings {
   everyNthFrame: number;
   jpegQuality: number;
+  /** Target encoder bitrate when streaming H.264. Ignored for JPEG. */
+  bitrateKbps: number;
 }
 
 /**
- * Quality presets — each is one (frame-rate, JPEG-quality) pair.
- * DSF=2 doubles bytes per frame relative to DSF=1, so the bandwidth
- * targets below already account for it.
- *   performance: ~0.6–1 MB/s, mobile / slow links
- *   balanced  : ~1.5–2 MB/s, default for most home connections
- *   quality   : ~3–5 MB/s, LAN / fiber for smooth animation
+ * Quality presets — each is one (frame-rate, JPEG-quality, H.264
+ * bitrate) tuple. DSF=2 doubles bytes per frame relative to DSF=1, so
+ * the bandwidth targets below already account for it.
+ *
+ *   JPEG codec:
+ *     performance: ~0.6–1 MB/s, mobile / slow links
+ *     balanced  : ~1.5–2 MB/s, default for most home connections
+ *     quality   : ~3–5 MB/s, LAN / fiber for smooth animation
+ *
+ *   H.264 codec (after warmup, on a typical animated page):
+ *     performance: ~800 kbps target
+ *     balanced  : ~2 Mbps target
+ *     quality   : ~5 Mbps target
+ *   (Static-page steady state is much lower because P-frames carry
+ *   nothing — that's the entire reason for switching to H.264.)
  */
 const QUALITY_PRESETS: Record<QualityPreset, ScreencastSettings> = {
-  performance: { everyNthFrame: 6, jpegQuality: 70 },
-  balanced: { everyNthFrame: 4, jpegQuality: 82 },
-  quality: { everyNthFrame: 2, jpegQuality: 92 },
+  performance: { everyNthFrame: 6, jpegQuality: 70, bitrateKbps: 800 },
+  balanced: { everyNthFrame: 4, jpegQuality: 82, bitrateKbps: 2000 },
+  quality: { everyNthFrame: 2, jpegQuality: 92, bitrateKbps: 5000 },
 };
 
 function resolveQuality(input: QualityPreset | undefined): ScreencastSettings {
@@ -75,6 +108,10 @@ function resolveQuality(input: QualityPreset | undefined): ScreencastSettings {
     input ?? (envOverride && QUALITY_PRESETS[envOverride] ? envOverride : "balanced");
   return QUALITY_PRESETS[chosen] ?? QUALITY_PRESETS.balanced;
 }
+
+/** Frames per second targeted by the H.264 encoder. Mirrors the
+ *  GOP cadence in `h264-encoder.ts` (one keyframe every 2 s). */
+const H264_FPS = 30;
 
 interface ClientFrame {
   type: string;
@@ -88,6 +125,7 @@ export async function handlePreviewStream(
 ): Promise<void> {
   let acquired: AcquiredPage | null = null;
   let screencast: Screencast | null = null;
+  let encoder: H264Encoder | null = null;
   let closed = false;
 
   const sendJson = (payload: Record<string, unknown>) => {
@@ -105,6 +143,13 @@ export async function handlePreviewStream(
     if (screencast) {
       try {
         await screencast.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (encoder) {
+      try {
+        await encoder.stop();
       } catch {
         /* ignore */
       }
@@ -156,17 +201,62 @@ export async function handlePreviewStream(
     return;
   }
 
-  const { everyNthFrame, jpegQuality } = resolveQuality(route.quality);
+  const { everyNthFrame, jpegQuality, bitrateKbps } = resolveQuality(route.quality);
+  const codec: CodecChoice = route.codec ?? "jpeg";
+  const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
+
+  // For H.264 we spawn ffmpeg first so its segment handler is wired
+  // before the first PNG arrives — otherwise we could lose the init
+  // segment. The encoder dimensions match the page's device pixels
+  // (viewport × DSF) since that's what CDP screencast emits.
+  if (codec === "h264") {
+    const dsf = 2; // mirrors chromium-pool's deviceScaleFactor
+    encoder = new H264Encoder({
+      width: viewport.width * dsf,
+      height: viewport.height * dsf,
+      fps: H264_FPS,
+      bitrateKbps,
+    });
+    encoder.on("segment", (seg: SegmentEvent) => {
+      if (closed || ws.readyState !== ws.OPEN) return;
+      if (ws.bufferedAmount > BUFFER_HIGH_WATERMARK) {
+        // Don't drop the segment — dropping a P-frame poisons the
+        // GOP. Backpressure is applied upstream (we skip CDP acks),
+        // so this branch only fires when bufferedAmount briefly
+        // overshoots before the PNG path notices. Send anyway.
+      }
+      const tag = seg.kind === "init" ? H264_TAG_INIT : H264_TAG_MEDIA;
+      const framed = Buffer.allocUnsafe(seg.data.length + 1);
+      framed[0] = tag;
+      seg.data.copy(framed, 1);
+      try {
+        ws.send(framed, { binary: true });
+      } catch {
+        /* socket closing */
+      }
+    });
+    encoder.on("failed", (msg: string) => {
+      sendJson({ type: "error", code: "encoder_failed", message: msg });
+      void tearDown();
+    });
+    encoder.start();
+  }
+
   try {
     screencast = await startScreencast(page, {
-      format: "jpeg",
+      // PNG is lossless — fed straight into ffmpeg via sharp's raw
+      // RGB24 decode. JPEG path keeps Phase 1's pipeline unchanged.
+      format: codec === "h264" ? "png" : "jpeg",
       quality: jpegQuality,
       // Bumped for DSF=2: a 1440×900 viewport at DSF=2 produces a
       // 2880×1800 bitmap. CDP clamps to maxWidth/maxHeight, so we
       // need headroom for HiDPI rendering at typical desktop sizes.
       maxWidth: 3200,
       maxHeight: 2000,
-      everyNthFrame,
+      // H.264 wants every frame so the encoder can decide what to
+      // drop based on motion. JPEG's everyNthFrame is the only
+      // throttle there, so we keep it.
+      everyNthFrame: codec === "h264" ? 1 : everyNthFrame,
     });
   } catch (err) {
     sendJson({
@@ -178,13 +268,15 @@ export async function handlePreviewStream(
     return;
   }
 
-  // Seed the client with viewport dims so it sizes its canvas.
-  const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
   sendJson({
     type: "ready",
     deviceWidth: viewport.width,
     deviceHeight: viewport.height,
-    screencast: { format: "jpeg", maxFps: 10 },
+    codec,
+    screencast: {
+      format: codec === "h264" ? "h264" : "jpeg",
+      maxFps: codec === "h264" ? H264_FPS : 10,
+    },
     actorEmail,
   });
 
@@ -214,19 +306,43 @@ export async function handlePreviewStream(
   // page Chromium loaded.
   onFrameNavigated({ url: () => page.url(), parentFrame: () => null });
 
-  screencast.onFrame((frame) => {
-    if (closed || ws.readyState !== ws.OPEN) return;
-    if (ws.bufferedAmount > BUFFER_HIGH_WATERMARK) {
-      // Drop frame + skip ack — CDP pauses until we ack the next one.
-      return;
-    }
-    try {
-      ws.send(frame.data, { binary: true });
-      void frame.ack();
-    } catch {
-      /* socket closing */
-    }
-  });
+  if (codec === "h264" && encoder) {
+    const enc = encoder;
+    screencast.onFrame((frame) => {
+      if (closed || ws.readyState !== ws.OPEN) return;
+      if (ws.bufferedAmount > BUFFER_HIGH_WATERMARK) {
+        // Skip ack so CDP pauses; skip pushing to the encoder so its
+        // stdin doesn't queue a frame that's already stale by the
+        // time the network catches up. The encoder's watchdog tolerates
+        // brief gaps (5 s) so a flicker of overflow is harmless.
+        return;
+      }
+      void (async () => {
+        try {
+          const decoded = await decodePngToRgb24(frame.data);
+          await enc.pushFrame(decoded.data);
+        } catch {
+          // PNG decode + ffmpeg push are best-effort — a corrupt frame
+          // shouldn't kill the stream. Drop and continue.
+        }
+        void frame.ack();
+      })();
+    });
+  } else {
+    screencast.onFrame((frame) => {
+      if (closed || ws.readyState !== ws.OPEN) return;
+      if (ws.bufferedAmount > BUFFER_HIGH_WATERMARK) {
+        // Drop frame + skip ack — CDP pauses until we ack the next one.
+        return;
+      }
+      try {
+        ws.send(frame.data, { binary: true });
+        void frame.ack();
+      } catch {
+        /* socket closing */
+      }
+    });
+  }
 
   ws.on("message", (raw) => {
     if (closed) return;

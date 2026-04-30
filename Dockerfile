@@ -30,14 +30,20 @@ ENV PATH="/usr/local/bin:/root/.local/bin:${PATH}"
 # `chromium` and friends (nss / freetype / harfbuzz / ttf-freefont) power
 # the preview-stream subsystem: a headless Chromium tab is launched per
 # active preview window, driven via Chrome DevTools Protocol, and its
-# JPEG screencast frames are forwarded to the user's browser over a
-# WebSocket. We point playwright-core at Alpine's prebuilt Chromium via
+# screencast frames are forwarded to the user's browser over a WebSocket.
+# We point playwright-core at Alpine's prebuilt Chromium via
 # PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH instead of letting Playwright
 # download its own bundled browser (which doesn't ship Alpine/musl
 # binaries anyway). Image grows ~400 MB compared to a Chromium-less
 # image — acceptable trade-off for full server-side rendering.
+#
+# `ffmpeg` powers the H.264 streaming path (Phase 2 of the preview
+# overhaul, #125): one ffmpeg subprocess per active preview encodes
+# raw RGB frames into fragmented MP4 for MediaSource Extensions on
+# the client. Adds ~50 MB. libx264 is built into Alpine's ffmpeg.
 RUN apk add --no-cache bash curl python3 git openssh-client jq github-cli \
     chromium nss freetype freetype-dev harfbuzz ca-certificates ttf-freefont \
+    ffmpeg \
     && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uv sh \
     && ln -s /opt/uv/uv /usr/local/bin/uv \
     && ln -s /opt/uv/uvx /usr/local/bin/uvx

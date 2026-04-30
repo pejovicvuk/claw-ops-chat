@@ -314,36 +314,72 @@ export function buildInjectedFileDropScript(
     }
     return el;
   }
+  // Climb to the nearest enclosing <input type=file> if the click
+  // landed on a child (label, icon span, etc.). Mirrors what the
+  // browser's native file picker does on click.
+  function nearestFileInput(el) {
+    let cur = el;
+    while (cur && cur !== cur.ownerDocument.documentElement) {
+      if (cur.tagName === "INPUT" && cur.type === "file") return cur;
+      cur = cur.parentElement;
+    }
+    return null;
+  }
   window[DISPATCH] = async (req) => {
-    if (!req || typeof req !== "object") return false;
+    if (!req || typeof req !== "object") return { ok: false, reason: "bad_req" };
     const dropId = req.dropId;
     const filename = req.filename;
     const mimeType = req.mimeType;
     const x = Number(req.x);
     const y = Number(req.y);
-    if (typeof dropId !== "string") return false;
+    if (typeof dropId !== "string") return { ok: false, reason: "bad_dropid" };
     const target = deepElementFromPoint(x, y);
-    if (!target) return false;
+    if (!target) return { ok: false, reason: "no_target" };
     // Pull the bytes via the exposed binding. Returns a base64 string
     // because Playwright's exposeBinding only round-trips JSON-friendly
     // values; raw Uint8Array would be coerced to an empty object.
     let b64;
     try {
       const fetcher = window[FETCH];
-      if (typeof fetcher !== "function") return false;
+      if (typeof fetcher !== "function") return { ok: false, reason: "no_binding" };
       b64 = await fetcher(dropId);
-    } catch (_) { return false; }
-    if (typeof b64 !== "string" || b64.length === 0) return false;
+    } catch (_) { return { ok: false, reason: "fetch_failed" }; }
+    if (typeof b64 !== "string" || b64.length === 0) {
+      return { ok: false, reason: "no_bytes" };
+    }
     let u8;
     try {
       const bin = atob(b64);
       u8 = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
-    } catch (_) { return false; }
-    if (u8.length === 0) return false;
+    } catch (_) { return { ok: false, reason: "decode_failed" }; }
+    if (u8.length === 0) return { ok: false, reason: "empty_bytes" };
     const file = new File([u8], String(filename || "file"), {
       type: String(mimeType || "application/octet-stream"),
     });
+    // Two delivery modes — file input vs drop-zone. We detect by
+    // walking up from the target; this gracefully handles labels +
+    // styled wrappers around the actual <input type=file>.
+    const fileInput = nearestFileInput(target);
+    if (fileInput) {
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        // Direct .files = ... assignment is spec'd as readonly but
+        // Chromium / Firefox both honor it from a DataTransfer source.
+        // This is the canonical workaround used by every JS-driven
+        // file-input testing harness (Playwright, Puppeteer, Cypress).
+        fileInput.files = dt.files;
+        fileInput.dispatchEvent(new Event("input", { bubbles: true }));
+        fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+      } catch (_) {
+        return { ok: false, reason: "input_assign_failed" };
+      }
+      return { ok: true, target: "input" };
+    }
+    // Drop-zone path — synthesize the dragenter → dragover → drop
+    // sequence apps depend on. isTrusted=false; rare apps that
+    // explicitly check it will reject.
     const dt = new DataTransfer();
     dt.items.add(file);
     const init = {
@@ -358,9 +394,9 @@ export function buildInjectedFileDropScript(
       target.dispatchEvent(new DragEvent("dragover", init));
       target.dispatchEvent(new DragEvent("drop", init));
     } catch (_) {
-      return false;
+      return { ok: false, reason: "dispatch_failed" };
     }
-    return true;
+    return { ok: true, target: "dropzone" };
   };
 })();
 `.trim();

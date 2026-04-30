@@ -10,6 +10,7 @@ import {
   validateClipboardPayload,
 } from "./clipboard-bridge";
 import {
+  DROP_DISPATCH_BINDING,
   DROP_FETCH_BYTES_BINDING,
   appendChunk,
   buildInjectedFileDropScript,
@@ -772,24 +773,84 @@ async function dispatchClientFrame(
         return;
       }
       case "file_drop_end": {
-        // Close the stream + schedule cleanup. CDP delivery lands in
-        // commit C; for now we just confirm receipt so the client
-        // can dismiss its progress UI.
+        // Close the write stream, then invoke the page-side dispatcher.
+        // The page's __clawDispatchDrop walks frames to find the target
+        // at (x, y), pulls the bytes via the __clawFetchDropBytes
+        // binding, and either sets <input type=file>.files or
+        // synthesizes a dragenter/dragover/drop sequence.
         const dropId = (frame as { dropId?: unknown }).dropId;
         if (!validateUuid(dropId)) return;
         const entry = drops.get(dropId as string);
         if (!entry) return;
         try {
           await closeDrop(entry);
-          // Commit C will replace this stub with actual target detection
-          // + CDP DOM.setFileInputFiles OR injected synthetic drop.
-          sendJson({ type: "file_drop_done", dropId, target: "pending" });
         } catch {
           sendJson({
             type: "file_drop_error",
             dropId,
             code: "close_failed",
             message: "could not close temp file",
+          });
+          scheduleCleanup(drops, entry);
+          return;
+        }
+        try {
+          // Cast the result as a structured response from the injected
+          // dispatcher. Playwright serializes via structured clone so
+          // returning `{ok, target, reason?}` round-trips fine.
+          interface DispatchResult {
+            ok: boolean;
+            target?: string;
+            reason?: string;
+          }
+          const result: DispatchResult = await page.evaluate(
+            async ({
+              bindingName,
+              req,
+            }: {
+              bindingName: string;
+              req: Record<string, unknown>;
+            }): Promise<DispatchResult> => {
+              const w = window as unknown as Record<string, unknown>;
+              const fn = w[bindingName] as
+                | ((r: unknown) => Promise<DispatchResult>)
+                | undefined;
+              if (typeof fn !== "function") {
+                return { ok: false, reason: "binding_missing" };
+              }
+              return fn(req);
+            },
+            {
+              bindingName: DROP_DISPATCH_BINDING,
+              req: {
+                dropId: entry.start.dropId,
+                filename: entry.start.filename,
+                mimeType: entry.start.mimeType,
+                x: entry.start.x,
+                y: entry.start.y,
+              },
+            },
+          );
+          if (result.ok) {
+            sendJson({
+              type: "file_drop_done",
+              dropId,
+              target: result.target ?? "unknown",
+            });
+          } else {
+            sendJson({
+              type: "file_drop_error",
+              dropId,
+              code: result.reason ?? "dispatch_failed",
+              message: `dispatch failed: ${result.reason ?? "unknown"}`,
+            });
+          }
+        } catch (err) {
+          sendJson({
+            type: "file_drop_error",
+            dropId,
+            code: "evaluate_failed",
+            message: err instanceof Error ? err.message : "page evaluate threw",
           });
         } finally {
           scheduleCleanup(drops, entry);

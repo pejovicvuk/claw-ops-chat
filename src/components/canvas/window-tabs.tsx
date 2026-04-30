@@ -14,9 +14,12 @@ interface WindowTabsProps {
  * toolbar. Each tab grows to share the available space (`flex-1`) and
  * caps at `MAX_TAB_W` so a single tab can't hog the toolbar. Titles
  * truncate with ellipsis when space is tight. Click a tab to restore.
+ *
+ * Always renders the elastic `flex-1` wrapper — even when there are no
+ * tabs — so the toolbar's right group (page nav + tool palette) stays
+ * pinned to the right edge regardless of how many windows are minimized.
  */
 export function WindowTabs({ windows, onRestore }: WindowTabsProps) {
-  if (windows.length === 0) return null;
   return (
     <div className="flex min-w-0 flex-1 items-center gap-1">
       {windows.map((win) => (

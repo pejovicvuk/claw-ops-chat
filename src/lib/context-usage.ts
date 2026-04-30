@@ -90,19 +90,40 @@ export function snapshotFromAssistantUsage(
  * cacheReadInputTokens fields — those are cumulative across the turn
  * and would inflate "context used" if used as a snapshot.
  *
- * Returns null when the payload is missing, malformed, or the cap is
- * absent / zero / negative.
+ * `result.modelUsage` is keyed by *every* model used during the turn —
+ * which often includes Haiku (200 K window) when a Task subagent ran,
+ * alongside the user's main model (Sonnet/Opus on a 1 M window).
+ * Picking the wrong entry sets the bar's cap to 200 K and inflates the
+ * displayed percentage. Selection priority:
+ *
+ *   1. The model whose id matches `preferredModelId` (the most-recent
+ *      main-thread assistant model the session has seen). This is the
+ *      authoritative pick for the HUD.
+ *   2. The entry with the largest `contextWindow`. Defensible because
+ *      the user's main model almost always has a larger window than
+ *      any auxiliary subagent (1 M vs 200 K).
+ *
+ * Returns null when the payload is missing, malformed, or no entry has
+ * a positive cap.
  */
 export function extractContextWindow(
   modelUsage: unknown,
+  preferredModelId?: string | null,
 ): { model: string; contextWindow: number } | null {
   if (!modelUsage || typeof modelUsage !== "object") return null;
-  const entries = Object.entries(modelUsage as Record<string, unknown>);
-  const first = entries[0];
-  if (!first) return null;
-  const [model, raw] = first;
-  if (!model || !raw || typeof raw !== "object") return null;
-  const ctxWin = (raw as { contextWindow?: unknown }).contextWindow;
-  if (typeof ctxWin !== "number" || !Number.isFinite(ctxWin) || ctxWin <= 0) return null;
-  return { model, contextWindow: ctxWin };
+  const entries: Array<{ model: string; contextWindow: number }> = [];
+  for (const [model, raw] of Object.entries(modelUsage as Record<string, unknown>)) {
+    if (!model || !raw || typeof raw !== "object") continue;
+    const ctxWin = (raw as { contextWindow?: unknown }).contextWindow;
+    if (typeof ctxWin !== "number" || !Number.isFinite(ctxWin) || ctxWin <= 0) continue;
+    entries.push({ model, contextWindow: ctxWin });
+  }
+  if (entries.length === 0) return null;
+
+  if (preferredModelId) {
+    const match = entries.find((e) => e.model === preferredModelId);
+    if (match) return match;
+  }
+  // Fallback: largest-window entry. Stable on ties (returns the first).
+  return entries.reduce((best, e) => (e.contextWindow > best.contextWindow ? e : best));
 }

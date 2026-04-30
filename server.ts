@@ -1711,7 +1711,17 @@ class SessionManager {
           // The assistant.message.usage has input_tokens, cache_read_input_tokens, cache_creation_input_tokens.
           const usage = assistantMsg?.usage as Record<string, number> | undefined;
           const model = typeof assistantMsg?.model === "string" ? assistantMsg.model : undefined;
-          if (usage) {
+          // SDKAssistantMessage carries `parent_tool_use_id` set to a
+          // non-null string when the message was emitted by a subagent
+          // spawned via the Task tool. Subagents always run on Haiku
+          // and have their own (200 K) context — without this filter
+          // their snapshots leak into the main HUD, surfacing as
+          // "model: haiku" in the chat header plus a wrong window cap
+          // that inflates the percentage (190 K / 200 K = 95 %).
+          const parentToolUseId = (msg as { parent_tool_use_id?: string | null })
+            .parent_tool_use_id;
+          const isSubagent = typeof parentToolUseId === "string" && parentToolUseId.length > 0;
+          if (usage && !isSubagent) {
             this.broadcastAssistantUsage(session, usage, model);
           }
           const content = assistantMsg?.content;
@@ -2171,7 +2181,13 @@ class SessionManager {
    * default 1 M fallback).
    */
   private broadcastContextUsage(session: ChatSession, modelUsage: unknown): void {
-    const window = extractContextWindow(modelUsage);
+    // Hint the picker with the most recent main-thread assistant model
+    // (subagent messages are filtered out before they reach
+    // `lastModelId`, so this is always the user's actual model). This
+    // ensures the cap matches the active model — without it, the picker
+    // would fall back to the largest-window entry, which is *usually*
+    // right but not guaranteed.
+    const window = extractContextWindow(modelUsage, session.lastModelId ?? null);
     if (!window) return;
     session.lastContextWindow = window.contextWindow;
     session.lastModelId = window.model;

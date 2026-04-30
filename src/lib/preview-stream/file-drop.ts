@@ -1,7 +1,7 @@
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { safePath, safeFilename } from "@/lib/safe-path";
+import { safePath, safeFilename } from "../safe-path";
 
 /**
  * Phase 3c (#128): drag-in file uploads to the previewed page.

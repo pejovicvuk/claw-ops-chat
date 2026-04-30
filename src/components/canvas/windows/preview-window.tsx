@@ -377,6 +377,20 @@ function PreviewWindowBody({
             aria-label={`Live preview on port ${port}`}
           />
         )}
+        {/* Phase 3c (#128): blue overlay shown while a file is dragged
+            over the preview. pointer-events-none lets the underlying
+            <video>/<canvas> still receive the drag events; the hook
+            owns the actual drop handling. */}
+        {stream.dragOver && (
+          <div
+            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-blue-500/15 ring-2 ring-inset ring-dashed ring-blue-400"
+            aria-hidden="true"
+          >
+            <p className="rounded-md bg-blue-500/90 px-3 py-1.5 text-[12px] font-semibold text-white shadow-lg">
+              Drop file to upload
+            </p>
+          </div>
+        )}
         {!isRunning && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas-bg/95 px-6 text-center">
             {status === "starting" ? (

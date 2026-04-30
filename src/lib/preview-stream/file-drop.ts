@@ -324,16 +324,21 @@ export function buildInjectedFileDropScript(
     if (typeof dropId !== "string") return false;
     const target = deepElementFromPoint(x, y);
     if (!target) return false;
-    let bytes;
+    // Pull the bytes via the exposed binding. Returns a base64 string
+    // because Playwright's exposeBinding only round-trips JSON-friendly
+    // values; raw Uint8Array would be coerced to an empty object.
+    let b64;
     try {
       const fetcher = window[FETCH];
       if (typeof fetcher !== "function") return false;
-      bytes = await fetcher(dropId);
+      b64 = await fetcher(dropId);
     } catch (_) { return false; }
-    if (!bytes || typeof bytes !== "object" || typeof bytes.length !== "number") return false;
+    if (typeof b64 !== "string" || b64.length === 0) return false;
     let u8;
     try {
-      u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      const bin = atob(b64);
+      u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
     } catch (_) { return false; }
     if (u8.length === 0) return false;
     const file = new File([u8], String(filename || "file"), {

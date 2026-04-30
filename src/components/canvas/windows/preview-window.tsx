@@ -92,12 +92,14 @@ function PreviewWindowBody({
   });
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const isRunning = status === "running";
   const stream = usePreviewStream({
     projectSlug,
     itemSlug,
     port,
     canvasRef,
+    videoRef,
     enabled: isRunning,
     quality,
   });
@@ -326,13 +328,26 @@ function PreviewWindowBody({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {/* Canvas + overlays */}
-        <canvas
-          ref={canvasRef}
-          className="h-full w-full cursor-default bg-white outline-none touch-none select-none"
-          tabIndex={0}
-          aria-label={`Live preview on port ${port}`}
-        />
+        {/* H.264 / MSE path or JPEG / canvas path — `stream.mode` is
+            driven by capability detection + sticky runtime fallback. */}
+        {stream.mode === "video" ? (
+          <video
+            ref={videoRef}
+            className="h-full w-full cursor-default bg-white outline-none touch-none select-none"
+            autoPlay
+            muted
+            playsInline
+            tabIndex={0}
+            aria-label={`Live preview on port ${port}`}
+          />
+        ) : (
+          <canvas
+            ref={canvasRef}
+            className="h-full w-full cursor-default bg-white outline-none touch-none select-none"
+            tabIndex={0}
+            aria-label={`Live preview on port ${port}`}
+          />
+        )}
         {!isRunning && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas-bg/95 px-6 text-center">
             {status === "starting" ? (

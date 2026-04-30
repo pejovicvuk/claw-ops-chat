@@ -2768,12 +2768,19 @@ app.prepare().then(() => {
         rawQuality === "performance" || rawQuality === "balanced" || rawQuality === "quality"
           ? rawQuality
           : undefined;
+      // Optional wire codec from `?codec=h264|jpeg`. Client passes
+      // h264 only when MediaSource.isTypeSupported(...) returned true.
+      // Server falls through to JPEG (Phase 1 path) when missing or
+      // invalid so cached / older clients keep working.
+      const rawCodec = qs.codec;
+      const previewCodec = rawCodec === "h264" || rawCodec === "jpeg" ? rawCodec : undefined;
       wss.handleUpgrade(req, socket, head, (ws) => {
         void handlePreviewStream(ws, actorEmail, {
           projectSlug,
           itemSlug,
           port: previewPort,
           quality: previewQuality,
+          codec: previewCodec,
         });
       });
       logWsUpgrade({

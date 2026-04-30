@@ -26,10 +26,26 @@ ENV PATH="/usr/local/bin:/root/.local/bin:${PATH}"
 # Runtime deps: git for version control, bash/curl/python3/jq for the read-only
 # Bitbucket skill, uv for Python MCP servers. jq is how bitbucket-cli.sh
 # pretty-prints and filters the Bitbucket API JSON responses.
+#
+# `chromium` and friends (nss / freetype / harfbuzz / ttf-freefont) power
+# the preview-stream subsystem: a headless Chromium tab is launched per
+# active preview window, driven via Chrome DevTools Protocol, and its
+# JPEG screencast frames are forwarded to the user's browser over a
+# WebSocket. We point playwright-core at Alpine's prebuilt Chromium via
+# PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH instead of letting Playwright
+# download its own bundled browser (which doesn't ship Alpine/musl
+# binaries anyway). Image grows ~400 MB compared to a Chromium-less
+# image — acceptable trade-off for full server-side rendering.
 RUN apk add --no-cache bash curl python3 git openssh-client jq github-cli \
+    chromium nss freetype freetype-dev harfbuzz ca-certificates ttf-freefont \
     && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uv sh \
     && ln -s /opt/uv/uv /usr/local/bin/uv \
     && ln -s /opt/uv/uvx /usr/local/bin/uvx
+
+# Tell playwright-core to use the system Chromium instead of trying to
+# spawn its own bundled binary (which would 404 on Alpine).
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
 
 # Copy the full app with node_modules and build output.
 # server.js requires sibling JS files compiled from TS + the CJS SDK wrapper;

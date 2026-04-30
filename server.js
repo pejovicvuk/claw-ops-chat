@@ -29,6 +29,7 @@ const fs_2 = require("fs");
 const session_status_store_1 = require("./src/lib/session-status-store");
 const session_persistence_1 = require("./src/lib/session-persistence");
 const agent_config_1 = require("./src/lib/agent-config");
+const context_usage_1 = require("./src/lib/context-usage");
 const account_rate_limits_1 = require("./src/lib/account-rate-limits");
 const rate_limit_probe_1 = require("./src/lib/rate-limit-probe");
 const tool_policy_1 = require("./src/lib/reports/tool-policy");
@@ -48,6 +49,9 @@ const google_custom_config_1 = require("./src/lib/google-custom-config");
 const api_wrap_1 = require("./src/lib/audit/api-wrap");
 const http_forward_1 = require("./src/lib/preview-proxy/http-forward");
 const ws_forward_1 = require("./src/lib/preview-proxy/ws-forward");
+const handler_1 = require("./src/lib/preview-stream/handler");
+const chromium_pool_1 = require("./src/lib/preview-stream/chromium-pool");
+const manager_1 = require("./src/lib/dev-server/manager");
 const bootstrap_1 = require("./src/lib/monitoring/bootstrap");
 const ws_broadcast_1 = require("./src/lib/monitoring/ws-broadcast");
 const ws_session_store_1 = require("./src/lib/monitoring/ws-session-store");
@@ -238,6 +242,7 @@ class SessionManager {
                 sessionAllowedTools: new Set(),
                 permissionMode: "default",
                 effort: null,
+                model: null,
                 requestCounter: 0,
                 accumulatedText: "",
                 messageTimestamps: [],
@@ -319,6 +324,7 @@ class SessionManager {
             sessionAllowedTools: new Set(persisted.sessionAllowedTools ?? []),
             permissionMode: persisted.permissionMode || "default",
             effort: persisted.effort ?? null,
+            model: persisted.model ?? null,
             requestCounter: 0,
             accumulatedText: persisted.accumulatedText ?? "",
             messageTimestamps: [],
@@ -395,6 +401,7 @@ class SessionManager {
             status: session.status,
             permissionMode: session.permissionMode,
             effort: session.effort,
+            model: session.model,
             claudeSessionId: session.claudeSessionId,
             sessionCwd: session.sessionCwd,
             branchName: session.branchName,
@@ -767,6 +774,35 @@ class SessionManager {
             this.broadcast(session, { type: "effort_changed", effort: session.effort });
             return;
         }
+        if (type === "set_model") {
+            // Allow only the SDK's stable family aliases. The SDK resolves these
+            // to the latest concrete version (e.g. `sonnet` → claude-sonnet-4-6
+            // today, claude-sonnet-4-7 tomorrow) so picker values keep working
+            // across Anthropic version bumps without a server change. Anything
+            // else (including "" for Auto) becomes null and the SDK falls back
+            // to its subscription default.
+            const raw = typeof msg.model === "string" ? msg.model : "";
+            const allowed = new Set(["opus", "sonnet", "haiku"]);
+            session.model = allowed.has(raw) ? raw : null;
+            // Live mid-turn switch. Without `query.setModel()` the new value
+            // only takes effect on the NEXT turn — calling it here lets the
+            // currently-running query (if any) pick up the change immediately.
+            // Fire-and-forget: session state + UI stay correct even if the
+            // SDK call lands after the query has already finished.
+            const setModelOnQuery = session.currentQuery?.setModel;
+            if (typeof setModelOnQuery === "function") {
+                try {
+                    void setModelOnQuery.call(session.currentQuery, session.model ?? undefined).catch(() => {
+                        /* SDK rejected — we already updated our own state */
+                    });
+                }
+                catch {
+                    /* synchronous throw — ignore */
+                }
+            }
+            this.broadcast(session, { type: "model_changed", model: session.model });
+            return;
+        }
         if (type === "set_mode") {
             this.setSessionMode(session, msg.mode || "default", "client");
             return;
@@ -1101,6 +1137,10 @@ class SessionManager {
                 return { behavior: "deny", message: response.message || "User denied this action" };
             },
             ...(session.effort ? { effort: session.effort } : {}),
+            // Per-session model override. `null` → omit the key so the SDK uses
+            // its subscription default. Aliases (`opus`/`sonnet`/`haiku`) are
+            // resolved by the SDK to the latest concrete version on each call.
+            ...(session.model ? { model: session.model } : {}),
             ...(() => {
                 // Fresh read per-turn so MCP servers the user just wired up in
                 // Settings (Google, Bitbucket, Notion, etc.) land on their very
@@ -1761,37 +1801,30 @@ class SessionManager {
             ws.send(data);
         }
     }
-    /** Broadcast context usage from the final `result.modelUsage` (authoritative). */
+    /**
+     * Cache the authoritative context-window size from a turn-end `result`
+     * event. We **do not** broadcast a context_usage event from this path:
+     * `result.modelUsage[modelId]` aggregates token counts cumulatively
+     * across every assistant chunk in the turn (a 10-step turn with a
+     * 250 K cached prompt sums to ~2.5 M, blowing past the actual window).
+     * Using those values as "context used" was the cause of the
+     * "1253 % of 1 M" bug.
+     *
+     * Instead, the per-message broadcaster (`broadcastAssistantUsage`)
+     * emits the latest snapshot — that's the right number. This method
+     * only learns the model's true window cap so the next snapshot's
+     * `max` is accurate (e.g. 200 K for a 200K model rather than the
+     * default 1 M fallback).
+     */
     broadcastContextUsage(session, modelUsage) {
-        if (!modelUsage || typeof modelUsage !== "object")
+        const window = (0, context_usage_1.extractContextWindow)(modelUsage);
+        if (!window)
             return;
-        const entries = Object.entries(modelUsage);
-        const [modelId, firstModelRaw] = entries[0] ?? [];
-        const firstModel = firstModelRaw;
-        if (!firstModel || !firstModel.contextWindow)
-            return;
-        const used = (firstModel.inputTokens || 0) +
-            (firstModel.cacheReadInputTokens || 0) +
-            (firstModel.cacheCreationInputTokens || 0);
-        const max = firstModel.contextWindow;
-        this.broadcast(session, {
-            type: "context_usage",
-            used,
-            max,
-            percentage: Math.round((used / max) * 100),
-            model: modelId ?? null,
-            inputTokens: firstModel.inputTokens || 0,
-            outputTokens: firstModel.outputTokens || 0,
-            cacheReadTokens: firstModel.cacheReadInputTokens || 0,
-            cacheCreateTokens: firstModel.cacheCreationInputTokens || 0,
-        });
+        session.lastContextWindow = window.contextWindow;
+        session.lastModelId = window.model;
     }
     /** Broadcast live context usage from an assistant message's `usage` field. */
     broadcastAssistantUsage(session, usage, model) {
-        // The assistant message has raw API usage (input_tokens snake_case).
-        const used = (usage.input_tokens || 0) +
-            (usage.cache_read_input_tokens || 0) +
-            (usage.cache_creation_input_tokens || 0);
         // Accumulate for cron token accounting — the sidecar stores the
         // total at run-end, not per-message. Out-of-band of any broadcast.
         if (session.cronPolicy) {
@@ -1800,21 +1833,19 @@ class SessionManager {
             session.cronTokenUsage.cacheRead += usage.cache_read_input_tokens || 0;
             session.cronTokenUsage.cacheCreate += usage.cache_creation_input_tokens || 0;
         }
-        // Context window isn't in assistant usage — assume 1M.
-        // The final `result` event corrects this with the real contextWindow from modelUsage.
-        const max = 1000000;
-        if (used === 0)
+        const snapshot = (0, context_usage_1.snapshotFromAssistantUsage)(usage, model ?? session.lastModelId ?? null, session.lastContextWindow ?? context_usage_1.DEFAULT_CONTEXT_WINDOW);
+        if (snapshot.used === 0)
             return;
         this.broadcast(session, {
             type: "context_usage",
-            used,
-            max,
-            percentage: Math.round((used / max) * 100),
-            model: model ?? null,
-            inputTokens: usage.input_tokens || 0,
-            outputTokens: usage.output_tokens || 0,
-            cacheReadTokens: usage.cache_read_input_tokens || 0,
-            cacheCreateTokens: usage.cache_creation_input_tokens || 0,
+            used: snapshot.used,
+            max: snapshot.max,
+            percentage: snapshot.percentage,
+            model: snapshot.model,
+            inputTokens: snapshot.inputTokens,
+            outputTokens: snapshot.outputTokens,
+            cacheReadTokens: snapshot.cacheReadTokens,
+            cacheCreateTokens: snapshot.cacheCreateTokens,
         });
     }
     /**
@@ -2203,7 +2234,12 @@ app.prepare().then(() => {
         const isTerminalWs = pathname === "/ws/terminal" || pathname === "/chat/ws/terminal";
         const isMonitoringWs = pathname === "/ws/monitoring" || pathname === "/chat/ws/monitoring";
         const isNotificationsWs = pathname === "/ws/notifications" || pathname === "/chat/ws/notifications";
-        if (!isChatWs && !isTerminalWs && !isMonitoringWs && !isNotificationsWs) {
+        // /ws/preview-stream/<projectSlug>/<itemSlug>/<port> — opens a Chromium
+        // tab against localhost:<port> in the container and screencasts it back
+        // to the user's browser as JPEG frames over this WS.
+        const previewStreamMatch = pathname?.match(/^(?:\/chat)?\/ws\/preview-stream\/([a-z0-9][a-z0-9-]{0,63})\/([a-z0-9][a-z0-9-]{0,63})\/(\d+)$/);
+        const isPreviewStreamWs = !!previewStreamMatch;
+        if (!isChatWs && !isTerminalWs && !isMonitoringWs && !isNotificationsWs && !isPreviewStreamWs) {
             // Pass to Next.js for HMR and other internal WebSockets
             nextUpgradeHandler(req, socket, head);
             return;
@@ -2232,7 +2268,9 @@ app.prepare().then(() => {
                 ? "/ws/monitoring"
                 : isNotificationsWs
                     ? "/ws/notifications"
-                    : "/ws/chat";
+                    : isPreviewStreamWs
+                        ? "/ws/preview-stream"
+                        : "/ws/chat";
         const sessionPayload = (0, auth_server_1.extractSessionFromCookieHeader)(req.headers.cookie);
         let actorEmail;
         if (sessionPayload) {
@@ -2296,6 +2334,37 @@ app.prepare().then(() => {
                 ws.on("error", () => notificationClients.delete(ws));
             });
             (0, api_wrap_1.logWsUpgrade)({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => { });
+            return;
+        }
+        if (isPreviewStreamWs && previewStreamMatch) {
+            const projectSlug = previewStreamMatch[1];
+            const itemSlug = previewStreamMatch[2];
+            const previewPort = Number(previewStreamMatch[3]);
+            // Same self-loop guard as the proxy: don't let the user point a
+            // Chromium tab at the chat server's own port. (Chromium would
+            // happily render the chat UI inside itself, which works but is
+            // wasteful and confusing.)
+            if (!Number.isInteger(previewPort) ||
+                previewPort < 1024 ||
+                previewPort > 65535 ||
+                previewPort === port) {
+                socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+                socket.destroy();
+                return;
+            }
+            wss.handleUpgrade(req, socket, head, (ws) => {
+                void (0, handler_1.handlePreviewStream)(ws, actorEmail, {
+                    projectSlug,
+                    itemSlug,
+                    port: previewPort,
+                });
+            });
+            (0, api_wrap_1.logWsUpgrade)({
+                route: wsRoute,
+                statusCode: 101,
+                actor: actorEmail,
+                target: `${projectSlug}/${itemSlug}:${previewPort}`,
+            }).catch(() => { });
             return;
         }
         const sessionId = qs.session || "default";
@@ -2389,5 +2458,25 @@ app.prepare().then(() => {
                     `Login + WebSocket auth will fail until the backend is reachable.`);
             }
         })();
+        // Graceful shutdown: kill spawned dev servers (SIGTERM) and close
+        // the headless Chromium pool so docker stop doesn't orphan them.
+        // SIGINT is what Ctrl-C in `npm run dev` sends; SIGTERM is what
+        // docker stop / k8s sends. Both handled identically.
+        const shutdown = (signal) => {
+            console.log(`> Shutdown (${signal}): killing dev servers + Chromium pool`);
+            try {
+                (0, manager_1.killAll)();
+            }
+            catch {
+                /* best effort */
+            }
+            void (0, chromium_pool_1.close)().catch(() => {
+                /* best effort */
+            });
+            // Give the cleanup a moment, then let the process exit naturally.
+            setTimeout(() => process.exit(0), 1000);
+        };
+        process.once("SIGTERM", () => shutdown("SIGTERM"));
+        process.once("SIGINT", () => shutdown("SIGINT"));
     });
 });

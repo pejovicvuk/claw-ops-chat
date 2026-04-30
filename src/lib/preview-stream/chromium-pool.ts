@@ -46,14 +46,21 @@ async function launch(): Promise<Browser> {
       // /dev/shm in Docker is tiny (64 MB by default); without this
       // Chromium will OOM on shared-memory allocations.
       "--disable-dev-shm-usage",
-      // Use SwiftShader for compositing + WebGL. We previously had
-      // `--disable-gpu` + `--disable-software-rasterizer` here, which
-      // forced fully-CPU rendering with no compositor acceleration —
-      // CSS transitions, transforms, and rAF animations dropped frames
-      // visibly compared to a real browser tab. Letting SwiftShader
-      // composite costs ~5–15% CPU per active preview but makes
-      // animations look continuous.
-      "--use-gl=swiftshader",
+      // We previously tried `--use-gl=swiftshader` to enable composited
+      // animations, but that flag is unreliable on Alpine's current
+      // Chromium and ate CPU without rendering correctly in some cases.
+      // Back to `--disable-gpu` — software rasterization is plenty for
+      // the typical web app preview, animations work fine via the
+      // 2D paint path, and Chromium is more stable in this mode in
+      // headless containers.
+      "--disable-gpu",
+      // Hide scrollbars from screencast frames so they don't double-up
+      // with the user's chat-app scrollbar / mobile system bars.
+      "--hide-scrollbars",
+      // Force JPEG color reproduction to use full-range YUV so text and
+      // colored UI elements don't clip on saturated colors (defaults to
+      // limited range in some Chromium builds).
+      "--force-color-profile=srgb",
     ],
   });
 }
@@ -89,8 +96,17 @@ export interface AcquiredPage {
 export async function acquirePage(port: number): Promise<AcquiredPage> {
   const browser = await getBrowser();
   const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 },
-    deviceScaleFactor: 1,
+    viewport: { width: 1440, height: 900 },
+    // DSF=2 renders the page at 2× device pixels — text and UI become
+    // crisp on HiDPI / Retina displays. The bitmap is 2× larger than
+    // before (so ~2× bandwidth at the same JPEG quality) but the
+    // user's browser displays it 1:1 on a 2× display rather than
+    // upscaling a 1× capture. The quality preset (handler.ts) lets the
+    // user dial frame rate / quality back down if bandwidth is tight.
+    deviceScaleFactor: 2,
+    // Wide enough that the previewed page can render its desktop
+    // breakpoints; the actual canvas size is set by setViewportSize
+    // when the canvas mounts.
   });
   const page = await context.newPage();
   pageCount++;

@@ -23,6 +23,8 @@ interface PreviewWindowProps {
   onPortChange: (port: number) => void;
   /** Persist a new path back into the canvas store. */
   onPathChange: (path: string) => void;
+  /** Persist a new streaming-quality preset back into the canvas store. */
+  onQualityChange: (quality: "performance" | "balanced" | "quality") => void;
 }
 
 /**
@@ -44,15 +46,22 @@ const PORT_MIN = 1024;
 const PORT_MAX = 65535;
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
 
-export function PreviewWindow({ descriptor, onPortChange, onPathChange }: PreviewWindowProps) {
+export function PreviewWindow({
+  descriptor,
+  onPortChange,
+  onPathChange,
+  onQualityChange,
+}: PreviewWindowProps) {
   if (descriptor.state.kind !== "preview") return null;
-  const { port, path } = descriptor.state;
+  const { port, path, quality } = descriptor.state;
   return (
     <PreviewWindowBody
       port={port}
       path={path ?? "/"}
+      quality={quality ?? "balanced"}
       onPortChange={onPortChange}
       onPathChange={onPathChange}
+      onQualityChange={onQualityChange}
     />
   );
 }
@@ -60,13 +69,17 @@ export function PreviewWindow({ descriptor, onPortChange, onPathChange }: Previe
 function PreviewWindowBody({
   port,
   path,
+  quality,
   onPortChange,
   onPathChange,
+  onQualityChange,
 }: {
   port: number;
   path: string;
+  quality: "performance" | "balanced" | "quality";
   onPortChange: (port: number) => void;
   onPathChange: (path: string) => void;
+  onQualityChange: (quality: "performance" | "balanced" | "quality") => void;
 }) {
   const item = useContext(ItemContext);
   const projectSlug = item?.projectSlug ?? "";
@@ -86,6 +99,7 @@ function PreviewWindowBody({
     port,
     canvasRef,
     enabled: isRunning,
+    quality,
   });
 
   const [draftPort, setDraftPort] = useState(String(port));
@@ -269,6 +283,23 @@ function PreviewWindowBody({
 
         <div className="w-2" />
 
+        {/* Quality preset — trades bandwidth for fidelity. Changing
+            this re-opens the WS so the new preset takes effect on the
+            next frame. */}
+        <select
+          value={quality}
+          onChange={(e) =>
+            onQualityChange(e.target.value as "performance" | "balanced" | "quality")
+          }
+          aria-label="Streaming quality"
+          title="Streaming quality (trades bandwidth for fidelity)"
+          className="h-6 rounded border border-canvas-border bg-canvas-bg px-1 text-[11px] font-medium text-canvas-fg focus:border-accent focus:outline-none"
+        >
+          <option value="performance">Low</option>
+          <option value="balanced">Med</option>
+          <option value="quality">High</option>
+        </select>
+
         {/* Reload (only meaningful while connected) */}
         <button
           type="button"
@@ -298,7 +329,7 @@ function PreviewWindowBody({
         {/* Canvas + overlays */}
         <canvas
           ref={canvasRef}
-          className="h-full w-full cursor-default bg-white outline-none"
+          className="h-full w-full cursor-default bg-white outline-none touch-none select-none"
           tabIndex={0}
           aria-label={`Live preview on port ${port}`}
         />

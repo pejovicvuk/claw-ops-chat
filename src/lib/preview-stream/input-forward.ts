@@ -43,6 +43,31 @@ export interface ResizeEvent {
   height: number;
 }
 
+export interface TouchPoint {
+  /** Stable per-finger ID across move events so CDP can track each touch independently. */
+  id: number;
+  x: number;
+  y: number;
+  /** Pressure 0–1 if available; defaults to 0.5 when the source doesn't expose it. */
+  force?: number;
+  /** Touch radius in CSS pixels for `radiusX` / `radiusY` in CDP. Defaults to 1. */
+  radiusX?: number;
+  radiusY?: number;
+}
+
+export interface TouchEvent {
+  /**
+   * `touchStart` — one or more new touches began
+   * `touchMove` — at least one existing touch moved
+   * `touchEnd` — one or more touches ended (touchPoints carries the still-active ones)
+   * `touchCancel` — system aborted the gesture (e.g. orientation change, system gesture)
+   */
+  action: "start" | "move" | "end" | "cancel";
+  /** Currently-active touch points after this event applies. CDP needs the full set. */
+  touchPoints: TouchPoint[];
+  modifiers?: number;
+}
+
 const MOUSE_ACTION_TO_CDP = {
   down: "mousePressed",
   up: "mouseReleased",
@@ -149,6 +174,34 @@ export async function forwardKey(session: CDPSession, evt: KeyEvent): Promise<vo
   });
 }
 
+const TOUCH_ACTION_TO_CDP = {
+  start: "touchStart",
+  move: "touchMove",
+  end: "touchEnd",
+  cancel: "touchCancel",
+} as const satisfies Record<TouchEvent["action"], string>;
+
+/**
+ * Forward a single touch event to CDP. Each event carries the FULL
+ * set of currently-active touch points (CDP works in absolutes, not
+ * deltas) — the client tracks per-finger state and rebuilds the full
+ * list on every touchstart/move/end.
+ */
+export async function forwardTouch(session: CDPSession, evt: TouchEvent): Promise<void> {
+  await session.send("Input.dispatchTouchEvent", {
+    type: TOUCH_ACTION_TO_CDP[evt.action],
+    touchPoints: evt.touchPoints.map((p) => ({
+      x: p.x,
+      y: p.y,
+      id: p.id,
+      force: p.force ?? 0.5,
+      radiusX: p.radiusX ?? 1,
+      radiusY: p.radiusY ?? 1,
+    })),
+    modifiers: evt.modifiers ?? 0,
+  });
+}
+
 export async function forwardResize(page: Page, evt: ResizeEvent): Promise<void> {
   await page.setViewportSize({
     width: Math.max(200, Math.min(4096, Math.round(evt.width))),
@@ -180,6 +233,21 @@ export function _wheelToCdpPayload(evt: WheelEvent) {
     deltaY: evt.deltaY,
     button: "none",
     buttons: 0,
+  };
+}
+
+export function _touchToCdpPayload(evt: TouchEvent) {
+  return {
+    type: TOUCH_ACTION_TO_CDP[evt.action],
+    touchPoints: evt.touchPoints.map((p) => ({
+      x: p.x,
+      y: p.y,
+      id: p.id,
+      force: p.force ?? 0.5,
+      radiusX: p.radiusX ?? 1,
+      radiusY: p.radiusY ?? 1,
+    })),
+    modifiers: evt.modifiers ?? 0,
   };
 }
 

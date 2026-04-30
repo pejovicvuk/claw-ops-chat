@@ -2761,11 +2761,19 @@ app.prepare().then(() => {
         socket.destroy();
         return;
       }
+      // Optional quality preset from `?quality=performance|balanced|quality`.
+      // Fall through to the handler's default when missing or invalid.
+      const rawQuality = qs.quality;
+      const previewQuality =
+        rawQuality === "performance" || rawQuality === "balanced" || rawQuality === "quality"
+          ? rawQuality
+          : undefined;
       wss.handleUpgrade(req, socket, head, (ws) => {
         void handlePreviewStream(ws, actorEmail, {
           projectSlug,
           itemSlug,
           port: previewPort,
+          quality: previewQuality,
         });
       });
       logWsUpgrade({

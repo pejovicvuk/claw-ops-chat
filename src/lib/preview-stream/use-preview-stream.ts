@@ -26,6 +26,8 @@ const MOUSEMOVE_MIN_INTERVAL_MS = 16; // ~60fps
 
 export type PreviewStreamStatus = "idle" | "connecting" | "ready" | "error" | "closed";
 
+export type QualityPreset = "performance" | "balanced" | "quality";
+
 export interface UsePreviewStreamArgs {
   projectSlug: string;
   itemSlug: string;
@@ -33,6 +35,8 @@ export interface UsePreviewStreamArgs {
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   /** Hook is dormant until `enabled` is true (dev server is running). */
   enabled: boolean;
+  /** Streaming quality preset. Defaults to "balanced" server-side when absent. */
+  quality?: QualityPreset;
 }
 
 export interface UsePreviewStreamResult {
@@ -81,6 +85,7 @@ export function usePreviewStream({
   port,
   canvasRef,
   enabled,
+  quality,
 }: UsePreviewStreamArgs): UsePreviewStreamResult {
   const [status, setStatus] = useState<PreviewStreamStatus>("idle");
   const [deviceWidth, setDeviceWidth] = useState<number | null>(null);
@@ -193,9 +198,10 @@ export function usePreviewStream({
     if (!enabled) return;
     setStatus("connecting");
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const qualityQS = quality ? `?quality=${encodeURIComponent(quality)}` : "";
     const url = `${proto}//${window.location.host}${BASE_PATH}/ws/preview-stream/${encodeURIComponent(
       projectSlug,
-    )}/${encodeURIComponent(itemSlug)}/${port}`;
+    )}/${encodeURIComponent(itemSlug)}/${port}${qualityQS}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
@@ -220,7 +226,7 @@ export function usePreviewStream({
       setStatus("closed");
       scheduleReconnect();
     };
-  }, [projectSlug, itemSlug, port, onMessage, scheduleReconnect, enabled]);
+  }, [projectSlug, itemSlug, port, onMessage, scheduleReconnect, enabled, quality]);
 
   // Keep the connectRef current so scheduleReconnect always invokes
   // the freshest closure (with up-to-date enabled / port / etc.).
@@ -267,21 +273,19 @@ export function usePreviewStream({
 
     const toCanvas = (e: { clientX: number; clientY: number }) => {
       const rect = canvas.getBoundingClientRect();
-      // Use the canvas's backing-store size (set from each incoming
-      // bitmap by the paint loop) instead of the state-cached
-      // deviceWidth/deviceHeight from the initial `ready` frame.
-      // The viewport changes every time the user resizes the preview
-      // window — the resize event tells the server to call
-      // page.setViewportSize, Chromium re-renders at the new size,
-      // and the next bitmap is at that new size. canvas.width tracks
-      // that automatically; deviceWidth state does not, so reading it
-      // after a resize maps clicks to off-screen coordinates and the
-      // page sees no click at all.
-      const dw = canvas.width || rect.width;
-      const dh = canvas.height || rect.height;
+      // CDP `Input.dispatchMouseEvent` expects coordinates in CSS
+      // pixels relative to the viewport top-left. The page's CSS
+      // pixels equal the canvas's CSS pixels because we set
+      // `page.setViewportSize({rect.width, rect.height})` whenever
+      // the canvas resizes — so the offset within the canvas IS the
+      // offset within the page.
+      //
+      // This works at any deviceScaleFactor: the bitmap is in device
+      // pixels (DSF×CSS), the canvas backing store mirrors it, but
+      // CDP wants CSS px and we send CSS px. Done.
       return {
-        x: ((e.clientX - rect.left) / rect.width) * dw,
-        y: ((e.clientY - rect.top) / rect.height) * dh,
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
       };
     };
 
@@ -363,11 +367,89 @@ export function usePreviewStream({
       });
     };
 
+    // Touch handling for mobile / tablets / pen displays. CDP works in
+    // absolutes (each event carries the full set of currently-active
+    // touches), so we maintain a per-finger map keyed by `identifier`
+    // and rebuild the array on every touchstart/move/end.
+    const activeTouches = new Map<number, { x: number; y: number }>();
+    const buildTouchModifiers = (e: globalThis.TouchEvent): number => {
+      let m = 0;
+      if (e.altKey) m |= Modifiers.Alt;
+      if (e.ctrlKey) m |= Modifiers.Ctrl;
+      if (e.metaKey) m |= Modifiers.Meta;
+      if (e.shiftKey) m |= Modifiers.Shift;
+      return m;
+    };
+    const updateTouches = (e: globalThis.TouchEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      // Sync to the changed touches (start / move) and remove ended ones.
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        const t = e.changedTouches[i];
+        if (e.type === "touchend" || e.type === "touchcancel") {
+          activeTouches.delete(t.identifier);
+        } else {
+          activeTouches.set(t.identifier, {
+            x: t.clientX - rect.left,
+            y: t.clientY - rect.top,
+          });
+        }
+      }
+    };
+    const buildTouchPoints = () =>
+      Array.from(activeTouches.entries()).map(([id, p]) => ({
+        id,
+        x: p.x,
+        y: p.y,
+      }));
+    const onTouchStart = (e: globalThis.TouchEvent) => {
+      e.preventDefault();
+      updateTouches(e);
+      sendJson({
+        type: "touch",
+        action: "start",
+        touchPoints: buildTouchPoints(),
+        modifiers: buildTouchModifiers(e),
+      });
+    };
+    const onTouchMove = (e: globalThis.TouchEvent) => {
+      e.preventDefault();
+      updateTouches(e);
+      sendJson({
+        type: "touch",
+        action: "move",
+        touchPoints: buildTouchPoints(),
+        modifiers: buildTouchModifiers(e),
+      });
+    };
+    const onTouchEnd = (e: globalThis.TouchEvent) => {
+      e.preventDefault();
+      updateTouches(e);
+      sendJson({
+        type: "touch",
+        action: "end",
+        touchPoints: buildTouchPoints(),
+        modifiers: buildTouchModifiers(e),
+      });
+    };
+    const onTouchCancel = (e: globalThis.TouchEvent) => {
+      updateTouches(e);
+      sendJson({
+        type: "touch",
+        action: "cancel",
+        touchPoints: buildTouchPoints(),
+        modifiers: buildTouchModifiers(e),
+      });
+    };
+
     canvas.addEventListener("mousedown", onMouseDown);
     canvas.addEventListener("mouseup", onMouseUp);
     canvas.addEventListener("mousemove", onMouseMove);
     canvas.addEventListener("wheel", onWheel, { passive: false });
     canvas.addEventListener("contextmenu", onContextMenu);
+    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
+    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
+    canvas.addEventListener("touchend", onTouchEnd, { passive: false });
+    canvas.addEventListener("touchcancel", onTouchCancel);
     // Key events on the canvas require a tabIndex; keep them on the
     // canvas itself so typing in the chat doesn't leak in.
     canvas.tabIndex = 0;
@@ -380,8 +462,13 @@ export function usePreviewStream({
       canvas.removeEventListener("mousemove", onMouseMove);
       canvas.removeEventListener("wheel", onWheel);
       canvas.removeEventListener("contextmenu", onContextMenu);
+      canvas.removeEventListener("touchstart", onTouchStart);
+      canvas.removeEventListener("touchmove", onTouchMove);
+      canvas.removeEventListener("touchend", onTouchEnd);
+      canvas.removeEventListener("touchcancel", onTouchCancel);
       canvas.removeEventListener("keydown", onKeyDown);
       canvas.removeEventListener("keyup", onKeyUp);
+      activeTouches.clear();
     };
     // deviceWidth/deviceHeight intentionally NOT in deps — toCanvas
     // reads canvas.width/canvas.height instead, so this effect doesn't

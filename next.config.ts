@@ -137,6 +137,16 @@ const nextConfig: NextConfig = {
             .concat(";"),
         },
         {
+          // Phase 3b (#127): the chat client uses navigator.clipboard
+          // .writeText() to mirror the previewed page's copy events
+          // back to the user's system clipboard. Chrome grants this
+          // permission by default in user-gesture contexts but Firefox
+          // honors Permissions-Policy explicitly. Same-origin only —
+          // no cross-frame leakage.
+          key: "Permissions-Policy",
+          value: "clipboard-read=(self), clipboard-write=(self)",
+        },
+        {
           key: "X-Content-Type-Options",
           value: "nosniff",
         },

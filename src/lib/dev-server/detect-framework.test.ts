@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { detectFramework, frameworkLabel } from "./detect-framework";
+import { detectFramework } from "./detect-framework";
+import { frameworkLabel } from "./framework-label";
 
 interface PackageJsonShape {
   scripts?: Record<string, string>;

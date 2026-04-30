@@ -3,6 +3,10 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "@/lib/auth";
 import { formatResetsIn, toMillis } from "@/lib/format-relative-time";
+import { formatElapsed } from "@/lib/format-time";
+import { computeCost, formatCost, ratesFor } from "@/lib/model-pricing";
+import type { ContextUsage } from "@/lib/use-claude-chat";
+import type { ActiveToolInfo, ClaudeStatus } from "@/lib/types";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -18,30 +22,52 @@ interface RateLimitsCache {
   windows: Record<string, RateLimitWindow>;
 }
 
+interface HudPopupProps {
+  contextUsage: ContextUsage | null;
+  sessionStartedAt: number | null;
+  activeTool: ActiveToolInfo | null;
+  status: ClaudeStatus;
+  /** Number of user-sent text messages in the current session — drives the Turns counter. */
+  turnCount: number;
+}
+
 /**
- * Account-scoped rate-limits popup — only the two rows the user asked for.
+ * Combined session-stats + account-rate-limits popup. Two stacked sections:
  *
- * Data sources are:
- *   - A /v1/messages ping the server fires on boot + every 15 min
- *     (populates `status` + `resetsAt` + `isUsingOverage` via the
- *     `anthropic-ratelimit-unified-*` headers).
- *   - Live SDK `rate_limit_event` messages from active turns (can
- *     additionally carry an exact `utilization` 0..1 on some accounts).
- *
- * When `utilization` is unavailable we fall back to a status badge so the
- * user still gets the signal that matters: "do I have headroom right now?"
+ *   1. Session — model, active tool, elapsed timer, turn count, running
+ *      cost, token breakdown. Sourced live from the `useClaudeChat` hook
+ *      so each open render is an instant snapshot, not a fetch.
+ *   2. Rate limits — 5-hour and 7-day windows from
+ *      `~/.claude/claw-account-rate-limits.json`. Polled every 30s while
+ *      the popup is mounted; populated by:
+ *        - a `/v1/messages` ping the server fires on boot + every 15 min
+ *          (status + resetsAt via the `anthropic-ratelimit-unified-*`
+ *          headers, written into five_hour);
+ *        - live SDK `rate_limit_event` messages on real chat turns
+ *          (carry `utilization` 0..1 + window-tagged status).
+ *      When `utilization` is unavailable we fall back to a status badge
+ *      so the user still gets the signal that matters: "do I have
+ *      headroom right now?"
  */
-export function HudPopup() {
+export function HudPopup({
+  contextUsage,
+  sessionStartedAt,
+  activeTool,
+  status,
+  turnCount,
+}: HudPopupProps) {
   const [cache, setCache] = useState<RateLimitsCache | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
-  // 1-second countdown tick. Mounted only while the popup is open.
+  // 1-second tick. Drives both the rate-limit "resets in" countdown and the
+  // session elapsed counter. Mounted only while the popup is open so we're
+  // not re-rendering every tab in the background.
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(id);
   }, []);
 
-  // Fetch on mount + every 30s.
+  // Fetch rate-limit cache on mount + every 30s.
   useEffect(() => {
     let cancelled = false;
     const pull = async () => {
@@ -64,18 +90,79 @@ export function HudPopup() {
 
   const fiveHour = cache?.windows.five_hour;
   const sevenDay = cache?.windows.seven_day;
-  const empty = !cache || (!fiveHour && !sevenDay);
+  const rateEmpty = !cache || (!fiveHour && !sevenDay);
+
+  // Derived session values. All gracefully handle the "no data yet" state
+  // so the very first render of a brand-new chat doesn't crash or flash
+  // bogus zeros.
+  const modelLabel = (() => {
+    const r = ratesFor(contextUsage?.model);
+    if (r) return r.label;
+    return contextUsage?.model ?? "—";
+  })();
+  const elapsed = sessionStartedAt ? formatElapsed(now - sessionStartedAt) : "—";
+  const isToolRunning = status === "tool_running" && activeTool;
+  const cost = contextUsage
+    ? computeCost({
+        model: contextUsage.model ?? null,
+        inputTokens: contextUsage.inputTokens ?? 0,
+        outputTokens: contextUsage.outputTokens ?? 0,
+        cacheReadTokens: contextUsage.cacheReadTokens ?? 0,
+        cacheCreateTokens: contextUsage.cacheCreateTokens ?? 0,
+      })
+    : null;
 
   return (
     <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[280px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
       <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-canvas-muted">
+        Session
+      </p>
+      <div className="space-y-1.5">
+        <SessionRow label="Model" value={modelLabel} />
+        {isToolRunning && (
+          <SessionRow
+            label="Active tool"
+            value={
+              <span className="inline-flex items-center gap-1.5">
+                <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-400" />
+                <span className="font-mono text-[11px] text-canvas-fg">{activeTool.name}</span>
+              </span>
+            }
+          />
+        )}
+        <SessionRow label="Elapsed" value={elapsed} />
+        <SessionRow label="Turns" value={String(turnCount)} />
+        <SessionRow
+          label="Cost"
+          value={
+            <span title={cost === null ? "Model not in pricing table" : undefined}>
+              {formatCost(cost)}
+            </span>
+          }
+        />
+        {contextUsage && (
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <span className="text-[11px] text-canvas-muted">Tokens</span>
+            <span className="text-[10px] text-canvas-muted">
+              {compactToken(contextUsage.inputTokens ?? 0)} in ·{" "}
+              {compactToken(contextUsage.outputTokens ?? 0)} out ·{" "}
+              {compactToken(contextUsage.cacheReadTokens ?? 0)} cache hit ·{" "}
+              {compactToken(contextUsage.cacheCreateTokens ?? 0)} cache write
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="my-3 h-px bg-canvas-border" />
+
+      <p className="mb-2 text-[10px] font-medium uppercase tracking-wider text-canvas-muted">
         Rate limits
       </p>
       <div className="space-y-2">
-        <Row label="5-hour" window={fiveHour} now={now} />
-        <Row label="7-day" window={sevenDay} now={now} />
+        <RateRow label="5-hour" window={fiveHour} now={now} />
+        <RateRow label="7-day" window={sevenDay} now={now} />
       </div>
-      {empty && (
+      {rateEmpty && (
         <p className="mt-2 text-[10px] leading-snug text-canvas-muted">
           Waiting for the first data point. The server probes the API on boot and every 15 min;
           sending any chat message also refreshes these windows.
@@ -85,13 +172,34 @@ export function HudPopup() {
   );
 }
 
-interface RowProps {
+interface SessionRowProps {
+  label: string;
+  value: React.ReactNode;
+}
+
+function SessionRow({ label, value }: SessionRowProps) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[11px] text-canvas-muted">{label}</span>
+      <span className="text-[12px] font-medium text-canvas-fg">{value}</span>
+    </div>
+  );
+}
+
+/** Compact token formatter — keeps the breakdown row narrow on mobile. */
+function compactToken(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+interface RateRowProps {
   label: string;
   window: RateLimitWindow | undefined;
   now: number;
 }
 
-function Row({ label, window, now }: RowProps) {
+function RateRow({ label, window, now }: RateRowProps) {
   const hasData = Boolean(window);
   const pct =
     window && typeof window.utilization === "number"

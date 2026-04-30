@@ -18,10 +18,7 @@ import { useUrlState } from "@/lib/use-url-state";
 import { useComposerAttachments } from "@/lib/use-composer-attachments";
 import { fetchSessionMessages } from "@/lib/api";
 import type { UploadEntry } from "@/lib/batch-upload";
-import { StatusIndicator } from "./status-indicator";
-import { ContextIndicator } from "./context-indicator";
-import { HudIndicator } from "./hud-indicator";
-import { HudPopup } from "./hud-popup";
+import { HeaderIndicators } from "./header-indicators";
 import { MessageBubble } from "./message-bubble";
 import { SessionCwdProvider } from "@/lib/session-cwd-context";
 import { ChatFilesProvider } from "@/lib/chat-files-context";
@@ -45,23 +42,30 @@ const MODE_OPTIONS = [
   { value: "auto", label: "Auto", description: "Model classifier decides (SDK)" },
 ];
 
+/**
+ * Reasoning-effort picker. Mirrors the SDK's `EffortLevel` (low | medium |
+ * high | xhigh | max). Empty string means **Adaptive** thinking — the SDK
+ * chooses a thinking budget per turn (`thinking: { type: 'adaptive' }`).
+ *
+ * The "Adaptive" label was previously "Auto", which clashed with the
+ * mode picker's own "Auto" (model-classifier permission mode). Two
+ * unrelated controls labelled "Auto" in the same compact toolbar made
+ * the UI unreadable — Adaptive matches the SDK's own terminology and
+ * disambiguates the two.
+ *
+ * `mobileLabel` is hand-picked rather than derived from `label.charAt(0)`
+ * because that derivation produced "M" for both "Med" and "Max", and
+ * "H" for both "High" and "X-High" — collisions that left users unable
+ * to tell which level was active on a phone.
+ */
 const EFFORT_OPTIONS = [
-  { value: "", label: "Auto" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Med" },
-  { value: "high", label: "High" },
-  { value: "max", label: "Max" },
+  { value: "", label: "Adaptive", mobileLabel: "A" },
+  { value: "low", label: "Low", mobileLabel: "L" },
+  { value: "medium", label: "Med", mobileLabel: "M" },
+  { value: "high", label: "High", mobileLabel: "H" },
+  { value: "xhigh", label: "X-High", mobileLabel: "X" },
+  { value: "max", label: "Max", mobileLabel: "✦" },
 ];
-
-const STATUS_LABELS: Record<string, string> = {
-  disconnected: "Disconnected",
-  connecting: "Connecting...",
-  idle: "Ready",
-  thinking: "Thinking...",
-  tool_running: "Running tool...",
-  awaiting_permission: "Needs approval",
-  awaiting_input: "Needs your input",
-};
 
 /** Playful gerunds used in place of plain "Thinking..." in the live
     activity indicator. One is picked at random each time Claude enters the
@@ -84,12 +88,6 @@ const THINKING_VERBS: string[] = [
   "Befuddling",
   "Hornswoggling",
 ];
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
-}
 
 /**
  * Top-pinned banner that appears whenever the agent is awaiting any kind
@@ -199,6 +197,7 @@ export function ChatView({
     contextUsage,
     permissionMode,
     effort,
+    sessionStartedAt,
     respondPermission,
     respondQuestion,
     respondPlan,
@@ -208,6 +207,14 @@ export function ChatView({
     setInitialMessages,
     setInitialContextUsage,
   } = useClaudeChat(sessionId, sessionCwd);
+  // Live "turns" count for the HUD popup. Counts the user's text bubbles
+  // — system info chips (Shift+Tab banners) and Claude's tool_use /
+  // tool_result entries are intentionally excluded so the figure matches
+  // the user's intuition of "how many things have I asked".
+  const turnCount = useMemo(
+    () => messages.filter((m) => m.role === "user" && m.type === "text").length,
+    [messages],
+  );
   const notifiedSessionRef = useRef<string | null>(null);
   const { setParam } = useUrlState();
   const { viewportHeight } = useVisualViewport();
@@ -266,8 +273,6 @@ export function ChatView({
   const handleSuggestionClick = useCallback((text: string) => {
     setDraft((prev) => ({ text, seq: prev.seq + 1 }));
   }, []);
-  const [openPopup, setOpenPopup] = useState<"status" | "context" | "hud" | null>(null);
-  const popupRef = useRef<HTMLDivElement>(null);
   // Funny "thinking" verb — rerolled each time status enters `thinking`
   // from another state so every turn shows a fresh gerund. Lazy init picks
   // the first one at mount so there's no blank flash on the very first turn.
@@ -286,17 +291,8 @@ export function ChatView({
   >([]);
   const bridgeSyncedRef = useRef(false);
 
-  // Outside-click dismissal for indicator popups.
-  useEffect(() => {
-    if (!openPopup) return;
-    function handleClick(e: MouseEvent) {
-      if (popupRef.current && !popupRef.current.contains(e.target as Node)) {
-        setOpenPopup(null);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [openPopup]);
+  // Indicator-popup state and outside-click dismissal moved into
+  // <HeaderIndicators />. ChatView no longer owns it.
 
   /* Notify parent when SDK creates a new session (so page can update selected session) */
   useEffect(() => {
@@ -588,69 +584,14 @@ export function ChatView({
             <div className="min-w-0 flex-1">
               <p className="truncate text-[14px] font-semibold text-canvas-fg">Claude</p>
             </div>
-            <div className="relative flex items-center gap-0.5" ref={popupRef}>
-              <StatusIndicator
-                status={status}
-                isOpen={openPopup === "status"}
-                onClick={() => setOpenPopup((p) => (p === "status" ? null : "status"))}
-              />
-              <ContextIndicator
-                percentage={contextUsage?.percentage ?? null}
-                isOpen={openPopup === "context"}
-                onClick={() => setOpenPopup((p) => (p === "context" ? null : "context"))}
-              />
-              <HudIndicator
-                isOpen={openPopup === "hud"}
-                onClick={() => setOpenPopup((p) => (p === "hud" ? null : "hud"))}
-              />
-
-              {openPopup === "status" && (
-                <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[140px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl">
-                  <p className="px-1 py-0.5 text-[12px] font-medium text-canvas-fg">
-                    {status === "tool_running" && activeTool
-                      ? `Running ${activeTool.name}...`
-                      : STATUS_LABELS[status]}
-                  </p>
-                  {status === "disconnected" && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        reconnect();
-                        setOpenPopup(null);
-                      }}
-                      className="mt-1 w-full rounded-md bg-canvas-surface-hover px-2 py-1 text-[11px] font-medium text-canvas-fg hover:bg-canvas-border"
-                    >
-                      Reconnect
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {openPopup === "context" && (
-                <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[180px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
-                  {contextUsage ? (
-                    <>
-                      <p className="text-[18px] font-semibold text-canvas-fg">
-                        {contextUsage.percentage}%
-                      </p>
-                      <p className="mt-0.5 text-[11px] text-canvas-muted">
-                        {formatTokens(contextUsage.used)} of {formatTokens(contextUsage.max)} tokens
-                      </p>
-                      <p className="mt-1 text-[10px] text-canvas-muted">Context window usage</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="text-[12px] font-medium text-canvas-fg">No usage yet</p>
-                      <p className="mt-0.5 text-[11px] text-canvas-muted">
-                        Send a message to see context usage.
-                      </p>
-                    </>
-                  )}
-                </div>
-              )}
-
-              {openPopup === "hud" && <HudPopup />}
-            </div>
+            <HeaderIndicators
+              status={status}
+              activeTool={activeTool}
+              contextUsage={contextUsage}
+              sessionStartedAt={sessionStartedAt}
+              turnCount={turnCount}
+              reconnect={reconnect}
+            />
           </div>
         )}
 
@@ -708,11 +649,12 @@ export function ChatView({
           <div className="flex items-center gap-0.5 rounded-full bg-canvas-surface-hover p-0.5">
             {EFFORT_OPTIONS.map((opt) => {
               const isActive = (opt.value === "" && !effort) || opt.value === effort;
-              // On mobile only show the active effort as a tight pill with
-              // the letter (A/L/M/H/X) — tapping the row still lets the user
-              // cycle through by clicking on different letters in the
-              // compressed strip. Keeps the full picker visible on desktop.
-              const mobileLabel = opt.value === "" ? "A" : opt.label.charAt(0);
+              // Mobile shows the option's hand-picked single-character
+              // mnemonic (A/L/M/H/X/✦). Each option owns its own short
+              // glyph rather than deriving one from `label.charAt(0)` —
+              // the derivation collapsed Med + Max to the same "M" and
+              // High + X-High to the same "H", leaving users unable to
+              // tell which level was active.
               return (
                 <button
                   key={opt.value}
@@ -725,7 +667,7 @@ export function ChatView({
                       : "text-canvas-muted hover:text-canvas-fg"
                   }`}
                 >
-                  {isMobile ? mobileLabel : opt.label}
+                  {isMobile ? opt.mobileLabel : opt.label}
                 </button>
               );
             })}
@@ -733,70 +675,14 @@ export function ChatView({
 
           {headerless && (
             <div className="ml-auto">
-              <div className="relative flex items-center gap-0.5" ref={popupRef}>
-                <StatusIndicator
-                  status={status}
-                  isOpen={openPopup === "status"}
-                  onClick={() => setOpenPopup((p) => (p === "status" ? null : "status"))}
-                />
-                <ContextIndicator
-                  percentage={contextUsage?.percentage ?? null}
-                  isOpen={openPopup === "context"}
-                  onClick={() => setOpenPopup((p) => (p === "context" ? null : "context"))}
-                />
-                <HudIndicator
-                  isOpen={openPopup === "hud"}
-                  onClick={() => setOpenPopup((p) => (p === "hud" ? null : "hud"))}
-                />
-
-                {openPopup === "status" && (
-                  <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[140px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl">
-                    <p className="px-1 py-0.5 text-[12px] font-medium text-canvas-fg">
-                      {status === "tool_running" && activeTool
-                        ? `Running ${activeTool.name}...`
-                        : STATUS_LABELS[status]}
-                    </p>
-                    {status === "disconnected" && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          reconnect();
-                          setOpenPopup(null);
-                        }}
-                        className="mt-1 w-full rounded-md bg-canvas-surface-hover px-2 py-1 text-[11px] font-medium text-canvas-fg hover:bg-canvas-border"
-                      >
-                        Reconnect
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {openPopup === "context" && (
-                  <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[180px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
-                    {contextUsage ? (
-                      <>
-                        <p className="text-[18px] font-semibold text-canvas-fg">
-                          {contextUsage.percentage}%
-                        </p>
-                        <p className="mt-0.5 text-[11px] text-canvas-muted">
-                          {formatTokens(contextUsage.used)} of {formatTokens(contextUsage.max)}{" "}
-                          tokens
-                        </p>
-                        <p className="mt-1 text-[10px] text-canvas-muted">Context window usage</p>
-                      </>
-                    ) : (
-                      <>
-                        <p className="text-[12px] font-medium text-canvas-fg">No usage yet</p>
-                        <p className="mt-0.5 text-[11px] text-canvas-muted">
-                          Send a message to see context usage.
-                        </p>
-                      </>
-                    )}
-                  </div>
-                )}
-
-                {openPopup === "hud" && <HudPopup />}
-              </div>
+              <HeaderIndicators
+                status={status}
+                activeTool={activeTool}
+                contextUsage={contextUsage}
+                sessionStartedAt={sessionStartedAt}
+                turnCount={turnCount}
+                reconnect={reconnect}
+              />
             </div>
           )}
 

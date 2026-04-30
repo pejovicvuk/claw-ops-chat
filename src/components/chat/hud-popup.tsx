@@ -1,26 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { authFetch } from "@/lib/auth";
 import { formatResetsIn, toMillis } from "@/lib/format-relative-time";
 import { formatElapsed } from "@/lib/format-time";
-import { computeCost, formatCost, ratesFor } from "@/lib/model-pricing";
+import { ratesFor } from "@/lib/model-pricing";
 import type { ContextUsage } from "@/lib/use-claude-chat";
 import type { ActiveToolInfo, ClaudeStatus } from "@/lib/types";
-
-const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
-
-interface RateLimitWindow {
-  status: "allowed" | "allowed_warning" | "rejected";
-  utilization?: number;
-  resetsAt?: number | null;
-  isUsingOverage?: boolean;
-}
-
-interface RateLimitsCache {
-  updatedAt: number | null;
-  windows: Record<string, RateLimitWindow>;
-}
+import type { RateLimitsCache, RateLimitWindow } from "@/lib/account-rate-limits";
 
 interface HudPopupProps {
   contextUsage: ContextUsage | null;
@@ -36,6 +22,12 @@ interface HudPopupProps {
    */
   model: string | null;
   setModel: (next: string | null) => void;
+  /**
+   * Account-level rate-limit cache, fetched + polled by the parent
+   * `HeaderIndicators` so the new ring indicators and this popup share
+   * one network poller. `null` until the first fetch completes.
+   */
+  rateLimits: RateLimitsCache | null;
 }
 
 /**
@@ -68,12 +60,13 @@ function modelFamily(id: string | null | undefined): "opus" | "sonnet" | "haiku"
 /**
  * Combined session-stats + account-rate-limits popup. Two stacked sections:
  *
- *   1. Session — model, active tool, elapsed timer, turn count, running
- *      cost, token breakdown. Sourced live from the `useClaudeChat` hook
- *      so each open render is an instant snapshot, not a fetch.
+ *   1. Session — model, active tool, elapsed timer, turn count, token
+ *      breakdown. Sourced live from the `useClaudeChat` hook so each
+ *      open render is an instant snapshot, not a fetch.
  *   2. Rate limits — 5-hour and 7-day windows from
- *      `~/.claude/claw-account-rate-limits.json`. Polled every 30s while
- *      the popup is mounted; populated by:
+ *      `~/.claude/claw-account-rate-limits.json`, fetched once at the
+ *      parent (`HeaderIndicators`) via `useRateLimits` and passed down.
+ *      Populated by:
  *        - a `/v1/messages` ping the server fires on boot + every 15 min
  *          (status + resetsAt via the `anthropic-ratelimit-unified-*`
  *          headers, written into five_hour);
@@ -91,8 +84,8 @@ export function HudPopup({
   turnCount,
   model,
   setModel,
+  rateLimits,
 }: HudPopupProps) {
-  const [cache, setCache] = useState<RateLimitsCache | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
   // 1-second tick. Drives both the rate-limit "resets in" countdown and the
@@ -103,30 +96,9 @@ export function HudPopup({
     return () => clearInterval(id);
   }, []);
 
-  // Fetch rate-limit cache on mount + every 30s.
-  useEffect(() => {
-    let cancelled = false;
-    const pull = async () => {
-      try {
-        const res = await authFetch(`${BASE}/api/rate-limits`);
-        if (!res.ok) throw new Error("fetch");
-        const data = (await res.json()) as RateLimitsCache;
-        if (!cancelled) setCache(data);
-      } catch {
-        if (!cancelled) setCache({ updatedAt: null, windows: {} });
-      }
-    };
-    void pull();
-    const id = setInterval(pull, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, []);
-
-  const fiveHour = cache?.windows.five_hour;
-  const sevenDay = cache?.windows.seven_day;
-  const rateEmpty = !cache || (!fiveHour && !sevenDay);
+  const fiveHour = rateLimits?.windows.five_hour;
+  const sevenDay = rateLimits?.windows.seven_day;
+  const rateEmpty = !rateLimits || (!fiveHour && !sevenDay);
 
   // Derived session values. All gracefully handle the "no data yet" state
   // so the very first render of a brand-new chat doesn't crash or flash
@@ -143,15 +115,6 @@ export function HudPopup({
   const autoHint = !model && runningModelLabel ? runningModelLabel : null;
   const elapsed = sessionStartedAt ? formatElapsed(now - sessionStartedAt) : "—";
   const isToolRunning = status === "tool_running" && activeTool;
-  const cost = contextUsage
-    ? computeCost({
-        model: contextUsage.model ?? null,
-        inputTokens: contextUsage.inputTokens ?? 0,
-        outputTokens: contextUsage.outputTokens ?? 0,
-        cacheReadTokens: contextUsage.cacheReadTokens ?? 0,
-        cacheCreateTokens: contextUsage.cacheCreateTokens ?? 0,
-      })
-    : null;
 
   return (
     <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[280px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
@@ -204,14 +167,6 @@ export function HudPopup({
         )}
         <SessionRow label="Elapsed" value={elapsed} />
         <SessionRow label="Turns" value={String(turnCount)} />
-        <SessionRow
-          label="Cost"
-          value={
-            <span title={cost === null ? "Model not in pricing table" : undefined}>
-              {formatCost(cost)}
-            </span>
-          }
-        />
         {contextUsage && (
           <div className="flex items-center justify-between gap-3 pt-1">
             <span className="text-[11px] text-canvas-muted">Tokens</span>

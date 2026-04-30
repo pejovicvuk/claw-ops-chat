@@ -3,10 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Z_INDEX } from "@/lib/z-index";
 import {
+  applyLineDelta,
   detectDragRectSnap,
   detectResizeSnap,
   detectSnapZone,
-  findResizePartner,
+  findResizeGroup,
+  lineShift,
+  type GroupMember,
   type OtherWindow,
   type ResizeEdge,
   type ResizeRect,
@@ -46,10 +49,15 @@ const SNAP_OVERLAY_Z = Z_INDEX.FLOATING + 1000;
 
 /**
  * Renders one page of the canvas: visible windows (absolute-positioned,
- * z-stacked by `focusOrder`). Minimized windows are NOT rendered here —
- * they show up as tabs in the canvas toolbar instead. The page measures
- * its own bounds via ResizeObserver so children can clamp drag/resize
- * correctly.
+ * z-stacked by `focusOrder`). Minimized windows render as toolbar tabs
+ * at a higher level. Layout is two nested divs:
+ *   • outer (`bg-canvas-bg` + dot grid) provides the visual canvas
+ *     surface and the 8 px gutter on every side via `inset-2` on the
+ *     inner positioning container.
+ *   • inner (the positioning container, ResizeObserver target) is
+ *     where windows are absolute-positioned. Its size is what
+ *     `clampRectToViewport` uses, so a maximized / full-size window
+ *     never touches the literal canvas frame.
  *
  * Owns the snap-preview overlay: while a window is being dragged the
  * page tracks the pointer in canvas-relative coords, runs
@@ -78,17 +86,16 @@ export function CanvasPage({
   const draggingIdRef = useRef<string | null>(null);
   /**
    * Per-resize gesture state: which window is being resized, which edge
-   * was grabbed, the start geometries of the active + partner windows
-   * (for delta-based mirror math), and the partner's id if any. All
-   * cleared on resize-end.
+   * was grabbed, the active's start geometry, and the FULL group of
+   * partner windows whose moving edge sits on the same shared line.
+   * Cleared on resize-end. The group can have N members (chained case)
+   * or zero (solo resize).
    */
   const resizeStateRef = useRef<{
     activeId: string;
     edge: ResizeEdge;
     activeStart: ResizeRect;
-    partnerId: string | null;
-    partnerEdge: ResizeEdge | null;
-    partnerStart: ResizeRect | null;
+    group: GroupMember[];
   } | null>(null);
 
   useEffect(() => {
@@ -102,8 +109,9 @@ export function CanvasPage({
     return () => observer.disconnect();
   }, []);
 
-  // Minimized windows now render in the toolbar as tabs (see WindowTabs),
-  // so the page uses its full bounds for drag / resize clamping.
+  // The inner positioning container provides the usable canvas area.
+  // Its measured size already excludes the 8 px gutter on every side, so
+  // clampRectToViewport / snap math treat the gutter as the canvas frame.
   const usableBounds = useMemo(
     () => ({ width: bounds.width, height: bounds.height }),
     [bounds.width, bounds.height],
@@ -144,9 +152,7 @@ export function CanvasPage({
       const others = otherWindowsForDrag(draggingIdRef.current);
 
       // Rect-based first: any window corner / edge near a canvas corner
-      // / edge fires the canvas-edge family. This is the new behaviour —
-      // pre-fix only the cursor's position counted, so dragging a window
-      // by its title bar to the bottom-right couldn't fire `br`.
+      // / edge fires the canvas-edge family.
       let result: SnapResult | null = detectDragRectSnap(rect, usableBounds, {
         otherWindows: others,
       });
@@ -183,8 +189,9 @@ export function CanvasPage({
 
   /**
    * Resize gesture starts: capture the active window's start geometry,
-   * find a partner window whose mirrored edge is touching, and remember
-   * both for the move handler.
+   * find ALL group members (other windows on the active's shared line),
+   * and remember everything so `handleResizeMove` can apply a single
+   * line-delta to every member of the group.
    */
   const handleResizeStart = useCallback(
     (id: string, edge: ResizeEdge) => {
@@ -196,41 +203,25 @@ export function CanvasPage({
         w: active.geometry.w,
         h: active.geometry.h,
       };
-      // Candidates for partnering: every other visible window on this page.
       const candidates = windows
         .filter((w) => w.id !== id && !w.geometry.minimized)
         .map((w) => ({
           id: w.id,
           rect: { x: w.geometry.x, y: w.geometry.y, w: w.geometry.w, h: w.geometry.h },
         }));
-      const partner = findResizePartner(activeStart, edge, candidates);
-      const partnerWin = partner ? windows.find((w) => w.id === partner.id) : null;
-      resizeStateRef.current = {
-        activeId: id,
-        edge,
-        activeStart,
-        partnerId: partner?.id ?? null,
-        partnerEdge: partner?.partnerEdge ?? null,
-        partnerStart: partnerWin
-          ? {
-              x: partnerWin.geometry.x,
-              y: partnerWin.geometry.y,
-              w: partnerWin.geometry.w,
-              h: partnerWin.geometry.h,
-            }
-          : null,
-      };
+      const group = findResizeGroup(activeStart, edge, candidates);
+      resizeStateRef.current = { activeId: id, edge, activeStart, group };
     },
     [windows],
   );
 
   /**
    * Resize gesture move: passed the active window's clamped rect from
-   * the draggable-window flush. Handles two responsibilities:
-   *   1. If a partner exists, mirror the active edge's delta to the
-   *      partner's matching edge (e.g. A grew right → B shrinks from left
-   *      AND moves right by the same amount). Min-size on the partner
-   *      caps both windows so the splitter never produces an oversize.
+   * the draggable-window flush. Two responsibilities:
+   *   1. Compute the line shift Δ from the active's geometry, then
+   *      apply Δ to every group member via `applyLineDelta`. Each
+   *      member's geometry is clamped to MIN_W / MIN_H individually
+   *      (no rollback to the active in this MVP).
    *   2. Compute `detectResizeSnap` against the active rect and stash
    *      the result for the overlay + the on-end commit.
    */
@@ -239,68 +230,31 @@ export function CanvasPage({
       const rs = resizeStateRef.current;
       if (!rs) return;
 
-      // ── 1. Partner mirror ──────────────────────────────────────────────
-      if (rs.partnerId && rs.partnerStart && rs.partnerEdge) {
-        const partner = windows.find((w) => w.id === rs.partnerId);
-        const dx = rect.x - rs.activeStart.x;
-        const dy = rect.y - rs.activeStart.y;
-        const dw = rect.w - rs.activeStart.w;
-        const dh = rect.h - rs.activeStart.h;
-        let next: ResizeRect = { ...rs.partnerStart };
-        switch (rs.partnerEdge) {
-          case "w":
-            // Active grew right (E edge) → partner shrinks from left and shifts right.
-            next = {
-              ...rs.partnerStart,
-              x: rs.partnerStart.x + dw,
-              w: rs.partnerStart.w - dw,
-            };
-            break;
-          case "e":
-            // Active grew left (W edge) → partner shrinks from right.
-            next = {
-              ...rs.partnerStart,
-              w: rs.partnerStart.w + dx,
-            };
-            break;
-          case "n":
-            // Active grew down (S edge) → partner shrinks from top and shifts down.
-            next = {
-              ...rs.partnerStart,
-              y: rs.partnerStart.y + dh,
-              h: rs.partnerStart.h - dh,
-            };
-            break;
-          case "s":
-            // Active grew up (N edge) → partner shrinks from bottom.
-            next = {
-              ...rs.partnerStart,
-              h: rs.partnerStart.h + dy,
-            };
-            break;
-        }
-        // Clamp partner to MIN sizes — don't propagate the clamp back to
-        // the active window in this MVP (the splitter feels close enough
-        // and avoids fighting the active resize math).
+      // ── 1. Group mirror ────────────────────────────────────────────────
+      const delta = lineShift(rect, rs.activeStart, rs.edge);
+      for (const member of rs.group) {
+        const next = applyLineDelta(member.start, member.role, rs.edge, delta);
         next.w = Math.max(MIN_W, next.w);
         next.h = Math.max(MIN_H, next.h);
+        const current = windows.find((w) => w.id === member.id);
         if (
-          partner &&
-          (next.x !== partner.geometry.x ||
-            next.y !== partner.geometry.y ||
-            next.w !== partner.geometry.w ||
-            next.h !== partner.geometry.h)
+          current &&
+          (next.x !== current.geometry.x ||
+            next.y !== current.geometry.y ||
+            next.w !== current.geometry.w ||
+            next.h !== current.geometry.h)
         ) {
-          onChange(rs.partnerId, { ...partner.geometry, ...next });
+          onChange(member.id, { ...current.geometry, ...next });
         }
       }
 
       // ── 2. Resize snap suggestion ──────────────────────────────────────
       // Build the obstacle set from every other visible window EXCEPT
-      // the partner — the partner's edge is moving in lockstep so it
+      // group members — their edges are moving in lockstep so they
       // shouldn't bound the active window's snap reach.
+      const groupIds = new Set(rs.group.map((m) => m.id));
       const obstacles: ResizeRect[] = windows
-        .filter((w) => w.id !== rs.activeId && w.id !== rs.partnerId && !w.geometry.minimized)
+        .filter((w) => w.id !== rs.activeId && !groupIds.has(w.id) && !w.geometry.minimized)
         .map((w) => ({ x: w.geometry.x, y: w.geometry.y, w: w.geometry.w, h: w.geometry.h }));
       const result = detectResizeSnap(rect, rs.edge, usableBounds, obstacles);
       if (snapRef.current?.kind !== result?.kind) {
@@ -314,7 +268,7 @@ export function CanvasPage({
   );
 
   return (
-    <div ref={containerRef} className="relative min-h-0 flex-1 overflow-hidden bg-canvas-bg">
+    <div className="relative min-h-0 flex-1 overflow-hidden bg-canvas-bg">
       {/* Subtle dot grid so it reads as a "canvas" rather than a blank pane. */}
       <div
         aria-hidden
@@ -325,36 +279,44 @@ export function CanvasPage({
           opacity: 0.4,
         }}
       />
-      {windows.map((win) => {
-        if (win.geometry.minimized) return null;
-        const focusIndex = focusOrder.indexOf(win.id);
-        const z = Z_INDEX.FLOATING + Math.max(0, windows.length - focusIndex);
-        return (
-          <DraggableWindow
-            key={win.id}
-            title={titleFor(win)}
-            geometry={win.geometry}
-            prevGeometry={win.prevGeometry}
-            zIndex={z}
-            canvasBounds={usableBounds}
-            onChange={(geom, prev) => onChange(win.id, geom, prev)}
-            onClose={() => onClose(win.id)}
-            onFocus={() => onFocus(win.id)}
-            onDragStart={() => handleDragStart(win.id)}
-            onDragMove={handleDragMove}
-            onResizeStart={(edge) => handleResizeStart(win.id, edge)}
-            onResizeMove={handleResizeMove}
-            onDragEnd={handleDragEnd}
-          >
-            <WindowHost
-              descriptor={win}
-              onSessionCreated={onSessionCreated}
-              onStateChange={onStateChange}
-            />
-          </DraggableWindow>
-        );
-      })}
-      <SnapOverlay snap={snapState} zIndex={SNAP_OVERLAY_Z} />
+      {/*
+        Inner positioning container — provides the 8 px gutter on every
+        side. ResizeObserver measures THIS so usableBounds / clamp math
+        treat the gutter as the canvas frame; full-size windows never
+        touch the literal edge.
+      */}
+      <div ref={containerRef} className="absolute inset-2">
+        {windows.map((win) => {
+          if (win.geometry.minimized) return null;
+          const focusIndex = focusOrder.indexOf(win.id);
+          const z = Z_INDEX.FLOATING + Math.max(0, windows.length - focusIndex);
+          return (
+            <DraggableWindow
+              key={win.id}
+              title={titleFor(win)}
+              geometry={win.geometry}
+              prevGeometry={win.prevGeometry}
+              zIndex={z}
+              canvasBounds={usableBounds}
+              onChange={(geom, prev) => onChange(win.id, geom, prev)}
+              onClose={() => onClose(win.id)}
+              onFocus={() => onFocus(win.id)}
+              onDragStart={() => handleDragStart(win.id)}
+              onDragMove={handleDragMove}
+              onResizeStart={(edge) => handleResizeStart(win.id, edge)}
+              onResizeMove={handleResizeMove}
+              onDragEnd={handleDragEnd}
+            >
+              <WindowHost
+                descriptor={win}
+                onSessionCreated={onSessionCreated}
+                onStateChange={onStateChange}
+              />
+            </DraggableWindow>
+          );
+        })}
+        <SnapOverlay snap={snapState} zIndex={SNAP_OVERLAY_Z} />
+      </div>
     </div>
   );
 }

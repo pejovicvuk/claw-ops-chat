@@ -94,12 +94,33 @@ export interface AcquiredPage {
   release: () => Promise<void>;
 }
 
+export interface AcquireOpts {
+  /**
+   * Hook invoked AFTER context+page creation but BEFORE the first
+   * `page.goto`. Use it to register CDP bindings or `addInitScript`
+   * calls that need to land before any page script runs on the
+   * initial navigation — Playwright's init scripts are guaranteed
+   * to run before page scripts only when registered ahead of goto.
+   *
+   * Phase 3b (#127) uses this for the clipboard bridge: the
+   * `__clawClipboardCopy` binding + the copy/cut hook injection.
+   *
+   * If the hook throws, acquirePage propagates the error to the
+   * caller. The hook should be idempotent w.r.t. its own state
+   * since acquirePage retries are cheap.
+   */
+  beforeNavigate?: (page: Page, context: BrowserContext) => Promise<void>;
+}
+
 /**
  * Acquire a fresh Page in its own isolated BrowserContext, navigated
  * to `http://127.0.0.1:<port>`. Throws if the upstream is unreachable
  * — caller should map that to a `502`-ish WS error frame.
  */
-export async function acquirePage(port: number): Promise<AcquiredPage> {
+export async function acquirePage(
+  port: number,
+  opts: AcquireOpts = {},
+): Promise<AcquiredPage> {
   const browser = await getBrowser();
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
@@ -131,6 +152,18 @@ export async function acquirePage(port: number): Promise<AcquiredPage> {
       scheduleIdleShutdown();
     }
   };
+
+  if (opts.beforeNavigate) {
+    try {
+      await opts.beforeNavigate(page, context);
+    } catch (err) {
+      // Hook failed — release the page and propagate. We treat hook
+      // setup as critical: a half-wired clipboard bridge is worse
+      // than no bridge at all.
+      await release();
+      throw err;
+    }
+  }
 
   try {
     await page.goto(`http://127.0.0.1:${port}/`, {

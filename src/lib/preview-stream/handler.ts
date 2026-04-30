@@ -5,6 +5,11 @@ import { H264Encoder, type SegmentEvent, type AudioMuxOptions } from "./h264-enc
 import { AudioCapture } from "./audio-capture";
 import { decodePngToRgb24 } from "./png-decoder";
 import {
+  CLIPBOARD_BINDING_NAME,
+  buildInjectedClipboardScript,
+  validateClipboardPayload,
+} from "./clipboard-bridge";
+import {
   forwardKey,
   forwardMouse,
   forwardTouch,
@@ -207,7 +212,21 @@ export async function handlePreviewStream(
   });
 
   try {
-    acquired = await acquirePage(route.port);
+    acquired = await acquirePage(route.port, {
+      // Phase 3b (#127): wire the clipboard bridge BEFORE the first
+      // navigation so the inject script lands ahead of page scripts.
+      // Bound at the BrowserContext level so all frames (iframes,
+      // post-reload documents) inherit both the binding + hook.
+      beforeNavigate: async (_page, context) => {
+        await context.exposeBinding(CLIPBOARD_BINDING_NAME, async (_source, raw) => {
+          if (closed) return;
+          const validated = validateClipboardPayload(raw);
+          if (!validated.ok || !validated.text) return;
+          sendJson({ type: "clipboard_copy", text: validated.text });
+        });
+        await context.addInitScript({ content: buildInjectedClipboardScript() });
+      },
+    });
   } catch (err) {
     sendJson({
       type: "error",
@@ -619,6 +638,17 @@ async function dispatchClientFrame(
         // can apply the viewport change in place.
         onResize(frame as unknown as ResizeEvent);
         return;
+      case "clipboard_paste": {
+        // Phase 3b (#127): user pressed Ctrl+V on the preview element.
+        // page.keyboard.insertText handles focused-frame routing — if
+        // the focus is in an iframe inside the previewed app, CDP
+        // dispatches into that frame for us. Falls back to a no-op
+        // when nothing is focused.
+        const validated = validateClipboardPayload((frame as { text?: unknown }).text);
+        if (!validated.ok || !validated.text) return;
+        await page.keyboard.insertText(validated.text);
+        return;
+      }
       case "reload":
         sendJson({ type: "status", state: "navigating" });
         await page.goto(`http://127.0.0.1:${route.port}/`, {

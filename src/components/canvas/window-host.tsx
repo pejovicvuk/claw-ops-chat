@@ -26,10 +26,16 @@ export function WindowHost({ descriptor, onSessionCreated, onStateChange }: Wind
     );
   }
   if (descriptor.state.kind === "preview") {
+    const previewState = descriptor.state;
     return (
       <PreviewWindow
         descriptor={descriptor}
-        onPortChange={(port) => onStateChange?.(descriptor.id, { kind: "preview", port })}
+        onPortChange={(port) =>
+          onStateChange?.(descriptor.id, { kind: "preview", port, path: previewState.path })
+        }
+        onPathChange={(path) =>
+          onStateChange?.(descriptor.id, { kind: "preview", port: previewState.port, path })
+        }
       />
     );
   }

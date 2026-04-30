@@ -38,7 +38,20 @@ export interface WindowGeometry {
   maximized?: boolean;
 }
 
-export type WindowState = { kind: "chat"; sessionId: string } | { kind: "preview"; port: number };
+export type WindowState =
+  | { kind: "chat"; sessionId: string }
+  | {
+      kind: "preview";
+      port: number;
+      /**
+       * Path on the upstream dev server (e.g. `/about`, `/users/42`).
+       * Optional + defaults to `/` when absent — adding it does not
+       * invalidate persisted blobs since the loader doesn't enumerate
+       * fields. The PreviewWindow keeps this in sync with the page's
+       * actual URL whenever the previewed app navigates.
+       */
+      path?: string;
+    };
 
 export interface WindowDescriptor {
   id: string;

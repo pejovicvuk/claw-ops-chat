@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Modifiers } from "./input-forward";
+import { validateClipboardPayload } from "./clipboard-bridge";
 
 /**
  * Client-side hook driving the preview stream. Two decode paths share
@@ -148,6 +149,10 @@ interface StatusFrame {
 interface UrlChangedFrame {
   type: "url_changed";
   path: string;
+}
+interface ClipboardCopyFrame {
+  type: "clipboard_copy";
+  text: string;
 }
 
 export function usePreviewStream({
@@ -419,7 +424,7 @@ export function usePreviewStream({
   const onMessage = useCallback(
     (evt: MessageEvent) => {
       if (typeof evt.data === "string") {
-        let parsed: ReadyFrame | ErrorFrame | StatusFrame | UrlChangedFrame;
+        let parsed: ReadyFrame | ErrorFrame | StatusFrame | UrlChangedFrame | ClipboardCopyFrame;
         try {
           parsed = JSON.parse(evt.data);
         } catch {
@@ -456,6 +461,27 @@ export function usePreviewStream({
         } else if (parsed.type === "url_changed") {
           const u = parsed as UrlChangedFrame;
           setCurrentPath(u.path);
+        } else if (parsed.type === "clipboard_copy") {
+          // Phase 3b (#127): the previewed page emitted a copy/cut
+          // event; mirror it to the user's system clipboard.
+          // Permissions-Policy in next.config.ts grants clipboard-write
+          // for same-origin, and the user's recent gesture (Ctrl+C
+          // inside the preview) keeps transient activation alive long
+          // enough for the WS round-trip on the common case.
+          const t = (parsed as { text?: unknown }).text;
+          const validated = validateClipboardPayload(t);
+          if (
+            !validated.ok ||
+            !validated.text ||
+            typeof navigator === "undefined" ||
+            !navigator.clipboard
+          )
+            return;
+          void navigator.clipboard.writeText(validated.text).catch(() => {
+            // writeText may fail silently if the chat tab has been
+            // backgrounded (no transient activation). Acceptable —
+            // the next foreground copy will succeed.
+          });
         }
         // status frames are informational only for v1 — could surface a navigating spinner later
         return;
@@ -752,11 +778,30 @@ export function usePreviewStream({
       });
     };
 
+    // Phase 3b (#127): user paste into the preview. The handler MUST
+    // read e.clipboardData synchronously — `navigator.clipboard.readText`
+    // requires fresh user-gesture activation that doesn't survive an
+    // await, and the paste event already carries the text inline.
+    const onPaste = (e: ClipboardEvent) => {
+      if (!e.isTrusted) return;
+      const data = e.clipboardData;
+      if (!data) return;
+      const raw = data.getData("text/plain");
+      const validated = validateClipboardPayload(raw);
+      if (!validated.ok || !validated.text) return;
+      // preventDefault so the browser doesn't *also* try to paste into
+      // the (non-editable) preview element, which is a no-op for canvas
+      // but can produce double-paste on contenteditable wrappers.
+      e.preventDefault();
+      sendJson({ type: "clipboard_paste", text: validated.text });
+    };
+
     el.addEventListener("mousedown", onMouseDown);
     el.addEventListener("mouseup", onMouseUp);
     el.addEventListener("mousemove", onMouseMove);
     el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("contextmenu", onContextMenu);
+    el.addEventListener("paste", onPaste);
     el.addEventListener("touchstart", onTouchStart, { passive: false });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: false });
@@ -773,6 +818,7 @@ export function usePreviewStream({
       el.removeEventListener("mousemove", onMouseMove);
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("contextmenu", onContextMenu);
+      el.removeEventListener("paste", onPaste);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);

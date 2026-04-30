@@ -4,35 +4,49 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Modifiers } from "./input-forward";
 
 /**
- * Client-side hook driving the preview-stream `<canvas>`. Manages:
- *   - WebSocket lifecycle (open / message / close / reconnect-with-backoff)
- *   - JPEG frame decode + paint loop (uses requestAnimationFrame so we
- *     don't block the main thread on Image.decode)
- *   - Input event capture (mouse, wheel, key) → JSON over the WS
- *   - Resize forwarding so Chromium's emulated viewport tracks the
- *     canvas pixel size
- *   - Mousemove throttling to 60 fps cap so we don't flood the WS
+ * Client-side hook driving the preview stream. Two decode paths share
+ * the same WebSocket lifecycle and input forwarding:
+ *
+ *   - **H.264** (default when `MediaSource.isTypeSupported("video/mp4;
+ *     codecs=\"avc1.42E01E\"")` is true): incoming binary frames are
+ *     1-byte tagged. 0x00 = init segment (ftyp+moov), 0x01 = media
+ *     segment (moof+mdat). Both feed `MediaSource` → `<video>`.
+ *   - **JPEG** (Phase 1 fallback): raw JPEG bytes drawn onto a
+ *     `<canvas>` via `createImageBitmap` + `drawImage`. Used when MSE
+ *     is unavailable or when the H.264 path errors at runtime.
+ *
+ * Capability detection runs on first connect. If H.264 fails after
+ * connect (`SourceBuffer.error`, `appendBuffer` throws something other
+ * than QuotaExceededError, etc.), the hook flips a sticky failure flag,
+ * closes the WS, and reconnects with `?codec=jpeg` — the next reload
+ * starts fresh.
  *
  * One hook instance per PreviewWindow. Driven entirely by the
  * `enabled` flag — when the dev server isn't running, we don't open
- * the WS at all (the canvas stays blank + an overlay tells the user
- * to click Start).
+ * the WS at all.
  */
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 const MOUSEMOVE_MIN_INTERVAL_MS = 16; // ~60fps
+const MSE_CODEC = 'video/mp4; codecs="avc1.42E01E"'; // H.264 baseline 3.0
+const MSE_BUFFER_TARGET_S = 10; // evict everything older than this
 
 export type PreviewStreamStatus = "idle" | "connecting" | "ready" | "error" | "closed";
 
 export type QualityPreset = "performance" | "balanced" | "quality";
 
+export type PreviewStreamMode = "video" | "canvas";
+
 export interface UsePreviewStreamArgs {
   projectSlug: string;
   itemSlug: string;
   port: number;
+  /** Used by the JPEG fallback path. May be unrendered when `mode === "video"`. */
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  /** Used by the H.264 path. May be unrendered when `mode === "canvas"`. */
+  videoRef: React.RefObject<HTMLVideoElement | null>;
   /** Hook is dormant until `enabled` is true (dev server is running). */
   enabled: boolean;
   /** Streaming quality preset. Defaults to "balanced" server-side when absent. */
@@ -41,6 +55,12 @@ export interface UsePreviewStreamArgs {
 
 export interface UsePreviewStreamResult {
   status: PreviewStreamStatus;
+  /**
+   * Which DOM element the consumer should render. `"video"` when the
+   * H.264 / MSE path is active; `"canvas"` when JPEG fallback is.
+   * Driven by capability detection + sticky runtime failure.
+   */
+  mode: PreviewStreamMode;
   deviceWidth: number | null;
   deviceHeight: number | null;
   lastError: string | null;
@@ -60,10 +80,27 @@ export interface UsePreviewStreamResult {
   navigate: (path: string) => void;
 }
 
+/**
+ * Capability-detect MSE H.264 baseline support. Older Safari and
+ * locked-down embedded browsers return false; everything modern
+ * returns true. Wrapped in a guard so SSR doesn't crash on undefined
+ * `MediaSource`.
+ */
+function detectMseSupport(): boolean {
+  if (typeof window === "undefined") return false;
+  if (typeof window.MediaSource === "undefined") return false;
+  try {
+    return window.MediaSource.isTypeSupported(MSE_CODEC);
+  } catch {
+    return false;
+  }
+}
+
 interface ReadyFrame {
   type: "ready";
   deviceWidth: number;
   deviceHeight: number;
+  codec?: "h264" | "jpeg";
 }
 interface ErrorFrame {
   type: "error";
@@ -84,6 +121,7 @@ export function usePreviewStream({
   itemSlug,
   port,
   canvasRef,
+  videoRef,
   enabled,
   quality,
 }: UsePreviewStreamArgs): UsePreviewStreamResult {
@@ -92,15 +130,189 @@ export function usePreviewStream({
   const [deviceHeight, setDeviceHeight] = useState<number | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
+  // Sticky failure flag: once H.264 has failed at runtime, all
+  // subsequent connects (including reconnect-with-backoff) skip the
+  // capability-detected codec and force ?codec=jpeg. Survives across
+  // reconnects so a flaky stream doesn't keep retrying H.264 forever.
+  const codecFailureRef = useRef(false);
+  const [mode, setMode] = useState<PreviewStreamMode>(() =>
+    detectMseSupport() ? "video" : "canvas",
+  );
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalCloseRef = useRef(false);
   const lastMouseMoveAtRef = useRef(0);
-  /** Pending paint — coalesce successive frames so we draw at most once per RAF. */
+  /** Pending JPEG paint — coalesce successive frames so we draw at most once per RAF. */
   const pendingFrameRef = useRef<Uint8Array | null>(null);
   const rafScheduledRef = useRef(false);
+
+  // MSE state. Lifecycle is per-WS-connection — `setupMse()` runs on
+  // open, `teardownMse()` on close. The append queue drains via the
+  // `updateend` event, since `SourceBuffer.appendBuffer` rejects when
+  // the buffer is busy.
+  const mediaSourceRef = useRef<MediaSource | null>(null);
+  const sourceBufferRef = useRef<SourceBuffer | null>(null);
+  const mseObjectUrlRef = useRef<string | null>(null);
+  const appendQueueRef = useRef<ArrayBuffer[]>([]);
+  const lastEvictAtRef = useRef(0);
+
+  const onCodecFailure = useCallback((reason: string) => {
+    if (codecFailureRef.current) return;
+    codecFailureRef.current = true;
+    setLastError(`Falling back to JPEG: ${reason}`);
+    setMode("canvas");
+    const ws = wsRef.current;
+    wsRef.current = null;
+    if (ws) {
+      try {
+        // 4000 = application reason "codec fallback"
+        ws.close(4000, "codec_fallback");
+      } catch {
+        /* ignore */
+      }
+    }
+    // The onclose handler will fire scheduleReconnect, which then
+    // re-runs connect() — codecFailureRef is now true, so this time
+    // it picks "jpeg" in the URL and renders the canvas path.
+  }, []);
+
+  const drainAppendQueue = useCallback(() => {
+    const sb = sourceBufferRef.current;
+    if (!sb || sb.updating) return;
+    const next = appendQueueRef.current.shift();
+    if (!next) return;
+    try {
+      sb.appendBuffer(next);
+    } catch (err) {
+      const e = err as DOMException;
+      if (e.name === "QuotaExceededError") {
+        // Evict the oldest 5 s and re-queue. MSE buffers are bounded
+        // (~12-50 MB depending on the platform); without this a long
+        // session eventually wedges.
+        const ct = videoRef.current?.currentTime ?? 0;
+        try {
+          sb.remove(0, Math.max(0, ct - 5));
+        } catch {
+          /* ignore — will retry */
+        }
+        appendQueueRef.current.unshift(next);
+      } else {
+        onCodecFailure(`appendBuffer: ${e.name || "error"}`);
+      }
+    }
+  }, [onCodecFailure, videoRef]);
+
+  const teardownMse = useCallback(() => {
+    const sb = sourceBufferRef.current;
+    const ms = mediaSourceRef.current;
+    sourceBufferRef.current = null;
+    mediaSourceRef.current = null;
+    appendQueueRef.current = [];
+    if (sb && ms && ms.readyState === "open") {
+      try {
+        ms.removeSourceBuffer(sb);
+      } catch {
+        /* may already be detached */
+      }
+    }
+    if (mseObjectUrlRef.current) {
+      try {
+        URL.revokeObjectURL(mseObjectUrlRef.current);
+      } catch {
+        /* ignore */
+      }
+      mseObjectUrlRef.current = null;
+    }
+    const video = videoRef.current;
+    if (video) {
+      try {
+        video.removeAttribute("src");
+        video.load();
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [videoRef]);
+
+  const setupMse = useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    teardownMse();
+    let ms: MediaSource;
+    try {
+      ms = new MediaSource();
+    } catch (err) {
+      onCodecFailure(`MediaSource ctor: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    mediaSourceRef.current = ms;
+    const url = URL.createObjectURL(ms);
+    mseObjectUrlRef.current = url;
+    video.src = url;
+    const onSourceOpen = () => {
+      if (mediaSourceRef.current !== ms) return;
+      let sb: SourceBuffer;
+      try {
+        sb = ms.addSourceBuffer(MSE_CODEC);
+      } catch (err) {
+        onCodecFailure(`addSourceBuffer: ${err instanceof Error ? err.message : String(err)}`);
+        return;
+      }
+      sb.mode = "segments";
+      sb.addEventListener("updateend", () => {
+        // Evict old buffer once per second to bound memory; SourceBuffer
+        // can't accept remove() while it's still updating.
+        const now = performance.now();
+        if (now - lastEvictAtRef.current > 1_000) {
+          lastEvictAtRef.current = now;
+          const ct = videoRef.current?.currentTime ?? 0;
+          if (ct > MSE_BUFFER_TARGET_S && !sb.updating) {
+            try {
+              sb.remove(0, ct - MSE_BUFFER_TARGET_S / 2);
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+        drainAppendQueue();
+      });
+      sb.addEventListener("error", () => {
+        onCodecFailure("SourceBuffer.error");
+      });
+      sourceBufferRef.current = sb;
+      drainAppendQueue();
+    };
+    ms.addEventListener("sourceopen", onSourceOpen, { once: true });
+    // Autoplay must be triggered *after* src is set; muted+playsInline
+    // is required for iOS / mobile Safari to honor autoplay.
+    void video.play().catch(() => {
+      // Some browsers reject autoplay without a gesture. Silent retry
+      // happens on the first click anyway.
+    });
+  }, [drainAppendQueue, onCodecFailure, teardownMse, videoRef]);
+
+  const handleH264Frame = useCallback(
+    (data: ArrayBuffer) => {
+      if (data.byteLength < 1) return;
+      const tag = new Uint8Array(data, 0, 1)[0];
+      // Slice into a fresh ArrayBuffer so SourceBuffer.appendBuffer's
+      // type signature is satisfied (it requires ArrayBuffer, not the
+      // wider ArrayBufferLike that Uint8Array.buffer can be).
+      const payload = data.slice(1);
+      if (tag === 0x00 || tag === 0x01) {
+        // Init and media segments both go through the same source
+        // buffer in segments mode; the init segment must arrive first
+        // (server invariant).
+        appendQueueRef.current.push(payload);
+        drainAppendQueue();
+      } else {
+        // Unknown tag — ignore. Phase 4 may add 0x02 reset etc.
+      }
+    },
+    [drainAppendQueue],
+  );
 
   const sendJson = useCallback((payload: Record<string, unknown>) => {
     const ws = wsRef.current;
@@ -154,10 +366,25 @@ export function usePreviewStream({
           setDeviceHeight(r.deviceHeight);
           setStatus("ready");
           setLastError(null);
+          // Server confirms which codec is active — should match what
+          // we asked for, but trust the server in case we get something
+          // unexpected (older deploy, env override).
+          if (r.codec === "h264") {
+            setMode("video");
+            setupMse();
+          } else if (r.codec === "jpeg") {
+            setMode("canvas");
+            teardownMse();
+          }
         } else if (parsed.type === "error") {
           const e = parsed as ErrorFrame;
           setLastError(e.message ?? e.code ?? "Stream error");
           setStatus("error");
+          // Server-side encoder failure (or missing ffmpeg). Fall
+          // through to JPEG; the next reconnect will request it.
+          if (e.code === "encoder_failed") {
+            onCodecFailure(e.message ?? "encoder_failed");
+          }
         } else if (parsed.type === "url_changed") {
           const u = parsed as UrlChangedFrame;
           setCurrentPath(u.path);
@@ -165,16 +392,21 @@ export function usePreviewStream({
         // status frames are informational only for v1 — could surface a navigating spinner later
         return;
       }
-      // Binary frame — queue for next RAF paint.
-      const buf = evt.data instanceof ArrayBuffer ? new Uint8Array(evt.data) : null;
-      if (!buf) return;
-      pendingFrameRef.current = buf;
-      if (!rafScheduledRef.current) {
-        rafScheduledRef.current = true;
-        requestAnimationFrame(() => void drawNextFrame());
+      // Binary frame.
+      const data = evt.data instanceof ArrayBuffer ? evt.data : null;
+      if (!data) return;
+      if (mode === "video") {
+        handleH264Frame(data);
+      } else {
+        // Queue for next RAF paint (JPEG fallback).
+        pendingFrameRef.current = new Uint8Array(data);
+        if (!rafScheduledRef.current) {
+          rafScheduledRef.current = true;
+          requestAnimationFrame(() => void drawNextFrame());
+        }
       }
     },
-    [drawNextFrame],
+    [drawNextFrame, handleH264Frame, mode, onCodecFailure, setupMse, teardownMse],
   );
 
   // Ref-based break of the connect ↔ scheduleReconnect circular
@@ -197,11 +429,20 @@ export function usePreviewStream({
     if (intentionalCloseRef.current) return;
     if (!enabled) return;
     setStatus("connecting");
+    // Decide codec for this connection. Sticky failure flag forces JPEG
+    // for the rest of the session. Otherwise: H.264 if the browser
+    // actually supports it, JPEG otherwise.
+    const codec: "h264" | "jpeg" =
+      codecFailureRef.current || !detectMseSupport() ? "jpeg" : "h264";
+    setMode(codec === "h264" ? "video" : "canvas");
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const qualityQS = quality ? `?quality=${encodeURIComponent(quality)}` : "";
+    const params = new URLSearchParams();
+    if (quality) params.set("quality", quality);
+    params.set("codec", codec);
+    const qs = params.toString();
     const url = `${proto}//${window.location.host}${BASE_PATH}/ws/preview-stream/${encodeURIComponent(
       projectSlug,
-    )}/${encodeURIComponent(itemSlug)}/${port}${qualityQS}`;
+    )}/${encodeURIComponent(itemSlug)}/${port}${qs ? `?${qs}` : ""}`;
     let ws: WebSocket;
     try {
       ws = new WebSocket(url);
@@ -224,9 +465,10 @@ export function usePreviewStream({
       wsRef.current = null;
       if (intentionalCloseRef.current) return;
       setStatus("closed");
+      teardownMse();
       scheduleReconnect();
     };
-  }, [projectSlug, itemSlug, port, onMessage, scheduleReconnect, enabled, quality]);
+  }, [projectSlug, itemSlug, port, onMessage, scheduleReconnect, enabled, quality, teardownMse]);
 
   // Keep the connectRef current so scheduleReconnect always invokes
   // the freshest closure (with up-to-date enabled / port / etc.).
@@ -264,25 +506,26 @@ export function usePreviewStream({
     };
   }, [enabled, connect]);
 
-  // Mouse / key / wheel input forwarding. Bound to the canvas, not
-  // the window, so events outside the preview area don't leak into
-  // Chromium.
+  // Mouse / key / wheel input forwarding. Bound to whichever DOM
+  // element is currently rendered (canvas in JPEG mode, video in
+  // H.264 mode), not the window, so events outside the preview area
+  // don't leak into Chromium. Re-binds when `mode` changes.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !enabled) return;
+    const el: HTMLElement | null = mode === "video" ? videoRef.current : canvasRef.current;
+    if (!el || !enabled) return;
 
     const toCanvas = (e: { clientX: number; clientY: number }) => {
-      const rect = canvas.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
       // CDP `Input.dispatchMouseEvent` expects coordinates in CSS
       // pixels relative to the viewport top-left. The page's CSS
-      // pixels equal the canvas's CSS pixels because we set
+      // pixels equal the display element's CSS pixels because we set
       // `page.setViewportSize({rect.width, rect.height})` whenever
-      // the canvas resizes — so the offset within the canvas IS the
+      // the element resizes — so the offset within the element IS the
       // offset within the page.
       //
-      // This works at any deviceScaleFactor: the bitmap is in device
-      // pixels (DSF×CSS), the canvas backing store mirrors it, but
-      // CDP wants CSS px and we send CSS px. Done.
+      // This works at any deviceScaleFactor: the bitmap (or video
+      // intrinsic size) is in device pixels (DSF×CSS), but CDP wants
+      // CSS px and we send CSS px. Done.
       return {
         x: e.clientX - rect.left,
         y: e.clientY - rect.top,
@@ -381,7 +624,7 @@ export function usePreviewStream({
       return m;
     };
     const updateTouches = (e: globalThis.TouchEvent) => {
-      const rect = canvas.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
       // Sync to the changed touches (start / move) and remove ended ones.
       for (let i = 0; i < e.changedTouches.length; i++) {
         const t = e.changedTouches[i];
@@ -441,52 +684,52 @@ export function usePreviewStream({
       });
     };
 
-    canvas.addEventListener("mousedown", onMouseDown);
-    canvas.addEventListener("mouseup", onMouseUp);
-    canvas.addEventListener("mousemove", onMouseMove);
-    canvas.addEventListener("wheel", onWheel, { passive: false });
-    canvas.addEventListener("contextmenu", onContextMenu);
-    canvas.addEventListener("touchstart", onTouchStart, { passive: false });
-    canvas.addEventListener("touchmove", onTouchMove, { passive: false });
-    canvas.addEventListener("touchend", onTouchEnd, { passive: false });
-    canvas.addEventListener("touchcancel", onTouchCancel);
-    // Key events on the canvas require a tabIndex; keep them on the
-    // canvas itself so typing in the chat doesn't leak in.
-    canvas.tabIndex = 0;
-    canvas.addEventListener("keydown", onKeyDown);
-    canvas.addEventListener("keyup", onKeyUp);
+    el.addEventListener("mousedown", onMouseDown);
+    el.addEventListener("mouseup", onMouseUp);
+    el.addEventListener("mousemove", onMouseMove);
+    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("contextmenu", onContextMenu);
+    el.addEventListener("touchstart", onTouchStart, { passive: false });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: false });
+    el.addEventListener("touchcancel", onTouchCancel);
+    // Key events require a tabIndex; keep them on the element itself
+    // so typing in the chat doesn't leak in.
+    el.tabIndex = 0;
+    el.addEventListener("keydown", onKeyDown);
+    el.addEventListener("keyup", onKeyUp);
 
     return () => {
-      canvas.removeEventListener("mousedown", onMouseDown);
-      canvas.removeEventListener("mouseup", onMouseUp);
-      canvas.removeEventListener("mousemove", onMouseMove);
-      canvas.removeEventListener("wheel", onWheel);
-      canvas.removeEventListener("contextmenu", onContextMenu);
-      canvas.removeEventListener("touchstart", onTouchStart);
-      canvas.removeEventListener("touchmove", onTouchMove);
-      canvas.removeEventListener("touchend", onTouchEnd);
-      canvas.removeEventListener("touchcancel", onTouchCancel);
-      canvas.removeEventListener("keydown", onKeyDown);
-      canvas.removeEventListener("keyup", onKeyUp);
+      el.removeEventListener("mousedown", onMouseDown);
+      el.removeEventListener("mouseup", onMouseUp);
+      el.removeEventListener("mousemove", onMouseMove);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("contextmenu", onContextMenu);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchCancel);
+      el.removeEventListener("keydown", onKeyDown);
+      el.removeEventListener("keyup", onKeyUp);
       activeTouches.clear();
     };
     // deviceWidth/deviceHeight intentionally NOT in deps — toCanvas
-    // reads canvas.width/canvas.height instead, so this effect doesn't
-    // need to rebind every time the viewport changes.
-  }, [canvasRef, enabled, sendJson]);
+    // reads `el.getBoundingClientRect()` instead, so this effect
+    // doesn't need to rebind every time the viewport changes.
+  }, [canvasRef, videoRef, enabled, sendJson, mode]);
 
-  // Resize forwarding — when the canvas display size changes, send
-  // the new pixel dims so Chromium's emulated viewport matches.
+  // Resize forwarding — when the display element's size changes,
+  // send the new pixel dims so Chromium's emulated viewport matches.
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !enabled) return;
+    const el: HTMLElement | null = mode === "video" ? videoRef.current : canvasRef.current;
+    if (!el || !enabled) return;
     const ro = new ResizeObserver(() => {
-      const rect = canvas.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
       sendJson({ type: "resize", width: Math.round(rect.width), height: Math.round(rect.height) });
     });
-    ro.observe(canvas);
+    ro.observe(el);
     return () => ro.disconnect();
-  }, [canvasRef, enabled, sendJson]);
+  }, [canvasRef, videoRef, enabled, sendJson, mode]);
 
   const reload = useCallback(() => {
     sendJson({ type: "reload" });
@@ -506,5 +749,5 @@ export function usePreviewStream({
     [port, sendJson],
   );
 
-  return { status, deviceWidth, deviceHeight, lastError, currentPath, reload, navigate };
+  return { status, mode, deviceWidth, deviceHeight, lastError, currentPath, reload, navigate };
 }

@@ -1417,7 +1417,17 @@ class SessionManager {
                     // The assistant.message.usage has input_tokens, cache_read_input_tokens, cache_creation_input_tokens.
                     const usage = assistantMsg?.usage;
                     const model = typeof assistantMsg?.model === "string" ? assistantMsg.model : undefined;
-                    if (usage) {
+                    // SDKAssistantMessage carries `parent_tool_use_id` set to a
+                    // non-null string when the message was emitted by a subagent
+                    // spawned via the Task tool. Subagents always run on Haiku
+                    // and have their own (200 K) context — without this filter
+                    // their snapshots leak into the main HUD, surfacing as
+                    // "model: haiku" in the chat header plus a wrong window cap
+                    // that inflates the percentage (190 K / 200 K = 95 %).
+                    const parentToolUseId = msg
+                        .parent_tool_use_id;
+                    const isSubagent = typeof parentToolUseId === "string" && parentToolUseId.length > 0;
+                    if (usage && !isSubagent) {
                         this.broadcastAssistantUsage(session, usage, model);
                     }
                     const content = assistantMsg?.content;
@@ -1817,7 +1827,13 @@ class SessionManager {
      * default 1 M fallback).
      */
     broadcastContextUsage(session, modelUsage) {
-        const window = (0, context_usage_1.extractContextWindow)(modelUsage);
+        // Hint the picker with the most recent main-thread assistant model
+        // (subagent messages are filtered out before they reach
+        // `lastModelId`, so this is always the user's actual model). This
+        // ensures the cap matches the active model — without it, the picker
+        // would fall back to the largest-window entry, which is *usually*
+        // right but not guaranteed.
+        const window = (0, context_usage_1.extractContextWindow)(modelUsage, session.lastModelId ?? null);
         if (!window)
             return;
         session.lastContextWindow = window.contextWindow;
@@ -2352,11 +2368,25 @@ app.prepare().then(() => {
                 socket.destroy();
                 return;
             }
+            // Optional quality preset from `?quality=performance|balanced|quality`.
+            // Fall through to the handler's default when missing or invalid.
+            const rawQuality = qs.quality;
+            const previewQuality = rawQuality === "performance" || rawQuality === "balanced" || rawQuality === "quality"
+                ? rawQuality
+                : undefined;
+            // Optional wire codec from `?codec=h264|jpeg`. Client passes
+            // h264 only when MediaSource.isTypeSupported(...) returned true.
+            // Server falls through to JPEG (Phase 1 path) when missing or
+            // invalid so cached / older clients keep working.
+            const rawCodec = qs.codec;
+            const previewCodec = rawCodec === "h264" || rawCodec === "jpeg" ? rawCodec : undefined;
             wss.handleUpgrade(req, socket, head, (ws) => {
                 void (0, handler_1.handlePreviewStream)(ws, actorEmail, {
                     projectSlug,
                     itemSlug,
                     port: previewPort,
+                    quality: previewQuality,
+                    codec: previewCodec,
                 });
             });
             (0, api_wrap_1.logWsUpgrade)({

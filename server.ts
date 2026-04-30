@@ -32,6 +32,11 @@ import {
   type PersistedSession,
 } from "./src/lib/session-persistence";
 import { getCustomAppendForSdk } from "./src/lib/agent-config";
+import {
+  snapshotFromAssistantUsage,
+  extractContextWindow,
+  DEFAULT_CONTEXT_WINDOW,
+} from "./src/lib/context-usage";
 import { applyRateLimitEvent as applyAccountRateLimitEvent } from "./src/lib/account-rate-limits";
 import { startRateLimitProbe } from "./src/lib/rate-limit-probe";
 import { decideCronTool, type ToolPolicy } from "./src/lib/reports/tool-policy";
@@ -303,6 +308,16 @@ interface ChatSession {
     cacheRead: number;
     cacheCreate: number;
   };
+  /**
+   * Authoritative context-window cap for this session, learned from
+   * `result.modelUsage[modelId].contextWindow` after the first turn
+   * completes. Until then the broadcaster falls back to
+   * DEFAULT_CONTEXT_WINDOW (1M). Never read tokens *out* of
+   * result.modelUsage — those fields are cumulative across the turn.
+   */
+  lastContextWindow?: number;
+  /** Model id paired with `lastContextWindow`. */
+  lastModelId?: string;
   /**
    * Number of consecutive "No conversation found" retries for the current
    * user message. Prevents infinite recursion when Claude's resume is
@@ -2137,39 +2152,26 @@ class SessionManager {
     }
   }
 
-  /** Broadcast context usage from the final `result.modelUsage` (authoritative). */
+  /**
+   * Cache the authoritative context-window size from a turn-end `result`
+   * event. We **do not** broadcast a context_usage event from this path:
+   * `result.modelUsage[modelId]` aggregates token counts cumulatively
+   * across every assistant chunk in the turn (a 10-step turn with a
+   * 250 K cached prompt sums to ~2.5 M, blowing past the actual window).
+   * Using those values as "context used" was the cause of the
+   * "1253 % of 1 M" bug.
+   *
+   * Instead, the per-message broadcaster (`broadcastAssistantUsage`)
+   * emits the latest snapshot — that's the right number. This method
+   * only learns the model's true window cap so the next snapshot's
+   * `max` is accurate (e.g. 200 K for a 200K model rather than the
+   * default 1 M fallback).
+   */
   private broadcastContextUsage(session: ChatSession, modelUsage: unknown): void {
-    if (!modelUsage || typeof modelUsage !== "object") return;
-    const entries = Object.entries(modelUsage as Record<string, unknown>);
-    const [modelId, firstModelRaw] = entries[0] ?? [];
-    const firstModel = firstModelRaw as
-      | {
-          inputTokens?: number;
-          outputTokens?: number;
-          cacheReadInputTokens?: number;
-          cacheCreationInputTokens?: number;
-          contextWindow?: number;
-        }
-      | undefined;
-    if (!firstModel || !firstModel.contextWindow) return;
-
-    const used =
-      (firstModel.inputTokens || 0) +
-      (firstModel.cacheReadInputTokens || 0) +
-      (firstModel.cacheCreationInputTokens || 0);
-    const max = firstModel.contextWindow;
-
-    this.broadcast(session, {
-      type: "context_usage",
-      used,
-      max,
-      percentage: Math.round((used / max) * 100),
-      model: modelId ?? null,
-      inputTokens: firstModel.inputTokens || 0,
-      outputTokens: firstModel.outputTokens || 0,
-      cacheReadTokens: firstModel.cacheReadInputTokens || 0,
-      cacheCreateTokens: firstModel.cacheCreationInputTokens || 0,
-    });
+    const window = extractContextWindow(modelUsage);
+    if (!window) return;
+    session.lastContextWindow = window.contextWindow;
+    session.lastModelId = window.model;
   }
 
   /** Broadcast live context usage from an assistant message's `usage` field. */
@@ -2178,11 +2180,6 @@ class SessionManager {
     usage: Record<string, number>,
     model?: string,
   ): void {
-    // The assistant message has raw API usage (input_tokens snake_case).
-    const used =
-      (usage.input_tokens || 0) +
-      (usage.cache_read_input_tokens || 0) +
-      (usage.cache_creation_input_tokens || 0);
     // Accumulate for cron token accounting — the sidecar stores the
     // total at run-end, not per-message. Out-of-band of any broadcast.
     if (session.cronPolicy) {
@@ -2191,21 +2188,24 @@ class SessionManager {
       session.cronTokenUsage.cacheRead += usage.cache_read_input_tokens || 0;
       session.cronTokenUsage.cacheCreate += usage.cache_creation_input_tokens || 0;
     }
-    // Context window isn't in assistant usage — assume 1M.
-    // The final `result` event corrects this with the real contextWindow from modelUsage.
-    const max = 1_000_000;
-    if (used === 0) return;
+
+    const snapshot = snapshotFromAssistantUsage(
+      usage,
+      model ?? session.lastModelId ?? null,
+      session.lastContextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    );
+    if (snapshot.used === 0) return;
 
     this.broadcast(session, {
       type: "context_usage",
-      used,
-      max,
-      percentage: Math.round((used / max) * 100),
-      model: model ?? null,
-      inputTokens: usage.input_tokens || 0,
-      outputTokens: usage.output_tokens || 0,
-      cacheReadTokens: usage.cache_read_input_tokens || 0,
-      cacheCreateTokens: usage.cache_creation_input_tokens || 0,
+      used: snapshot.used,
+      max: snapshot.max,
+      percentage: snapshot.percentage,
+      model: snapshot.model,
+      inputTokens: snapshot.inputTokens,
+      outputTokens: snapshot.outputTokens,
+      cacheReadTokens: snapshot.cacheReadTokens,
+      cacheCreateTokens: snapshot.cacheCreateTokens,
     });
   }
 

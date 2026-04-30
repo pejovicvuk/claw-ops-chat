@@ -1,5 +1,6 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import type { Readable, Writable } from "node:stream";
 
 /**
  * Wraps an `ffmpeg` subprocess that consumes raw RGB24 frames on stdin
@@ -26,11 +27,29 @@ import { EventEmitter } from "node:events";
 
 export type EncoderState = "idle" | "booting" | "running" | "restarting" | "failed";
 
+/**
+ * Optional audio input (Phase 3a, #126). When set, the encoder
+ * spawns ffmpeg with an extra writable pipe at fd 3 and configures
+ * a second `-i pipe:3` input for raw PCM s16le. The audio track
+ * is muxed into the same fragmented MP4 alongside H.264, so the
+ * client decodes both with one MediaSource SourceBuffer.
+ */
+export interface AudioMuxOptions {
+  /** PCM sample rate. Match libopus's preferred 48 kHz. */
+  sampleRate: number;
+  /** 1 mono / 2 stereo. */
+  channels: number;
+  /** Opus output bitrate. ~64 kbps stereo is plenty for typical web audio. */
+  bitrateKbps: number;
+}
+
 export interface H264EncoderOptions {
   width: number;
   height: number;
   fps: number;
   bitrateKbps: number;
+  /** Optional audio mux. Pass null / undefined for video-only output. */
+  audio?: AudioMuxOptions | null;
   /** Override the ffmpeg binary path. Defaults to "ffmpeg" on PATH. */
   ffmpegPath?: string;
 }
@@ -40,6 +59,7 @@ export interface BuildArgsOptions {
   height: number;
   fps: number;
   bitrateKbps: number;
+  audio?: AudioMuxOptions | null;
 }
 
 export interface SegmentEvent {
@@ -71,11 +91,21 @@ const RESPAWN_DELAY_MS = 200;
  * is the canonical fMP4 mux setting for MSE.
  */
 export function buildFfmpegArgs(opts: BuildArgsOptions): string[] {
-  const { width, height, fps, bitrateKbps } = opts;
-  return [
+  const { width, height, fps, bitrateKbps, audio } = opts;
+  // Common flags before the inputs. -use_wallclock_as_timestamps lets
+  // ffmpeg stamp each chunk with the time it was read off the pipe,
+  // which keeps A/V sync stable even when our pushes are bursty
+  // (sharp catching up after a stall, etc.). -thread_queue_size raises
+  // the per-input ring so a temporarily-slow input doesn't block the
+  // sibling stream's reads.
+  const args: string[] = [
     "-loglevel",
     "warning",
     "-hide_banner",
+    "-thread_queue_size",
+    "1024",
+    "-use_wallclock_as_timestamps",
+    "1",
     "-f",
     "rawvideo",
     "-pix_fmt",
@@ -86,6 +116,22 @@ export function buildFfmpegArgs(opts: BuildArgsOptions): string[] {
     String(fps),
     "-i",
     "pipe:0",
+  ];
+  if (audio) {
+    args.push(
+      "-thread_queue_size",
+      "1024",
+      "-f",
+      "s16le",
+      "-ar",
+      String(audio.sampleRate),
+      "-ac",
+      String(audio.channels),
+      "-i",
+      "pipe:3",
+    );
+  }
+  args.push(
     "-c:v",
     "libx264",
     "-preset",
@@ -104,12 +150,36 @@ export function buildFfmpegArgs(opts: BuildArgsOptions): string[] {
     String(fps * 2),
     "-keyint_min",
     String(fps * 2),
+  );
+  if (audio) {
+    args.push(
+      "-c:a",
+      "libopus",
+      "-b:a",
+      `${audio.bitrateKbps}k`,
+      // Opus tuned for low-latency over hifi quality — matches what
+      // realtime communication apps use (Discord, Meet, etc.).
+      "-application",
+      "lowdelay",
+      // ffmpeg ≤6 still requires this for Opus-in-MP4 (the muxer is
+      // marked experimental). Safe on ffmpeg 7+ — silently ignored.
+      "-strict",
+      "experimental",
+    );
+  }
+  args.push(
     "-movflags",
     "+frag_keyframe+empty_moov+default_base_moof+faststart",
+    // Force fragments at ≤1 s boundaries so fragmented MP4 keeps
+    // emitting on sparse video too (audio-only periods stay glued
+    // together with video activity).
+    "-frag_duration",
+    "1000000",
     "-f",
     "mp4",
     "pipe:1",
-  ];
+  );
+  return args;
 }
 
 /**
@@ -184,7 +254,7 @@ class Fmp4Parser extends EventEmitter {
 export class H264Encoder extends EventEmitter {
   private readonly opts: H264EncoderOptions;
   private state: EncoderState = "idle";
-  private child: ChildProcessWithoutNullStreams | null = null;
+  private child: ChildProcess | null = null;
   private readonly parser = new Fmp4Parser();
   private restartTimestamps: number[] = [];
   private bootTimer: NodeJS.Timeout | null = null;
@@ -218,12 +288,35 @@ export class H264Encoder extends EventEmitter {
   pushFrame(rgb24: Buffer): Promise<void> {
     return new Promise<void>((resolve) => {
       const child = this.child;
-      if (!child || child.stdin.destroyed || this.state !== "running") {
+      const stdin = child?.stdin as Writable | null | undefined;
+      if (!child || !stdin || stdin.destroyed || this.state !== "running") {
         resolve();
         return;
       }
-      child.stdin.write(rgb24, () => resolve());
+      stdin.write(rgb24, () => resolve());
     });
+  }
+
+  /**
+   * Returns the ffmpeg subprocess's audio input stream (`pipe:3`) when
+   * the encoder was constructed with `audio` enabled and is currently
+   * running. Caller pipes raw PCM s16le into this — typically via
+   * `audioCapture.start().pipe(encoder.audioStdin())`. Returns null
+   * when audio is disabled, the encoder isn't running yet, or the fd
+   * has been closed (e.g. mid-restart).
+   */
+  audioStdin(): Writable | null {
+    if (!this.opts.audio) return null;
+    const child = this.child;
+    if (!child) return null;
+    // stdio[3] is the extra writable pipe we requested in spawn().
+    // The TypeScript type for child.stdio is a tuple of Readable | Writable | null,
+    // so we narrow explicitly. We do NOT gate on state === "running" the
+    // way pushFrame does — audio piping should start immediately so PCM
+    // accumulates in the kernel pipe buffer during ffmpeg's boot phase.
+    const fd3 = child.stdio[3] as Writable | undefined;
+    if (!fd3 || fd3.destroyed) return null;
+    return fd3;
   }
 
   async stop(): Promise<void> {
@@ -232,10 +325,19 @@ export class H264Encoder extends EventEmitter {
     const child = this.child;
     this.child = null;
     if (!child) return;
+    const stdin = child.stdin as Writable | null;
     try {
-      child.stdin.end();
+      if (stdin) stdin.end();
     } catch {
       /* stdin may already be closed */
+    }
+    // Also close the audio fd (if any) so ffmpeg sees EOF on both
+    // inputs and exits cleanly instead of blocking on pipe:3.
+    const fd3 = child.stdio[3] as Writable | undefined;
+    try {
+      if (fd3) fd3.end();
+    } catch {
+      /* may already be closed */
     }
     await new Promise<void>((resolve) => {
       const sigkill = setTimeout(() => {
@@ -267,10 +369,17 @@ export class H264Encoder extends EventEmitter {
       height: this.opts.height,
       fps: this.opts.fps,
       bitrateKbps: this.opts.bitrateKbps,
+      audio: this.opts.audio ?? null,
     });
-    let child: ChildProcessWithoutNullStreams;
+    // 4 stdio slots when audio is on: stdin (rawvideo), stdout (fMP4),
+    // stderr (logs), and an extra writable pipe at fd 3 for raw PCM.
+    // Without audio we keep the original 3-slot layout.
+    const stdio: ("pipe" | "ipc" | "ignore")[] = this.opts.audio
+      ? ["pipe", "pipe", "pipe", "pipe"]
+      : ["pipe", "pipe", "pipe"];
+    let child: ChildProcess;
     try {
-      child = spawn(cmd, args, { stdio: ["pipe", "pipe", "pipe"] });
+      child = spawn(cmd, args, { stdio });
     } catch (err) {
       this.emit("warn", `ffmpeg spawn failed: ${err instanceof Error ? err.message : String(err)}`);
       this.handleCrash();
@@ -278,17 +387,32 @@ export class H264Encoder extends EventEmitter {
     }
     this.child = child;
 
-    child.stdout.on("data", (chunk: Buffer) => this.parser.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => {
-      const msg = chunk.toString("utf8").trim();
-      if (msg && /error|fatal|invalid/i.test(msg)) {
-        this.emit("warn", msg);
+    const stdout = child.stdout as Readable | null;
+    const stderr = child.stderr as Readable | null;
+    const stdin = child.stdin as Writable | null;
+    if (stdout) stdout.on("data", (chunk: Buffer) => this.parser.push(chunk));
+    if (stderr) {
+      stderr.on("data", (chunk: Buffer) => {
+        const msg = chunk.toString("utf8").trim();
+        if (msg && /error|fatal|invalid/i.test(msg)) {
+          this.emit("warn", msg);
+        }
+      });
+    }
+    if (stdin) {
+      stdin.on("error", () => {
+        // EPIPE is normal when ffmpeg exits while we're mid-write; let
+        // the exit handler drive recovery instead of double-reporting.
+      });
+    }
+    if (this.opts.audio) {
+      const fd3 = child.stdio[3] as Writable | undefined;
+      if (fd3) {
+        fd3.on("error", () => {
+          /* parec disconnect / encoder crash — exit handler drives recovery */
+        });
       }
-    });
-    child.stdin.on("error", () => {
-      // EPIPE is normal when ffmpeg exits while we're mid-write; let
-      // the exit handler drive recovery instead of double-reporting.
-    });
+    }
     child.on("exit", (code, signal) => {
       if (this.child === child) this.child = null;
       if (this.stopped) return;

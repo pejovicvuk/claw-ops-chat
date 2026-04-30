@@ -3,6 +3,12 @@ import { join } from "path";
 import { homedir } from "os";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { withAudit } from "@/lib/audit/api-wrap";
+import {
+  snapshotFromAssistantUsage,
+  DEFAULT_CONTEXT_WINDOW,
+  type AssistantUsage,
+  type ContextUsageSnapshot,
+} from "@/lib/context-usage";
 
 interface MessageEntry {
   id: string;
@@ -14,25 +20,9 @@ interface MessageEntry {
 
 interface SessionMessagesResponse {
   messages: MessageEntry[];
-  contextUsage: {
-    used: number;
-    max: number;
-    percentage: number;
-    model?: string | null;
-    inputTokens?: number;
-    cacheReadTokens?: number;
-    cacheCreateTokens?: number;
-  } | null;
+  contextUsage: ContextUsageSnapshot | null;
   /** Original cwd used when the session was created — needed for SDK resume. */
   sessionCwd: string | null;
-}
-
-/**
- * Context window size. Always 1M — the JSONL doesn't reliably distinguish
- * 200k vs 1M variants, so we optimistically assume the larger window.
- */
-function getContextWindow(): number {
-  return 1_000_000;
 }
 
 /** Extract plain text from a Claude Code message content field */
@@ -58,10 +48,11 @@ async function getHandler(request: Request, { params }: RouteCtx): Promise<Respo
   const { id: sessionId } = await params;
   const projectsDir = join(homedir(), ".claude", "projects");
   const messages: MessageEntry[] = [];
-  // Wrap in object so we can mutate without `let` (prevents prettier's no-let-reassign churn).
-  const usageRef: {
-    value: { input: number; cacheRead: number; cacheCreate: number; model: string } | null;
-  } = { value: null };
+  // Latest assistant `usage` field seen while walking the JSONL. Each
+  // assistant entry overwrites this — the LAST value wins, never a sum.
+  // (Summing across messages was the cause of the "1253 % of 1 M" bug
+  // on the live broadcast path; keep this read path matching that fix.)
+  const usageRef: { value: { usage: AssistantUsage; model: string } | null } = { value: null };
   // Track original cwd from the JSONL — needed for SDK resume to find the session.
   const cwdRef: { value: string | null } = { value: null };
 
@@ -128,13 +119,13 @@ async function getHandler(request: Request, { params }: RouteCtx): Promise<Respo
 
         // Assistant messages: {type: "assistant", message: {role: "assistant", content: [{type: "text", text: "..."}, ...]}}
         if (entry.type === "assistant" && entry.message?.role === "assistant") {
-          // Track latest usage for context indicator
+          // Track latest usage for context indicator. Overwrite — never
+          // sum across turns. snapshotFromAssistantUsage builds the
+          // public shape from this when the file walk finishes.
           const usage = entry.message.usage;
           if (usage && typeof usage === "object") {
             usageRef.value = {
-              input: usage.input_tokens || 0,
-              cacheRead: usage.cache_read_input_tokens || 0,
-              cacheCreate: usage.cache_creation_input_tokens || 0,
+              usage: usage as AssistantUsage,
               model: entry.message.model || "",
             };
           }
@@ -154,21 +145,17 @@ async function getHandler(request: Request, { params }: RouteCtx): Promise<Respo
       }
     }
 
-    const contextUsage: SessionMessagesResponse["contextUsage"] = usageRef.value
-      ? (() => {
-          const u = usageRef.value!;
-          const used = u.input + u.cacheRead + u.cacheCreate;
-          const max = getContextWindow();
-          return {
-            used,
-            max,
-            percentage: Math.round((used / max) * 100),
-            model: u.model || null,
-            inputTokens: u.input,
-            cacheReadTokens: u.cacheRead,
-            cacheCreateTokens: u.cacheCreate,
-          };
-        })()
+    // Build the context-usage snapshot from the LAST assistant
+    // `usage` we saw. The JSONL doesn't carry an authoritative
+    // contextWindow (that lives in `result.modelUsage`, which Claude
+    // Code persists separately), so we fall back to the 1 M default.
+    // Live WS broadcasts later override this with the real cap.
+    const contextUsage: ContextUsageSnapshot | null = usageRef.value
+      ? snapshotFromAssistantUsage(
+          usageRef.value.usage,
+          usageRef.value.model || null,
+          DEFAULT_CONTEXT_WINDOW,
+        )
       : null;
 
     const response: SessionMessagesResponse = {

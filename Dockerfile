@@ -41,9 +41,19 @@ ENV PATH="/usr/local/bin:/root/.local/bin:${PATH}"
 # overhaul, #125): one ffmpeg subprocess per active preview encodes
 # raw RGB frames into fragmented MP4 for MediaSource Extensions on
 # the client. Adds ~50 MB. libx264 is built into Alpine's ffmpeg.
+#
+# `pipewire` + the pulseaudio shim (Phase 3a, #126) capture Chromium's
+# audio output via a virtual null-sink. `parec` reads PCM s16le off
+# the sink monitor and pipes it into ffmpeg's second input fd, where
+# libopus encodes it muxed into the same fragmented MP4 as video.
+# We chose pipewire over raw pulseaudio because pipewire runs cleanly
+# headless / single-uid without XDG_RUNTIME_DIR and root-warning
+# friction. `pipewire-pulse` exposes the PA socket so `pactl` and
+# `parec` keep working unchanged. Adds ~30 MB.
 RUN apk add --no-cache bash curl python3 git openssh-client jq github-cli \
     chromium nss freetype freetype-dev harfbuzz ca-certificates ttf-freefont \
     ffmpeg \
+    pipewire pipewire-pulse pipewire-tools wireplumber \
     && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/opt/uv sh \
     && ln -s /opt/uv/uv /usr/local/bin/uv \
     && ln -s /opt/uv/uvx /usr/local/bin/uvx
@@ -52,6 +62,15 @@ RUN apk add --no-cache bash curl python3 git openssh-client jq github-cli \
 # spawn its own bundled binary (which would 404 on Alpine).
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+# PipeWire / PulseAudio shim runtime (Phase 3a). Chromium auto-discovers
+# the pulse socket via XDG_RUNTIME_DIR. PULSE_SINK names the virtual
+# sink that entrypoint.sh creates. PREVIEW_AUDIO can be set to
+# "disabled" at deploy time to short-circuit the audio pipeline if
+# pipewire flakes — video continues to work without it.
+ENV XDG_RUNTIME_DIR=/tmp/pulse-runtime
+ENV PULSE_SERVER=unix:/tmp/pulse-runtime/pulse/native
+ENV PULSE_SINK=virtual_sink
 
 # Copy the full app with node_modules and build output.
 # server.js requires sibling JS files compiled from TS + the CJS SDK wrapper;
@@ -77,6 +96,13 @@ COPY --from=builder /app/src/lib ./src/lib
 COPY --from=builder /app/next.config.ts ./next.config.ts
 COPY --from=builder /app/package.json ./package.json
 
+# Entrypoint launches pipewire + pipewire-pulse + wireplumber, waits
+# for the pulse socket, registers the virtual_sink, then exec's the
+# CMD. Keeping CMD intact (instead of merging it into the entrypoint)
+# means `docker run … node --inspect server.js` still works.
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 # Create Claude config directory (credentials mounted at runtime)
 RUN mkdir -p /root/.claude
 
@@ -85,4 +111,5 @@ EXPOSE ${PORT}
 # --expose-gc enables the optional "Force GC" admin action in the
 # Monitoring → Server Health section. It does NOT enable user-triggered
 # GC over the wire — the admin route is auth-gated and audit-logged.
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["node", "--expose-gc", "server.js"]

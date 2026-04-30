@@ -247,9 +247,18 @@ export function usePreviewStream({
 
     const toCanvas = (e: { clientX: number; clientY: number }) => {
       const rect = canvas.getBoundingClientRect();
-      const dw = deviceWidth ?? rect.width;
-      const dh = deviceHeight ?? rect.height;
-      // Map CSS-pixel position to the device pixel coords Chromium expects.
+      // Use the canvas's backing-store size (set from each incoming
+      // bitmap by the paint loop) instead of the state-cached
+      // deviceWidth/deviceHeight from the initial `ready` frame.
+      // The viewport changes every time the user resizes the preview
+      // window — the resize event tells the server to call
+      // page.setViewportSize, Chromium re-renders at the new size,
+      // and the next bitmap is at that new size. canvas.width tracks
+      // that automatically; deviceWidth state does not, so reading it
+      // after a resize maps clicks to off-screen coordinates and the
+      // page sees no click at all.
+      const dw = canvas.width || rect.width;
+      const dh = canvas.height || rect.height;
       return {
         x: ((e.clientX - rect.left) / rect.width) * dw,
         y: ((e.clientY - rect.top) / rect.height) * dh,
@@ -274,6 +283,9 @@ export function usePreviewStream({
     const onMouseDown = (e: MouseEvent) => {
       e.preventDefault();
       const { x, y } = toCanvas(e);
+      // `e.detail` is the browser-tracked multi-click count: 1 for a
+      // single click, 2 for double, 3 for triple — using the OS click
+      // cadence, which CDP needs to dispatch double-click semantics.
       sendJson({
         type: "mouse",
         action: "down",
@@ -281,6 +293,7 @@ export function usePreviewStream({
         y,
         button: buttonName(e.button),
         buttons: e.buttons,
+        clickCount: e.detail || 1,
       });
     };
     const onMouseUp = (e: MouseEvent) => {
@@ -292,6 +305,7 @@ export function usePreviewStream({
         y,
         button: buttonName(e.button),
         buttons: e.buttons,
+        clickCount: e.detail || 1,
       });
     };
     const onMouseMove = (e: MouseEvent) => {
@@ -349,7 +363,10 @@ export function usePreviewStream({
       canvas.removeEventListener("keydown", onKeyDown);
       canvas.removeEventListener("keyup", onKeyUp);
     };
-  }, [canvasRef, deviceWidth, deviceHeight, enabled, sendJson]);
+    // deviceWidth/deviceHeight intentionally NOT in deps — toCanvas
+    // reads canvas.width/canvas.height instead, so this effect doesn't
+    // need to rebind every time the viewport changes.
+  }, [canvasRef, enabled, sendJson]);
 
   // Resize forwarding — when the canvas display size changes, send
   // the new pixel dims so Chromium's emulated viewport matches.

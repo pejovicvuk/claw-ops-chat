@@ -209,7 +209,7 @@ function PreviewWindowBody({
         {/* Canvas + overlays */}
         <canvas
           ref={canvasRef}
-          className="h-full w-full bg-white outline-none"
+          className="h-full w-full cursor-default bg-white outline-none"
           tabIndex={0}
           aria-label={`Live preview on port ${port}`}
         />

@@ -5,6 +5,7 @@ import {
   POINTER_TOLERANCE,
   RESIZE_SNAP_TOLERANCE,
   SNAP_INSET,
+  detectDragRectSnap,
   detectResizeSnap,
   detectSnapZone,
   findResizePartner,
@@ -462,5 +463,96 @@ describe("findResizePartner — adjacent-window detection", () => {
       partnerEdge: "w",
     });
     expect(findResizePartner(a, "e", [{ id: "b", rect: b }], 2)).toBeNull();
+  });
+});
+
+describe("detectDragRectSnap — rect-based canvas-edge family", () => {
+  // A small window we'll move around to hit each zone. Default position
+  // is centred so it shouldn't trigger anything.
+  const w = 400;
+  const h = 300;
+  const centred = {
+    x: Math.floor((BOUNDS.width - w) / 2),
+    y: Math.floor((BOUNDS.height - h) / 2),
+    w,
+    h,
+  };
+
+  it("centred window → null", () => {
+    expect(detectDragRectSnap(centred, BOUNDS)).toBeNull();
+  });
+
+  it("window's left edge near 0 → 'left'", () => {
+    const r = detectDragRectSnap({ ...centred, x: 5 }, BOUNDS);
+    expect(r?.kind).toBe("left");
+  });
+
+  it("window's right edge near canvas width → 'right'", () => {
+    const r = detectDragRectSnap({ ...centred, x: BOUNDS.width - w - 5 }, BOUNDS);
+    expect(r?.kind).toBe("right");
+  });
+
+  it("window's top edge near 0 → 'top'", () => {
+    const r = detectDragRectSnap({ ...centred, y: 5 }, BOUNDS);
+    expect(r?.kind).toBe("top");
+  });
+
+  it("window's bottom edge near canvas height → 'bottom'", () => {
+    const r = detectDragRectSnap({ ...centred, y: BOUNDS.height - h - 5 }, BOUNDS);
+    expect(r?.kind).toBe("bottom");
+  });
+
+  it("window's TL corner near canvas TL → 'tl' (and pointer is irrelevant)", () => {
+    const r = detectDragRectSnap({ x: 5, y: 5, w, h }, BOUNDS);
+    expect(r?.kind).toBe("tl");
+  });
+
+  it("window's BR corner near canvas BR → 'br' (the case that was broken)", () => {
+    const r = detectDragRectSnap(
+      { x: BOUNDS.width - w - 5, y: BOUNDS.height - h - 5, w, h },
+      BOUNDS,
+    );
+    expect(r?.kind).toBe("br");
+  });
+
+  it("window's TR corner near canvas TR → 'tr'", () => {
+    const r = detectDragRectSnap({ x: BOUNDS.width - w - 5, y: 5, w, h }, BOUNDS);
+    expect(r?.kind).toBe("tr");
+  });
+
+  it("window's BL corner near canvas BL → 'bl'", () => {
+    const r = detectDragRectSnap({ x: 5, y: BOUNDS.height - h - 5, w, h }, BOUNDS);
+    expect(r?.kind).toBe("bl");
+  });
+
+  it("corner band wins over edge band when both axes are inside the wider band", () => {
+    // Pull the window so its top-left corner is past EDGE_BAND on both
+    // axes but inside CORNER_BAND. This is the same regression the corner
+    // band test covers for the pointer detector — confirm the rect path
+    // honours it too.
+    const r = detectDragRectSnap({ x: EDGE_BAND + 1, y: EDGE_BAND + 1, w, h }, BOUNDS);
+    expect(r?.kind).toBe("tl");
+  });
+
+  it("just outside the corner band on both axes (and edge band) → null", () => {
+    const r = detectDragRectSnap({ x: CORNER_BAND + 1, y: CORNER_BAND + 1, w, h }, BOUNDS);
+    expect(r).toBeNull();
+  });
+
+  it("obstacle in the matched zone → adaptive geometry shrinks", () => {
+    // Window's left edge is near canvas left → 'left' fires. With a
+    // blocker covering the top of the left half, the snap geometry
+    // should sit below the blocker.
+    const blocker: OtherWindow = { x: 0, y: 0, w: 500, h: 300 };
+    const r = detectDragRectSnap({ ...centred, x: 5 }, BOUNDS, {
+      otherWindows: [blocker],
+    });
+    expect(r?.kind).toBe("left");
+    if (!r) throw new Error("expected snap");
+    expect(r.geometry.y).toBeGreaterThanOrEqual(300);
+  });
+
+  it("zero bounds → null", () => {
+    expect(detectDragRectSnap({ x: 0, y: 0, w: 0, h: 0 }, { width: 0, height: 0 })).toBeNull();
   });
 });

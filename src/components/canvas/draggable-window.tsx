@@ -24,9 +24,15 @@ interface DraggableWindowProps {
    * Drag-tracking hooks consumed by the canvas page to compute snap
    * previews. Optional — when absent the window still drags freely, just
    * without snap suggestions.
+   *
+   * `onDragMove` receives the window's current clamped rect AND the live
+   * pointer position. The rect is what the canvas page reads for the
+   * geometry-based canvas-edge snap (any window corner near a canvas
+   * corner fires); the pointer is still needed for gap / split detection
+   * (which inherently asks "what is the cursor over").
    */
   onDragStart?: () => void;
-  onDragMove?: (clientX: number, clientY: number) => void;
+  onDragMove?: (rect: Rect, clientX: number, clientY: number) => void;
   /**
    * Resize-tracking hooks. Resize uses a geometry-based snap (fit-to-
    * available) instead of a pointer-based one, so it gets its own
@@ -82,6 +88,9 @@ export function DraggableWindow({
     startRect: Rect;
     pending: Rect | null;
     rafHandle: number | null;
+    /** Latest pointer position — flush reads these so onDragMove can pass them through. */
+    lastClientX: number;
+    lastClientY: number;
   } | null>(null);
 
   const isMaximized = geometry.maximized === true;
@@ -101,9 +110,13 @@ export function DraggableWindow({
       // compute fit-to-available previews and to mirror to a partner
       // window during group resize.
       onResizeMove?.(clamped);
+    } else {
+      // Drag: hand the canvas page both the clamped rect (for rect-based
+      // canvas-edge snap) and the live pointer (for gap / split snap).
+      onDragMove?.(clamped, ds.lastClientX, ds.lastClientY);
     }
     ds.pending = null;
-  }, [canvasBounds.height, canvasBounds.width, geometry, onChange, onResizeMove]);
+  }, [canvasBounds.height, canvasBounds.width, geometry, onChange, onDragMove, onResizeMove]);
 
   const queueRect = useCallback(
     (next: Rect) => {
@@ -123,9 +136,12 @@ export function DraggableWindow({
       e.preventDefault();
       const dx = e.clientX - ds.startPointer.x;
       const dy = e.clientY - ds.startPointer.y;
+      // Stash the latest pointer for flush — used by drag's onDragMove
+      // (rect + pointer) so split / gap detection still has live coords.
+      ds.lastClientX = e.clientX;
+      ds.lastClientY = e.clientY;
       if (ds.mode === "drag") {
         queueRect({ ...ds.startRect, x: ds.startRect.x + dx, y: ds.startRect.y + dy });
-        onDragMove?.(e.clientX, e.clientY);
       } else if (ds.edge) {
         // Resize: only queue the new rect. The flush callback drives the
         // resize-snap / partner-mirror pipeline via `onResizeMove`. We
@@ -134,7 +150,7 @@ export function DraggableWindow({
         queueRect(resizeFromEdge(ds.edge, ds.startRect, dx, dy));
       }
     },
-    [onDragMove, queueRect],
+    [queueRect],
   );
 
   const onPointerUp = useCallback(
@@ -185,12 +201,15 @@ export function DraggableWindow({
         startRect,
         pending: null,
         rafHandle: null,
+        lastClientX: e.clientX,
+        lastClientY: e.clientY,
       };
       if (mode === "drag") {
-        // Drag uses pointer-based snap detection; prime the canvas page
-        // with the cached bounding rect and the initial pointer.
+        // Prime the canvas page with the start rect + initial pointer so
+        // it can snapshot bounds and immediately compute the first snap
+        // suggestion (e.g. picking up a window that's already in a corner).
         onDragStart?.();
-        onDragMove?.(e.clientX, e.clientY);
+        onDragMove?.(startRect, e.clientX, e.clientY);
       } else if (edge) {
         // Resize uses geometry-based snap detection. The canvas page
         // captures the start geometry + finds a partner window here so

@@ -167,29 +167,59 @@ function detectAdaptiveEdgeZone(
 ): SnapResult | null {
   const edgeBand = opts.edgeBand ?? EDGE_BAND;
   const cornerBand = opts.cornerBand ?? CORNER_BAND;
-  const inset = opts.inset ?? SNAP_INSET;
 
-  const nearTop = pointer.y < edgeBand;
-  const nearBottom = pointer.y > bounds.height - edgeBand;
-  const nearLeft = pointer.x < edgeBand;
-  const nearRight = pointer.x > bounds.width - edgeBand;
+  return resolveEdgeZone(
+    {
+      nearTop: pointer.y < edgeBand,
+      nearBottom: pointer.y > bounds.height - edgeBand,
+      nearLeft: pointer.x < edgeBand,
+      nearRight: pointer.x > bounds.width - edgeBand,
+      // Corner test uses a wider band so quarter-zone acquisition is
+      // more forgiving — corners win whenever both axes fall inside it.
+      nearCornerTop: pointer.y < cornerBand,
+      nearCornerBottom: pointer.y > bounds.height - cornerBand,
+      nearCornerLeft: pointer.x < cornerBand,
+      nearCornerRight: pointer.x > bounds.width - cornerBand,
+    },
+    bounds,
+    obstacles,
+    opts.inset ?? SNAP_INSET,
+  );
+}
 
-  // Corner test uses a wider band so quarter-zone acquisition is more forgiving
-  // than edge acquisition — corners win whenever both axes fall inside it.
-  const nearCornerTop = pointer.y < cornerBand;
-  const nearCornerBottom = pointer.y > bounds.height - cornerBand;
-  const nearCornerLeft = pointer.x < cornerBand;
-  const nearCornerRight = pointer.x > bounds.width - cornerBand;
+/**
+ * Shared corner / edge zone resolver. Given pre-computed proximity
+ * flags it emits the matching SnapResult or null. Both the pointer-
+ * based detector (`detectAdaptiveEdgeZone`) and the rect-based
+ * detector (`detectDragRectSnap`) call into this so the geometry +
+ * priority logic lives in one place.
+ */
+interface ProximityFlags {
+  nearTop: boolean;
+  nearBottom: boolean;
+  nearLeft: boolean;
+  nearRight: boolean;
+  nearCornerTop: boolean;
+  nearCornerBottom: boolean;
+  nearCornerLeft: boolean;
+  nearCornerRight: boolean;
+}
 
+function resolveEdgeZone(
+  near: ProximityFlags,
+  bounds: CanvasBounds,
+  obstacles: OtherWindow[],
+  inset: number,
+): SnapResult | null {
   const halfW = Math.floor(bounds.width / 2);
   const halfH = Math.floor(bounds.height / 2);
 
   // Corner zones first — quarter-sized sectors in the canvas.
-  if (nearCornerTop && nearCornerLeft) {
+  if (near.nearCornerTop && near.nearCornerLeft) {
     const rect = bestRectInZone({ x: 0, y: 0, w: halfW, h: halfH }, obstacles, inset);
     if (rect) return { kind: "tl", geometry: rect };
   }
-  if (nearCornerTop && nearCornerRight) {
+  if (near.nearCornerTop && near.nearCornerRight) {
     const rect = bestRectInZone(
       { x: halfW, y: 0, w: bounds.width - halfW, h: halfH },
       obstacles,
@@ -197,7 +227,7 @@ function detectAdaptiveEdgeZone(
     );
     if (rect) return { kind: "tr", geometry: rect };
   }
-  if (nearCornerBottom && nearCornerLeft) {
+  if (near.nearCornerBottom && near.nearCornerLeft) {
     const rect = bestRectInZone(
       { x: 0, y: halfH, w: halfW, h: bounds.height - halfH },
       obstacles,
@@ -205,7 +235,7 @@ function detectAdaptiveEdgeZone(
     );
     if (rect) return { kind: "bl", geometry: rect };
   }
-  if (nearCornerBottom && nearCornerRight) {
+  if (near.nearCornerBottom && near.nearCornerRight) {
     const rect = bestRectInZone(
       { x: halfW, y: halfH, w: bounds.width - halfW, h: bounds.height - halfH },
       obstacles,
@@ -215,11 +245,11 @@ function detectAdaptiveEdgeZone(
   }
 
   // Edge zones — half-sized sectors covering one half of the canvas.
-  if (nearLeft) {
+  if (near.nearLeft) {
     const rect = bestRectInZone({ x: 0, y: 0, w: halfW, h: bounds.height }, obstacles, inset);
     if (rect) return { kind: "left", geometry: rect };
   }
-  if (nearRight) {
+  if (near.nearRight) {
     const rect = bestRectInZone(
       { x: halfW, y: 0, w: bounds.width - halfW, h: bounds.height },
       obstacles,
@@ -227,11 +257,11 @@ function detectAdaptiveEdgeZone(
     );
     if (rect) return { kind: "right", geometry: rect };
   }
-  if (nearTop) {
+  if (near.nearTop) {
     const rect = bestRectInZone({ x: 0, y: 0, w: bounds.width, h: halfH }, obstacles, inset);
     if (rect) return { kind: "top", geometry: rect };
   }
-  if (nearBottom) {
+  if (near.nearBottom) {
     const rect = bestRectInZone(
       { x: 0, y: halfH, w: bounds.width, h: bounds.height - halfH },
       obstacles,
@@ -241,6 +271,50 @@ function detectAdaptiveEdgeZone(
   }
 
   return null;
+}
+
+/**
+ * Rect-based drag-snap suggestion. Where `detectAdaptiveEdgeZone` reads
+ * the *pointer* position to decide proximity to the canvas, this reads
+ * the *window's geometry* — so any of the 4 window corners or 4 window
+ * edges nearing the matching canvas edge fires a suggestion. This is
+ * the right model for drag because the pointer is constrained to the
+ * title bar, far from the bottom / right edges of the window. With this
+ * helper, dragging a window so its BR corner is flush against the
+ * canvas BR fires `br` even though the cursor is up at the header.
+ *
+ * Gap and split detection stay pointer-based — those depend on what
+ * the user is hovering over.
+ */
+export function detectDragRectSnap(
+  rect: { x: number; y: number; w: number; h: number },
+  bounds: CanvasBounds,
+  opts: DetectOptions = {},
+): SnapResult | null {
+  if (bounds.width <= 0 || bounds.height <= 0) return null;
+  const edgeBand = opts.edgeBand ?? EDGE_BAND;
+  const cornerBand = opts.cornerBand ?? CORNER_BAND;
+  const inset = opts.inset ?? SNAP_INSET;
+  const obstacles = opts.otherWindows ?? [];
+
+  const right = rect.x + rect.w;
+  const bottom = rect.y + rect.h;
+
+  return resolveEdgeZone(
+    {
+      nearLeft: rect.x < edgeBand,
+      nearRight: bounds.width - right < edgeBand,
+      nearTop: rect.y < edgeBand,
+      nearBottom: bounds.height - bottom < edgeBand,
+      nearCornerLeft: rect.x < cornerBand,
+      nearCornerRight: bounds.width - right < cornerBand,
+      nearCornerTop: rect.y < cornerBand,
+      nearCornerBottom: bounds.height - bottom < cornerBand,
+    },
+    bounds,
+    obstacles,
+    inset,
+  );
 }
 
 /**

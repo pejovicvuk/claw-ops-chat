@@ -6,10 +6,12 @@ import {
   RESIZE_SNAP_TOLERANCE,
   SNAP_INSET,
   detectDragRectSnap,
+  applyLineDelta,
   detectResizeSnap,
   detectSnapZone,
-  findResizePartner,
+  findResizeGroup,
   largestFreeRectInZone,
+  lineShift,
   type CanvasBounds,
   type OtherWindow,
   type ResizeRect,
@@ -422,47 +424,160 @@ describe("detectResizeSnap — fit-to-available", () => {
   });
 });
 
-describe("findResizePartner — adjacent-window detection", () => {
+describe("findResizeGroup — chained N-window detection", () => {
   const a: ResizeRect = { x: 100, y: 100, w: 400, h: 300 };
 
-  it("finds a window touching A's right edge with overlapping y", () => {
+  it("returns [] when there are no other windows", () => {
+    expect(findResizeGroup(a, "e", [])).toEqual([]);
+  });
+
+  it("finds a single anti-mover (PR #107 case — opposite edge on the line)", () => {
+    // b's W is on a's right edge; active drags E so b is anti.
     const b: ResizeRect = { x: 500, y: 150, w: 300, h: 200 };
-    const partner = findResizePartner(a, "e", [{ id: "b", rect: b }]);
-    expect(partner).toEqual({ id: "b", partnerEdge: "w" });
+    const group = findResizeGroup(a, "e", [{ id: "b", rect: b }]);
+    expect(group).toEqual([{ id: "b", start: b, role: "anti" }]);
   });
 
-  it("returns null when the candidate does not vertically overlap", () => {
-    const b: ResizeRect = { x: 500, y: 500, w: 300, h: 200 };
-    const partner = findResizePartner(a, "e", [{ id: "b", rect: b }]);
-    expect(partner).toBeNull();
+  it("finds two co-movers (chained: A top-left + B bottom-left + C right)", () => {
+    // Active is C (right window, full height). Drag W edge.
+    // A and B are both on the left, both with E edges on C's left line.
+    // Both are "co" (same edge as ... wait, active is W; A/B have E on the line).
+    // active edge = "w", member edge on line = E → role = anti.
+    // Let me reconfigure: active is one of the LEFT stack windows dragging E.
+    // Then the OTHER left window also has E on the same line (co), and the
+    // right window has W on the line (anti). So group = [otherLeft co, right anti].
+    const aLeft: ResizeRect = { x: 100, y: 100, w: 400, h: 150 }; // top-left
+    const bLeft: ResizeRect = { x: 100, y: 250, w: 400, h: 150 }; // bottom-left
+    const cRight: ResizeRect = { x: 500, y: 100, w: 300, h: 300 }; // tall right
+    // User drags aLeft's E edge (active = aLeft).
+    const group = findResizeGroup(aLeft, "e", [
+      { id: "b", rect: bLeft },
+      { id: "c", rect: cRight },
+    ]);
+    expect(group).toHaveLength(2);
+    expect(group.find((m) => m.id === "b")).toEqual({ id: "b", start: bLeft, role: "co" });
+    expect(group.find((m) => m.id === "c")).toEqual({ id: "c", start: cRight, role: "anti" });
   });
 
-  it("returns null when the candidate is too far away", () => {
+  it("returns [] when the candidate does not perpendicular-overlap", () => {
+    const b: ResizeRect = { x: 500, y: 500, w: 300, h: 200 }; // y-range [500..700], a is [100..400]
+    expect(findResizeGroup(a, "e", [{ id: "b", rect: b }])).toEqual([]);
+  });
+
+  it("returns [] when the candidate is too far from the line", () => {
     const b: ResizeRect = { x: 600, y: 150, w: 300, h: 200 };
-    const partner = findResizePartner(a, "e", [{ id: "b", rect: b }]);
-    expect(partner).toBeNull();
+    expect(findResizeGroup(a, "e", [{ id: "b", rect: b }])).toEqual([]);
   });
 
-  it("finds a window touching A's bottom edge", () => {
-    const b: ResizeRect = { x: 200, y: 400, w: 300, h: 200 };
-    const partner = findResizePartner(a, "s", [{ id: "b", rect: b }]);
-    expect(partner).toEqual({ id: "b", partnerEdge: "n" });
-  });
-
-  it("returns null for corner edges (group resize is edge-only)", () => {
+  it("returns [] for corner edges (group resize is edge-only)", () => {
     const b: ResizeRect = { x: 500, y: 100, w: 300, h: 300 };
-    expect(findResizePartner(a, "ne", [{ id: "b", rect: b }])).toBeNull();
-    expect(findResizePartner(a, "se", [{ id: "b", rect: b }])).toBeNull();
+    expect(findResizeGroup(a, "ne", [{ id: "b", rect: b }])).toEqual([]);
+    expect(findResizeGroup(a, "se", [{ id: "b", rect: b }])).toEqual([]);
   });
 
   it("respects the tolerance for borders 'almost touching'", () => {
-    // a.right = 500; b.x = 503 (3 px gap)
     const b: ResizeRect = { x: 503, y: 150, w: 300, h: 200 };
-    expect(findResizePartner(a, "e", [{ id: "b", rect: b }], 4)).toEqual({
-      id: "b",
-      partnerEdge: "w",
-    });
-    expect(findResizePartner(a, "e", [{ id: "b", rect: b }], 2)).toBeNull();
+    const inTol = findResizeGroup(a, "e", [{ id: "b", rect: b }], 4);
+    expect(inTol).toEqual([{ id: "b", start: b, role: "anti" }]);
+    const outOfTol = findResizeGroup(a, "e", [{ id: "b", rect: b }], 2);
+    expect(outOfTol).toEqual([]);
+  });
+
+  it("horizontal chain: active S edge with one co-mover and one anti-mover", () => {
+    // Active is top-left (full width left), shared horizontal line at y=400.
+    // Top-right also ends at y=400 (co). Bottom-right starts at y=400 (anti).
+    const active: ResizeRect = { x: 0, y: 100, w: 400, h: 300 };
+    const tr: ResizeRect = { x: 400, y: 100, w: 400, h: 300 };
+    const br: ResizeRect = { x: 400, y: 400, w: 400, h: 300 };
+    const group = findResizeGroup(active, "s", [
+      { id: "tr", rect: tr },
+      { id: "br", rect: br },
+    ]);
+    expect(group).toHaveLength(2);
+    expect(group.find((m) => m.id === "tr")?.role).toBe("co");
+    expect(group.find((m) => m.id === "br")?.role).toBe("anti");
+  });
+});
+
+describe("lineShift", () => {
+  const start: ResizeRect = { x: 100, y: 200, w: 400, h: 300 };
+
+  it("returns 0 when geometry is unchanged", () => {
+    expect(lineShift(start, start, "e")).toBe(0);
+  });
+
+  it("returns delta_x for E edge", () => {
+    const moved = { ...start, w: 450 };
+    expect(lineShift(moved, start, "e")).toBe(50);
+  });
+
+  it("returns delta_x for W edge", () => {
+    const moved = { ...start, x: 80, w: 420 };
+    expect(lineShift(moved, start, "w")).toBe(-20);
+  });
+
+  it("returns delta_y for S edge", () => {
+    const moved = { ...start, h: 350 };
+    expect(lineShift(moved, start, "s")).toBe(50);
+  });
+
+  it("returns delta_y for N edge", () => {
+    const moved = { ...start, y: 180, h: 320 };
+    expect(lineShift(moved, start, "n")).toBe(-20);
+  });
+
+  it("returns 0 for corner edges (out of scope)", () => {
+    const moved = { ...start, w: 450, h: 350 };
+    expect(lineShift(moved, start, "se")).toBe(0);
+  });
+});
+
+describe("applyLineDelta — geometry math for each role × edge", () => {
+  const start: ResizeRect = { x: 200, y: 100, w: 300, h: 200 };
+
+  it("E + co (other E on line) → grows w by delta", () => {
+    const r = applyLineDelta(start, "co", "e", 50);
+    expect(r).toEqual({ x: 200, y: 100, w: 350, h: 200 });
+  });
+
+  it("E + anti (W on line) → shifts x and shrinks w by delta", () => {
+    const r = applyLineDelta(start, "anti", "e", 50);
+    expect(r).toEqual({ x: 250, y: 100, w: 250, h: 200 });
+  });
+
+  it("W + co (other W on line) → shifts x and shrinks w by delta", () => {
+    const r = applyLineDelta(start, "co", "w", 30);
+    expect(r).toEqual({ x: 230, y: 100, w: 270, h: 200 });
+  });
+
+  it("W + anti (E on line) → grows w by delta", () => {
+    const r = applyLineDelta(start, "anti", "w", -40);
+    expect(r).toEqual({ x: 200, y: 100, w: 260, h: 200 });
+  });
+
+  it("S + co → grows h", () => {
+    const r = applyLineDelta(start, "co", "s", 40);
+    expect(r).toEqual({ x: 200, y: 100, w: 300, h: 240 });
+  });
+
+  it("S + anti → shifts y and shrinks h", () => {
+    const r = applyLineDelta(start, "anti", "s", 40);
+    expect(r).toEqual({ x: 200, y: 140, w: 300, h: 160 });
+  });
+
+  it("N + co → shifts y and shrinks h", () => {
+    const r = applyLineDelta(start, "co", "n", 20);
+    expect(r).toEqual({ x: 200, y: 120, w: 300, h: 180 });
+  });
+
+  it("N + anti → grows h", () => {
+    const r = applyLineDelta(start, "anti", "n", -25);
+    expect(r).toEqual({ x: 200, y: 100, w: 300, h: 175 });
+  });
+
+  it("delta of 0 returns identical geometry for any edge/role", () => {
+    expect(applyLineDelta(start, "co", "e", 0)).toEqual(start);
+    expect(applyLineDelta(start, "anti", "n", 0)).toEqual(start);
   });
 });
 

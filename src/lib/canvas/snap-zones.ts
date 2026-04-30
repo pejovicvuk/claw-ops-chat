@@ -655,49 +655,145 @@ function edgeToSnapKind(edge: ResizeEdge): SnapKind {
 }
 
 /**
- * Group-resize partner lookup. Returns the window whose mirrored edge sits
- * within `tol` px of the active window's dragged edge AND whose
- * perpendicular extent overlaps. Edge-only — corners are ambiguous (two
- * perpendicular partners) and out of scope.
+ * Member of a resize group: another window whose moving edge sits on the
+ * active window's shared line at gesture-start.
+ *
+ * `role`:
+ *   - "co"   — same edge as active (e.g. another E when active is E).
+ *              Its edge moves *with* the active edge in lockstep.
+ *   - "anti" — opposite edge (e.g. W when active is E). Its edge moves
+ *              with the line, which means the geometry math is mirrored
+ *              vs. a co-mover.
  */
-export function findResizePartner(
+export type GroupRole = "co" | "anti";
+
+export interface GroupMember {
+  id: string;
+  start: ResizeRect;
+  role: GroupRole;
+}
+
+/**
+ * Generalised group-resize lookup. Returns ALL windows whose moving edge
+ * sits within `tol` px of the active window's shared line and whose
+ * perpendicular extent overlaps the active. Edge-only — corners are
+ * ambiguous (two perpendicular partners) and out of scope.
+ *
+ * Replaces the old singleton `findResizePartner`. The chained case
+ * (3+ windows sharing one border, like two stacked left windows + one
+ * tall right window) returns multiple members so the canvas can keep
+ * the entire shared line straight as the user drags.
+ */
+export function findResizeGroup(
   active: ResizeRect,
   edge: ResizeEdge,
   others: { id: string; rect: ResizeRect }[],
   tol = 4,
-): { id: string; partnerEdge: ResizeEdge } | null {
-  if (edge !== "n" && edge !== "s" && edge !== "e" && edge !== "w") return null;
-  for (const o of others) {
-    if (
-      edge === "e" &&
-      Math.abs(o.rect.x - (active.x + active.w)) <= tol &&
-      yOverlap(o.rect, active)
-    ) {
-      return { id: o.id, partnerEdge: "w" };
+): GroupMember[] {
+  if (edge !== "n" && edge !== "s" && edge !== "e" && edge !== "w") return [];
+  const members: GroupMember[] = [];
+
+  if (edge === "e" || edge === "w") {
+    const sharedLine = edge === "e" ? active.x + active.w : active.x;
+    for (const o of others) {
+      // Perpendicular check uses tol-padded overlap so chained members
+      // that ABUT the active (e.g. one stacked exactly above another)
+      // still join the group — they touch at the boundary, which strict
+      // overlap would reject.
+      if (!yOverlapWithTol(o.rect, active, tol)) continue;
+      const oRight = o.rect.x + o.rect.w;
+      const oLeft = o.rect.x;
+      if (Math.abs(oRight - sharedLine) <= tol) {
+        // o's E edge sits on the line.
+        members.push({ id: o.id, start: o.rect, role: edge === "e" ? "co" : "anti" });
+      } else if (Math.abs(oLeft - sharedLine) <= tol) {
+        // o's W edge sits on the line.
+        members.push({ id: o.id, start: o.rect, role: edge === "w" ? "co" : "anti" });
+      }
     }
-    if (
-      edge === "w" &&
-      Math.abs(o.rect.x + o.rect.w - active.x) <= tol &&
-      yOverlap(o.rect, active)
-    ) {
-      return { id: o.id, partnerEdge: "e" };
-    }
-    if (
-      edge === "s" &&
-      Math.abs(o.rect.y - (active.y + active.h)) <= tol &&
-      xOverlap(o.rect, active)
-    ) {
-      return { id: o.id, partnerEdge: "n" };
-    }
-    if (
-      edge === "n" &&
-      Math.abs(o.rect.y + o.rect.h - active.y) <= tol &&
-      xOverlap(o.rect, active)
-    ) {
-      return { id: o.id, partnerEdge: "s" };
+  } else {
+    const sharedLine = edge === "s" ? active.y + active.h : active.y;
+    for (const o of others) {
+      if (!xOverlapWithTol(o.rect, active, tol)) continue;
+      const oBottom = o.rect.y + o.rect.h;
+      const oTop = o.rect.y;
+      if (Math.abs(oBottom - sharedLine) <= tol) {
+        members.push({ id: o.id, start: o.rect, role: edge === "s" ? "co" : "anti" });
+      } else if (Math.abs(oTop - sharedLine) <= tol) {
+        members.push({ id: o.id, start: o.rect, role: edge === "n" ? "co" : "anti" });
+      }
     }
   }
-  return null;
+  return members;
+}
+
+function yOverlapWithTol(a: ResizeRect, b: ResizeRect, tol: number): boolean {
+  return a.y < b.y + b.h + tol && b.y < a.y + a.h + tol;
+}
+
+function xOverlapWithTol(a: ResizeRect, b: ResizeRect, tol: number): boolean {
+  return a.x < b.x + b.w + tol && b.x < a.x + a.w + tol;
+}
+
+/**
+ * Per-frame "line delta" — how far the active window's dragged edge has
+ * moved from its start position. Positive when the edge moves outward
+ * (E grew right, S grew down) and negative when shrinking.
+ */
+export function lineShift(rect: ResizeRect, start: ResizeRect, edge: ResizeEdge): number {
+  switch (edge) {
+    case "e":
+      return rect.x + rect.w - (start.x + start.w);
+    case "w":
+      return rect.x - start.x;
+    case "s":
+      return rect.y + rect.h - (start.y + start.h);
+    case "n":
+      return rect.y - start.y;
+    default:
+      return 0;
+  }
+}
+
+/**
+ * Apply a line-delta to one group member's start geometry, returning
+ * its new geometry. The active edge being dragged + the member's role
+ * fully determine the math: a co-mover's same-named edge shifts with
+ * the line; an anti-mover's opposite edge shifts with the line.
+ *
+ * `MIN_W` / `MIN_H` clamping happens at the call site so this stays
+ * pure and side-effect-free.
+ */
+export function applyLineDelta(
+  start: ResizeRect,
+  role: GroupRole,
+  edge: ResizeEdge,
+  delta: number,
+): ResizeRect {
+  switch (edge) {
+    case "e":
+      // Active's E moves by `delta`. Co (other E on line) → grow w.
+      // Anti (W on line) → shift x and shrink w.
+      return role === "co"
+        ? { x: start.x, y: start.y, w: start.w + delta, h: start.h }
+        : { x: start.x + delta, y: start.y, w: start.w - delta, h: start.h };
+    case "w":
+      // Active's W moves by `delta`. Co (other W on line) → shift x and shrink w.
+      // Anti (E on line) → grow w.
+      return role === "co"
+        ? { x: start.x + delta, y: start.y, w: start.w - delta, h: start.h }
+        : { x: start.x, y: start.y, w: start.w + delta, h: start.h };
+    case "s":
+      return role === "co"
+        ? { x: start.x, y: start.y, w: start.w, h: start.h + delta }
+        : { x: start.x, y: start.y + delta, w: start.w, h: start.h - delta };
+    case "n":
+      return role === "co"
+        ? { x: start.x, y: start.y + delta, w: start.w, h: start.h - delta }
+        : { x: start.x, y: start.y, w: start.w, h: start.h + delta };
+    default:
+      return start;
+  }
 }
 
 /* ─────────────── gap family (unchanged from PR #104) ─────────────── */

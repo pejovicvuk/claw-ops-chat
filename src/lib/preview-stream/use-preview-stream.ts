@@ -307,11 +307,20 @@ export function usePreviewStream({
         // (server invariant).
         appendQueueRef.current.push(payload);
         drainAppendQueue();
+      } else if (tag === 0x02) {
+        // Reset marker — server has restarted its encoder (resize or
+        // hard-ceiling backpressure recovery). The new init segment
+        // and media stream are about to arrive on the same WS, so we
+        // tear down the current MediaSource and rebuild it. Discard
+        // any queued segments — they belong to the previous encoder
+        // and are incompatible with the new init segment.
+        appendQueueRef.current = [];
+        setupMse();
       } else {
-        // Unknown tag — ignore. Phase 4 may add 0x02 reset etc.
+        // Unknown tag — ignore. Phase 4 may add new tag types.
       }
     },
-    [drainAppendQueue],
+    [drainAppendQueue, setupMse],
   );
 
   const sendJson = useCallback((payload: Record<string, unknown>) => {

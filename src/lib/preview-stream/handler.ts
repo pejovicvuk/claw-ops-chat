@@ -29,23 +29,32 @@ import {
  *       H.264 codec — 1-byte tag + payload:
  *                     0x00 = fMP4 init segment (ftyp + moov)
  *                     0x01 = fMP4 media segment (moof + mdat)
+ *                     0x02 = reset marker (empty payload) — client must
+ *                            tear down its MediaSource and rebuild
  *
  * Client → server:
  *   - text JSON `{type: "mouse" | "wheel" | "key" | "resize" | "reload" | "navigate", ...}`
  *
  * Backpressure (both codecs): before consuming the next CDP frame we
- * check ws.bufferedAmount; if it's over BUFFER_HIGH_WATERMARK we skip
+ * check ws.bufferedAmount; if it's over BUFFER_SOFT_WATERMARK we skip
  * the `Page.screencastFrameAck` (so CDP pauses) AND skip handing the
  * frame to the codec layer. For JPEG that means dropping a frame; for
  * H.264 it means ffmpeg's stdin briefly stalls, which naturally
- * propagates upstream without breaking the GOP.
+ * propagates upstream without breaking the GOP. If bufferedAmount blows
+ * past BUFFER_HARD_CEILING (H.264 only), we restart the encoder + send
+ * a reset marker to recover from a stuck client.
  */
 
-const BUFFER_HIGH_WATERMARK = 4 * 1024 * 1024; // 4 MB
+const BUFFER_SOFT_WATERMARK = 4 * 1024 * 1024; // 4 MB — pause CDP acks
+const BUFFER_HARD_CEILING = 16 * 1024 * 1024; // 16 MB — full encoder restart
+
+/** Debounce window for resize events. Drag bursts are common. */
+const RESIZE_DEBOUNCE_MS = 150;
 
 /** 1-byte tag added in front of every binary frame in H.264 mode. */
 const H264_TAG_INIT = 0x00;
 const H264_TAG_MEDIA = 0x01;
+const H264_TAG_RESET = 0x02;
 
 export type QualityPreset = "performance" | "balanced" | "quality";
 
@@ -126,6 +135,7 @@ export async function handlePreviewStream(
   let acquired: AcquiredPage | null = null;
   let screencast: Screencast | null = null;
   let encoder: H264Encoder | null = null;
+  let resizeTimer: NodeJS.Timeout | null = null;
   let closed = false;
 
   const sendJson = (payload: Record<string, unknown>) => {
@@ -140,6 +150,10 @@ export async function handlePreviewStream(
   const tearDown = async () => {
     if (closed) return;
     closed = true;
+    if (resizeTimer) {
+      clearTimeout(resizeTimer);
+      resizeTimer = null;
+    }
     if (screencast) {
       try {
         await screencast.stop();
@@ -203,75 +217,107 @@ export async function handlePreviewStream(
 
   const { everyNthFrame, jpegQuality, bitrateKbps } = resolveQuality(route.quality);
   const codec: CodecChoice = route.codec ?? "jpeg";
-  const viewport = page.viewportSize() ?? { width: 1280, height: 800 };
+  const initialViewport = page.viewportSize() ?? { width: 1280, height: 800 };
+  const dsf = 2; // mirrors chromium-pool's deviceScaleFactor
 
-  // For H.264 we spawn ffmpeg first so its segment handler is wired
-  // before the first PNG arrives — otherwise we could lose the init
-  // segment. The encoder dimensions match the page's device pixels
-  // (viewport × DSF) since that's what CDP screencast emits.
-  if (codec === "h264") {
-    const dsf = 2; // mirrors chromium-pool's deviceScaleFactor
-    encoder = new H264Encoder({
-      width: viewport.width * dsf,
-      height: viewport.height * dsf,
-      fps: H264_FPS,
-      bitrateKbps,
-    });
-    encoder.on("segment", (seg: SegmentEvent) => {
+  /**
+   * Send a 1-byte tag with optional payload as a binary WS frame.
+   * Used for H.264 init / media / reset envelopes.
+   */
+  const sendTagged = (tag: number, payload?: Buffer): void => {
+    if (closed || ws.readyState !== ws.OPEN) return;
+    const framed =
+      payload && payload.length > 0 ? Buffer.concat([Buffer.from([tag]), payload]) : Buffer.from([tag]);
+    try {
+      ws.send(framed, { binary: true });
+    } catch {
+      /* socket closing */
+    }
+  };
+
+  /**
+   * Wire the encoder's segment + failure events to the WS. Called
+   * once per encoder spawn (initial bring-up + every restart).
+   */
+  const wireEncoderEvents = (enc: H264Encoder): void => {
+    enc.on("segment", (seg: SegmentEvent) => {
       if (closed || ws.readyState !== ws.OPEN) return;
-      if (ws.bufferedAmount > BUFFER_HIGH_WATERMARK) {
-        // Don't drop the segment — dropping a P-frame poisons the
-        // GOP. Backpressure is applied upstream (we skip CDP acks),
-        // so this branch only fires when bufferedAmount briefly
-        // overshoots before the PNG path notices. Send anyway.
-      }
       const tag = seg.kind === "init" ? H264_TAG_INIT : H264_TAG_MEDIA;
-      const framed = Buffer.allocUnsafe(seg.data.length + 1);
-      framed[0] = tag;
-      seg.data.copy(framed, 1);
-      try {
-        ws.send(framed, { binary: true });
-      } catch {
-        /* socket closing */
-      }
+      sendTagged(tag, seg.data);
     });
-    encoder.on("failed", (msg: string) => {
+    enc.on("failed", (msg: string) => {
       sendJson({ type: "error", code: "encoder_failed", message: msg });
       void tearDown();
     });
-    encoder.start();
-  }
+  };
 
-  try {
-    screencast = await startScreencast(page, {
-      // PNG is lossless — fed straight into ffmpeg via sharp's raw
-      // RGB24 decode. JPEG path keeps Phase 1's pipeline unchanged.
-      format: codec === "h264" ? "png" : "jpeg",
-      quality: jpegQuality,
-      // Bumped for DSF=2: a 1440×900 viewport at DSF=2 produces a
-      // 2880×1800 bitmap. CDP clamps to maxWidth/maxHeight, so we
-      // need headroom for HiDPI rendering at typical desktop sizes.
+  /**
+   * Spawn a fresh encoder + screencast pair sized to the current
+   * viewport. Returns the new screencast so the caller can wire its
+   * onFrame handler.
+   */
+  const bringUpH264 = async (): Promise<Screencast> => {
+    const vp = page.viewportSize() ?? initialViewport;
+    encoder = new H264Encoder({
+      width: vp.width * dsf,
+      height: vp.height * dsf,
+      fps: H264_FPS,
+      bitrateKbps,
+    });
+    wireEncoderEvents(encoder);
+    encoder.start();
+    return startScreencast(page, {
+      format: "png",
       maxWidth: 3200,
       maxHeight: 2000,
       // H.264 wants every frame so the encoder can decide what to
       // drop based on motion. JPEG's everyNthFrame is the only
-      // throttle there, so we keep it.
-      everyNthFrame: codec === "h264" ? 1 : everyNthFrame,
+      // throttle there, so we keep it for that path.
+      everyNthFrame: 1,
     });
-  } catch (err) {
-    sendJson({
-      type: "error",
-      code: "page_crashed",
-      message: err instanceof Error ? err.message : "Screencast failed to start",
-    });
-    void tearDown();
-    return;
+  };
+
+  // For H.264 we spawn ffmpeg + screencast together. Encoder dimensions
+  // track viewport × DSF since that's what CDP screencast emits.
+  if (codec === "h264") {
+    try {
+      screencast = await bringUpH264();
+    } catch (err) {
+      sendJson({
+        type: "error",
+        code: "page_crashed",
+        message: err instanceof Error ? err.message : "Screencast failed to start",
+      });
+      void tearDown();
+      return;
+    }
+  } else {
+    try {
+      screencast = await startScreencast(page, {
+        format: "jpeg",
+        quality: jpegQuality,
+        // Bumped for DSF=2: a 1440×900 viewport at DSF=2 produces a
+        // 2880×1800 bitmap. CDP clamps to maxWidth/maxHeight, so we
+        // need headroom for HiDPI rendering at typical desktop sizes.
+        maxWidth: 3200,
+        maxHeight: 2000,
+        everyNthFrame,
+      });
+    } catch (err) {
+      sendJson({
+        type: "error",
+        code: "page_crashed",
+        message: err instanceof Error ? err.message : "Screencast failed to start",
+      });
+      void tearDown();
+      return;
+    }
   }
 
   sendJson({
     type: "ready",
-    deviceWidth: viewport.width,
-    deviceHeight: viewport.height,
+    deviceWidth: initialViewport.width,
+    deviceHeight: initialViewport.height,
     codec,
     screencast: {
       format: codec === "h264" ? "h264" : "jpeg",
@@ -306,43 +352,146 @@ export async function handlePreviewStream(
   // page Chromium loaded.
   onFrameNavigated({ url: () => page.url(), parentFrame: () => null });
 
-  if (codec === "h264" && encoder) {
-    const enc = encoder;
-    screencast.onFrame((frame) => {
-      if (closed || ws.readyState !== ws.OPEN) return;
-      if (ws.bufferedAmount > BUFFER_HIGH_WATERMARK) {
-        // Skip ack so CDP pauses; skip pushing to the encoder so its
-        // stdin doesn't queue a frame that's already stale by the
-        // time the network catches up. The encoder's watchdog tolerates
-        // brief gaps (5 s) so a flicker of overflow is harmless.
-        return;
+  /**
+   * Wire `screencast.onFrame` for the current screencast object.
+   * Re-called after every H.264 restart with the freshly-spawned
+   * screencast.
+   */
+  const wireScreencastFrames = (sc: Screencast): void => {
+    if (codec === "h264") {
+      sc.onFrame((frame) => {
+        if (closed || ws.readyState !== ws.OPEN) return;
+        if (ws.bufferedAmount > BUFFER_HARD_CEILING) {
+          // Hard ceiling — client is stuck or absurdly slow. Skip the
+          // ack (CDP pauses) and trigger a full pipeline reset to
+          // recover with a fresh keyframe. Without this an infinitely
+          // backed-up bufferedAmount would never drain.
+          void restartH264Pipeline("hard_ceiling");
+          return;
+        }
+        if (ws.bufferedAmount > BUFFER_SOFT_WATERMARK) {
+          // Skip ack so CDP pauses; skip pushing to the encoder so its
+          // stdin doesn't queue a frame that's already stale by the
+          // time the network catches up. The encoder's watchdog
+          // tolerates brief gaps (5 s) so a flicker of overflow is
+          // harmless.
+          return;
+        }
+        const enc = encoder;
+        if (!enc) return;
+        void (async () => {
+          try {
+            const decoded = await decodePngToRgb24(frame.data);
+            await enc.pushFrame(decoded.data);
+          } catch {
+            // PNG decode + ffmpeg push are best-effort — a corrupt frame
+            // shouldn't kill the stream. Drop and continue.
+          }
+          void frame.ack();
+        })();
+      });
+    } else {
+      sc.onFrame((frame) => {
+        if (closed || ws.readyState !== ws.OPEN) return;
+        if (ws.bufferedAmount > BUFFER_SOFT_WATERMARK) {
+          // Drop frame + skip ack — CDP pauses until we ack the next
+          // one.
+          return;
+        }
+        try {
+          ws.send(frame.data, { binary: true });
+          void frame.ack();
+        } catch {
+          /* socket closing */
+        }
+      });
+    }
+  };
+
+  /**
+   * Replace the live screencast + encoder pair with a fresh one,
+   * sending a `[0x02]` reset to the client so it rebuilds its
+   * MediaSource. Used for both viewport resize (ffmpeg's `-s WxH` is
+   * fixed at spawn) and the hard-ceiling backpressure recovery.
+   * Concurrent calls are coalesced via `restartPending`.
+   */
+  let restartPending = false;
+  const restartH264Pipeline = async (reason: string): Promise<void> => {
+    if (codec !== "h264" || closed || restartPending) return;
+    restartPending = true;
+    try {
+      sendTagged(H264_TAG_RESET);
+      sendJson({ type: "status", state: "restarting", reason });
+      const oldScreencast = screencast;
+      const oldEncoder = encoder;
+      screencast = null;
+      encoder = null;
+      if (oldScreencast) {
+        try {
+          await oldScreencast.stop();
+        } catch {
+          /* ignore */
+        }
       }
+      if (oldEncoder) {
+        try {
+          await oldEncoder.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (closed) return;
+      try {
+        screencast = await bringUpH264();
+        wireScreencastFrames(screencast);
+        sendJson({ type: "status", state: "ready" });
+      } catch (err) {
+        sendJson({
+          type: "error",
+          code: "encoder_failed",
+          message: err instanceof Error ? err.message : "H.264 restart failed",
+        });
+        void tearDown();
+      }
+    } finally {
+      restartPending = false;
+    }
+  };
+
+  wireScreencastFrames(screencast);
+
+  // Resize debounce. Drag bursts produce dozens of resize messages per
+  // second; we want the *last* one. JPEG mode applies viewport changes
+  // immediately because the screencast doesn't care. H.264 mode batches
+  // because every change forces a pipeline restart. `resizeTimer` is
+  // hoisted to the function top so tearDown can clear it.
+  let pendingResize: ResizeEvent | null = null;
+
+  const onResize = (evt: ResizeEvent): void => {
+    if (codec !== "h264") {
+      // JPEG: setViewportSize directly, no restart needed.
+      void forwardResize(page, evt).catch(() => {
+        /* ignore — page may be closing */
+      });
+      return;
+    }
+    pendingResize = evt;
+    if (resizeTimer) return;
+    resizeTimer = setTimeout(() => {
+      resizeTimer = null;
+      const next = pendingResize;
+      pendingResize = null;
+      if (!next) return;
       void (async () => {
         try {
-          const decoded = await decodePngToRgb24(frame.data);
-          await enc.pushFrame(decoded.data);
+          await forwardResize(page, next);
         } catch {
-          // PNG decode + ffmpeg push are best-effort — a corrupt frame
-          // shouldn't kill the stream. Drop and continue.
+          /* ignore */
         }
-        void frame.ack();
+        await restartH264Pipeline("resize");
       })();
-    });
-  } else {
-    screencast.onFrame((frame) => {
-      if (closed || ws.readyState !== ws.OPEN) return;
-      if (ws.bufferedAmount > BUFFER_HIGH_WATERMARK) {
-        // Drop frame + skip ack — CDP pauses until we ack the next one.
-        return;
-      }
-      try {
-        ws.send(frame.data, { binary: true });
-        void frame.ack();
-      } catch {
-        /* socket closing */
-      }
-    });
-  }
+    }, RESIZE_DEBOUNCE_MS);
+  };
 
   ws.on("message", (raw) => {
     if (closed) return;
@@ -352,7 +501,7 @@ export async function handlePreviewStream(
     } catch {
       return;
     }
-    void dispatchClientFrame(parsed, screencast, page, route, sendJson);
+    void dispatchClientFrame(parsed, screencast, page, route, sendJson, onResize);
   });
 }
 
@@ -362,6 +511,7 @@ async function dispatchClientFrame(
   page: AcquiredPage["page"],
   route: PreviewStreamRoute,
   sendJson: (payload: Record<string, unknown>) => void,
+  onResize: (evt: ResizeEvent) => void,
 ): Promise<void> {
   if (!screencast) return;
   const { session } = screencast;
@@ -380,7 +530,9 @@ async function dispatchClientFrame(
         await forwardTouch(session, frame as unknown as TouchEvent);
         return;
       case "resize":
-        await forwardResize(page, frame as unknown as ResizeEvent);
+        // Codec-aware resize: H.264 must restart the encoder; JPEG
+        // can apply the viewport change in place.
+        onResize(frame as unknown as ResizeEvent);
         return;
       case "reload":
         sendJson({ type: "status", state: "navigating" });

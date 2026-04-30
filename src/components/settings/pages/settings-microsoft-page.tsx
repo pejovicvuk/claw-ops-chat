@@ -13,6 +13,8 @@ import {
   FiLogOut,
   FiRefreshCw,
 } from "react-icons/fi";
+// Microsoft device-code flow uses public-client mode — no client secret.
+// See src/lib/microsoft-custom-config.ts for the rationale.
 import { authFetch } from "@/lib/auth";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -43,9 +45,7 @@ export function SettingsMicrosoftPage() {
 
   // app-setup form state
   const [clientId, setClientId] = useState("");
-  const [clientSecret, setClientSecret] = useState("");
   const [tenantId, setTenantId] = useState("common");
-  const [showSecret, setShowSecret] = useState(false);
   const [signingIn, setSigningIn] = useState(false);
   const [credError, setCredError] = useState<string | null>(null);
   const [showInstructions, setShowInstructions] = useState(false);
@@ -154,8 +154,14 @@ export function SettingsMicrosoftPage() {
 
   const handleSignIn = useCallback(async () => {
     if (signingIn) return;
-    if (!clientId.trim()) { setCredError("Application (Client) ID is required"); return; }
-    if (!tenantId.trim()) { setCredError("Tenant ID is required"); return; }
+    if (!clientId.trim()) {
+      setCredError("Application (Client) ID is required");
+      return;
+    }
+    if (!tenantId.trim()) {
+      setCredError("Tenant ID is required");
+      return;
+    }
 
     setSigningIn(true);
     setCredError(null);
@@ -166,7 +172,6 @@ export function SettingsMicrosoftPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clientId: clientId.trim(),
-          clientSecret: clientSecret.trim() || undefined,
           tenantId: tenantId.trim(),
         }),
       });
@@ -187,7 +192,7 @@ export function SettingsMicrosoftPage() {
     } finally {
       setSigningIn(false);
     }
-  }, [clientId, clientSecret, tenantId, signingIn, startDeviceFlow]);
+  }, [clientId, tenantId, signingIn, startDeviceFlow]);
 
   const handleRetry = useCallback(async () => {
     if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
@@ -209,7 +214,6 @@ export function SettingsMicrosoftPage() {
       /* best-effort */
     }
     setClientId("");
-    setClientSecret("");
     setTenantId("common");
     setDevice(null);
     setDeviceError(null);
@@ -333,11 +337,7 @@ export function SettingsMicrosoftPage() {
               className="rounded-lg border border-canvas-border px-2 py-1.5 text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
               title="Copy code"
             >
-              {codeCopied ? (
-                <FiCheck size={11} className="text-green-500" />
-              ) : (
-                <FiCopy size={11} />
-              )}
+              {codeCopied ? <FiCheck size={11} className="text-green-500" /> : <FiCopy size={11} />}
             </button>
           </div>
 
@@ -434,19 +434,14 @@ export function SettingsMicrosoftPage() {
               <li>
                 4. Go to{" "}
                 <strong className="text-canvas-fg">
-                  Certificates &amp; secrets → New client secret
-                </strong>
-                , create one, and copy the <strong className="text-canvas-fg">Value</strong>.
+                  Authentication → Advanced settings → Allow public client flows
+                </strong>{" "}
+                → set to <strong className="text-canvas-fg">Yes</strong>. This is required for the
+                device-code sign-in below; no client secret is needed (and Microsoft rejects token
+                requests that include one for public clients).
               </li>
               <li>
                 5. Go to{" "}
-                <strong className="text-canvas-fg">
-                  Authentication → Advanced settings → Allow public client flows
-                </strong>{" "}
-                → set to <strong className="text-canvas-fg">Yes</strong>.
-              </li>
-              <li>
-                6. Go to{" "}
                 <strong className="text-canvas-fg">
                   API permissions → Add a permission → Microsoft Graph → Delegated
                 </strong>{" "}
@@ -468,12 +463,12 @@ export function SettingsMicrosoftPage() {
                 .
               </li>
               <li>
-                7. Optionally add Teams permissions (
+                6. Optionally add Teams permissions (
                 <code className="rounded bg-canvas-bg px-1">Teams.ReadBasic.All</code>,{" "}
                 <code className="rounded bg-canvas-bg px-1">ChannelMessage.Read.All</code>,{" "}
                 <code className="rounded bg-canvas-bg px-1">Chat.ReadWrite</code>) — these require{" "}
-                <strong className="text-canvas-fg">admin consent</strong> in org tenants and are
-                not available for personal Microsoft accounts.
+                <strong className="text-canvas-fg">admin consent</strong> in org tenants and are not
+                available for personal Microsoft accounts.
               </li>
             </ol>
           </div>
@@ -484,10 +479,7 @@ export function SettingsMicrosoftPage() {
       <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
         <div className="space-y-3">
           <div>
-            <label
-              className="mb-1 block text-[11px] text-canvas-muted"
-              htmlFor="ms-client-id"
-            >
+            <label className="mb-1 block text-[11px] text-canvas-muted" htmlFor="ms-client-id">
               Application (Client) ID
             </label>
             <input
@@ -503,39 +495,7 @@ export function SettingsMicrosoftPage() {
           </div>
 
           <div>
-            <label
-              className="mb-1 block text-[11px] text-canvas-muted"
-              htmlFor="ms-client-secret"
-            >
-              Client Secret{" "}
-              <span className="text-canvas-muted/60">(optional for public clients)</span>
-            </label>
-            <div className="flex items-center gap-2">
-              <input
-                id="ms-client-secret"
-                type={showSecret ? "text" : "password"}
-                value={clientSecret}
-                onChange={(e) => setClientSecret(e.target.value)}
-                placeholder="Leave blank if using public client flow"
-                className="flex-1 rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 font-mono text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none"
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <button
-                type="button"
-                onClick={() => setShowSecret((v) => !v)}
-                className="rounded-lg border border-canvas-border px-2 py-2 text-[11px] text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
-              >
-                {showSecret ? "Hide" : "Show"}
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <label
-              className="mb-1 block text-[11px] text-canvas-muted"
-              htmlFor="ms-tenant-id"
-            >
+            <label className="mb-1 block text-[11px] text-canvas-muted" htmlFor="ms-tenant-id">
               Tenant ID
             </label>
             <input
@@ -549,10 +509,8 @@ export function SettingsMicrosoftPage() {
               spellCheck={false}
             />
             <p className="mt-1 text-[10px] text-canvas-muted">
-              Use{" "}
-              <code className="rounded bg-canvas-bg px-1">common</code> for personal +
-              any org account. Enter your organization&apos;s Tenant ID GUID for
-              single-tenant deployment.
+              Use <code className="rounded bg-canvas-bg px-1">common</code> for personal + any org
+              account. Enter your organization&apos;s Tenant ID GUID for single-tenant deployment.
             </p>
           </div>
 
@@ -585,11 +543,10 @@ export function SettingsMicrosoftPage() {
       </div>
 
       <p className="text-[10px] text-canvas-muted">
-        Credentials are stored locally in{" "}
-        <code>~/.claude/custom-microsoft/credentials.json</code> (mode 0600). The access
-        token is passed to{" "}
-        <code>@softeria/ms-365-mcp-server</code> as an env variable and is never sent
-        anywhere other than Microsoft&apos;s authentication and Graph API servers.
+        Credentials are stored locally in <code>~/.claude/custom-microsoft/credentials.json</code>{" "}
+        (mode 0600). The access token is passed to <code>@softeria/ms-365-mcp-server</code> as an
+        env variable and is never sent anywhere other than Microsoft&apos;s authentication and Graph
+        API servers.
       </p>
     </div>
   );

@@ -46,14 +46,14 @@ async function pollHandler(request: Request): Promise<Response> {
     );
   }
 
+  // Public-client device flow: do NOT send `client_secret`. Microsoft
+  // rejects token requests with AADSTS90023 when the app registration
+  // is configured for public-client flows (which device code requires).
   const params = new URLSearchParams({
     grant_type: DEVICE_CODE_GRANT,
     client_id: creds.clientId,
     device_code: deviceCode,
   });
-  if (creds.clientSecret) {
-    params.set("client_secret", creds.clientSecret);
-  }
 
   let tokenRes: Response;
   try {
@@ -94,7 +94,8 @@ async function pollHandler(request: Request): Promise<Response> {
       case "access_denied":
         return Response.json({
           status: "error",
-          error: "You declined the authorization request. Click 'Sign in' again if you want to connect.",
+          error:
+            "You declined the authorization request. Click 'Sign in' again if you want to connect.",
         });
       default:
         return Response.json({

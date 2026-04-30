@@ -19,8 +19,6 @@ const MS_TOKEN_ENDPOINT = (tenantId: string) =>
 
 export interface MicrosoftCredentials {
   clientId: string;
-  /** Optional — public client device flow works without a client secret. */
-  clientSecret?: string;
   /** "common" | "organizations" | "consumers" | tenant GUID */
   tenantId: string;
   /** Bearer token embedded in the MCP server env block in ~/.claude.json */
@@ -49,9 +47,23 @@ export async function loadCredentials(): Promise<MicrosoftCredentials | null> {
   if (!existsSync(CREDENTIALS_FILE)) return null;
   try {
     const raw = await readFile(CREDENTIALS_FILE, "utf-8");
-    const parsed = JSON.parse(raw) as MicrosoftCredentials;
+    // Older saves may include a `clientSecret` field — ignore it. The
+    // device-code flow requires a public-client app registration, and
+    // sending `client_secret` on token requests against a public client
+    // is rejected by Microsoft (AADSTS90023). Picking fields explicitly
+    // here means the next saveCredentials() drops the legacy field from
+    // disk automatically.
+    const parsed = JSON.parse(raw) as Partial<MicrosoftCredentials>;
     if (!parsed.clientId || !parsed.tenantId) return null;
-    return parsed;
+    return {
+      clientId: parsed.clientId,
+      tenantId: parsed.tenantId,
+      ...(parsed.accessToken ? { accessToken: parsed.accessToken } : {}),
+      ...(parsed.refreshToken ? { refreshToken: parsed.refreshToken } : {}),
+      ...(typeof parsed.expiresAt === "number" ? { expiresAt: parsed.expiresAt } : {}),
+      ...(parsed.accountEmail ? { accountEmail: parsed.accountEmail } : {}),
+      ...(parsed.displayName ? { displayName: parsed.displayName } : {}),
+    };
   } catch {
     return null;
   }
@@ -69,9 +81,6 @@ export async function registerMcpServer(creds: MicrosoftCredentials): Promise<vo
     MS365_MCP_TENANT_ID: creds.tenantId,
     MS365_MCP_OAUTH_TOKEN: creds.accessToken ?? "",
   };
-  if (creds.clientSecret) {
-    env.MS365_MCP_CLIENT_SECRET = creds.clientSecret;
-  }
   await registerServer(MCP_SERVER_ID, {
     type: "stdio",
     command: "npx",
@@ -112,15 +121,16 @@ export async function refreshAccessTokenIfNeeded(): Promise<MicrosoftCredentials
     );
   }
 
+  // Public-client device flow: do NOT send `client_secret` here. Microsoft
+  // rejects the request with AADSTS90023 if the app registration has
+  // "Allow public client flows" enabled (which is required for device
+  // flow to work in the first place).
   const params = new URLSearchParams({
     grant_type: "refresh_token",
     client_id: creds.clientId,
     refresh_token: creds.refreshToken,
     scope: MS365_SCOPE_STRING,
   });
-  if (creds.clientSecret) {
-    params.set("client_secret", creds.clientSecret);
-  }
 
   let res: Response;
   try {

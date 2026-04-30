@@ -55,6 +55,8 @@ src/lib/reports/*.js
 src/lib/monitoring/**/*.js
 src/lib/audit/*.js
 src/lib/preview-proxy/*.js
+src/lib/preview-stream/*.js
+src/lib/dev-server/*.js
 src/app/api/monitoring/**/*.js
 src/components/monitoring/**/*.js
 

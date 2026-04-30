@@ -61,6 +61,9 @@ import {
   PREVIEW_PREFIX,
 } from "./src/lib/preview-proxy/http-forward";
 import { forwardWs } from "./src/lib/preview-proxy/ws-forward";
+import { handlePreviewStream } from "./src/lib/preview-stream/handler";
+import { close as closeChromiumPool } from "./src/lib/preview-stream/chromium-pool";
+import { killAll as killAllDevServers } from "./src/lib/dev-server/manager";
 import { bootstrapMonitoring } from "./src/lib/monitoring/bootstrap";
 import { getMonitoringBroadcaster } from "./src/lib/monitoring/ws-broadcast";
 import {
@@ -2614,8 +2617,15 @@ app.prepare().then(() => {
     const isMonitoringWs = pathname === "/ws/monitoring" || pathname === "/chat/ws/monitoring";
     const isNotificationsWs =
       pathname === "/ws/notifications" || pathname === "/chat/ws/notifications";
+    // /ws/preview-stream/<projectSlug>/<itemSlug>/<port> — opens a Chromium
+    // tab against localhost:<port> in the container and screencasts it back
+    // to the user's browser as JPEG frames over this WS.
+    const previewStreamMatch = pathname?.match(
+      /^(?:\/chat)?\/ws\/preview-stream\/([a-z0-9][a-z0-9-]{0,63})\/([a-z0-9][a-z0-9-]{0,63})\/(\d+)$/,
+    );
+    const isPreviewStreamWs = !!previewStreamMatch;
 
-    if (!isChatWs && !isTerminalWs && !isMonitoringWs && !isNotificationsWs) {
+    if (!isChatWs && !isTerminalWs && !isMonitoringWs && !isNotificationsWs && !isPreviewStreamWs) {
       // Pass to Next.js for HMR and other internal WebSockets
       nextUpgradeHandler(req, socket, head);
       return;
@@ -2647,7 +2657,9 @@ app.prepare().then(() => {
         ? "/ws/monitoring"
         : isNotificationsWs
           ? "/ws/notifications"
-          : "/ws/chat";
+          : isPreviewStreamWs
+            ? "/ws/preview-stream"
+            : "/ws/chat";
     const sessionPayload = extractSessionFromCookieHeader(req.headers.cookie);
     let actorEmail: string;
     if (sessionPayload) {
@@ -2712,6 +2724,40 @@ app.prepare().then(() => {
         ws.on("error", () => notificationClients.delete(ws));
       });
       logWsUpgrade({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => {});
+      return;
+    }
+
+    if (isPreviewStreamWs && previewStreamMatch) {
+      const projectSlug = previewStreamMatch[1];
+      const itemSlug = previewStreamMatch[2];
+      const previewPort = Number(previewStreamMatch[3]);
+      // Same self-loop guard as the proxy: don't let the user point a
+      // Chromium tab at the chat server's own port. (Chromium would
+      // happily render the chat UI inside itself, which works but is
+      // wasteful and confusing.)
+      if (
+        !Number.isInteger(previewPort) ||
+        previewPort < 1024 ||
+        previewPort > 65535 ||
+        previewPort === port
+      ) {
+        socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        void handlePreviewStream(ws, actorEmail, {
+          projectSlug,
+          itemSlug,
+          port: previewPort,
+        });
+      });
+      logWsUpgrade({
+        route: wsRoute,
+        statusCode: 101,
+        actor: actorEmail,
+        target: `${projectSlug}/${itemSlug}:${previewPort}`,
+      }).catch(() => {});
       return;
     }
 
@@ -2815,5 +2861,25 @@ app.prepare().then(() => {
         );
       }
     })();
+
+    // Graceful shutdown: kill spawned dev servers (SIGTERM) and close
+    // the headless Chromium pool so docker stop doesn't orphan them.
+    // SIGINT is what Ctrl-C in `npm run dev` sends; SIGTERM is what
+    // docker stop / k8s sends. Both handled identically.
+    const shutdown = (signal: string) => {
+      console.log(`> Shutdown (${signal}): killing dev servers + Chromium pool`);
+      try {
+        killAllDevServers();
+      } catch {
+        /* best effort */
+      }
+      void closeChromiumPool().catch(() => {
+        /* best effort */
+      });
+      // Give the cleanup a moment, then let the process exit naturally.
+      setTimeout(() => process.exit(0), 1000);
+    };
+    process.once("SIGTERM", () => shutdown("SIGTERM"));
+    process.once("SIGINT", () => shutdown("SIGINT"));
   });
 });

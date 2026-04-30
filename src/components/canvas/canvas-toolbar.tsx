@@ -8,41 +8,49 @@ import {
   FiMonitor,
 } from "react-icons/fi";
 import type { IconType } from "react-icons";
-import { TOOLBAR_H, type WindowKind } from "./canvas-types";
+import { TOOLBAR_H, type WindowDescriptor, type WindowKind } from "./canvas-types";
+import { WindowTabs } from "./window-tabs";
 
 interface CanvasToolbarProps {
   itemDisplayName: string;
   itemSlug: string;
   currentPage: number;
   totalPages: number;
+  /** Minimized windows on the active page — rendered as auto-fit tabs. */
+  minimizedWindows: WindowDescriptor[];
   onBack: () => void;
   onPageChange: (page: number) => void;
   onAdd: (kind: WindowKind) => void;
+  onRestoreWindow: (id: string) => void;
   onOpenSessions?: () => void;
 }
 
 /**
- * Top bar for the per-item canvas. Left side: back arrow + item title +
- * slug pill. Right side: page navigator + a row of icon-only tool
- * buttons, one per `WindowKind`. Each icon click directly spawns a new
- * window of that kind — no dropdown, no extra confirm step.
+ * Top bar for the per-item canvas. Layout:
+ *   [back + item name]   [auto-fit tabs of minimized windows]   [page nav] [tools]
+ *
+ * Tabs are rendered between the title block and the page-nav so they
+ * absorb the elastic middle space — when many windows are minimized
+ * tabs shrink first; the title and right-hand controls stay stable.
  */
 export function CanvasToolbar({
   itemDisplayName,
   itemSlug,
   currentPage,
   totalPages,
+  minimizedWindows,
   onBack,
   onPageChange,
   onAdd,
+  onRestoreWindow,
   onOpenSessions,
 }: CanvasToolbarProps) {
   return (
     <header
-      className="relative flex shrink-0 items-center justify-between gap-3 border-b border-canvas-border bg-canvas-bg px-3"
+      className="relative flex shrink-0 items-center gap-3 border-b border-canvas-border bg-canvas-bg px-3"
       style={{ height: TOOLBAR_H }}
     >
-      <div className="flex min-w-0 items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         {onOpenSessions && (
           <button
             type="button"
@@ -62,11 +70,14 @@ export function CanvasToolbar({
         >
           <FiArrowLeft size={14} />
         </button>
-        <h1 className="line-clamp-1 text-[14px] font-semibold text-canvas-fg">{itemDisplayName}</h1>
+        <h1 className="line-clamp-1 max-w-[180px] text-[14px] font-semibold text-canvas-fg sm:max-w-[260px]">
+          {itemDisplayName}
+        </h1>
         <span className="hidden shrink-0 rounded-full bg-canvas-surface-hover px-2 py-0.5 font-mono text-[10px] text-canvas-muted sm:inline-block">
           {itemSlug}
         </span>
       </div>
+      <WindowTabs windows={minimizedWindows} onRestore={onRestoreWindow} />
       <div className="flex shrink-0 items-center gap-2">
         <PageNavigator current={currentPage} total={totalPages} onChange={onPageChange} />
         <ToolPalette onAdd={onAdd} />

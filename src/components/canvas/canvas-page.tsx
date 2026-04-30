@@ -13,10 +13,8 @@ import {
   type SnapResult,
 } from "@/lib/canvas/snap-zones";
 import { DraggableWindow } from "./draggable-window";
-import { DockStrip } from "./dock-strip";
 import { WindowHost } from "./window-host";
 import {
-  DOCK_H,
   MIN_H,
   MIN_W,
   type WindowDescriptor,
@@ -47,10 +45,11 @@ interface CanvasPageProps {
 const SNAP_OVERLAY_Z = Z_INDEX.FLOATING + 1000;
 
 /**
- * Renders one page of the canvas: the visible windows (absolute-
- * positioned, z-stacked by `focusOrder`) plus the dock strip for
- * minimized windows. Measures its own bounds via ResizeObserver so
- * children can clamp drag/resize correctly.
+ * Renders one page of the canvas: visible windows (absolute-positioned,
+ * z-stacked by `focusOrder`). Minimized windows are NOT rendered here —
+ * they show up as tabs in the canvas toolbar instead. The page measures
+ * its own bounds via ResizeObserver so children can clamp drag/resize
+ * correctly.
  *
  * Owns the snap-preview overlay: while a window is being dragged the
  * page tracks the pointer in canvas-relative coords, runs
@@ -103,11 +102,11 @@ export function CanvasPage({
     return () => observer.disconnect();
   }, []);
 
-  const minimized = windows.filter((w) => w.geometry.minimized === true);
-  const dockHeight = minimized.length > 0 ? DOCK_H : 0;
+  // Minimized windows now render in the toolbar as tabs (see WindowTabs),
+  // so the page uses its full bounds for drag / resize clamping.
   const usableBounds = useMemo(
-    () => ({ width: bounds.width, height: Math.max(0, bounds.height - dockHeight) }),
-    [bounds.width, bounds.height, dockHeight],
+    () => ({ width: bounds.width, height: bounds.height }),
+    [bounds.width, bounds.height],
   );
 
   /**
@@ -131,16 +130,6 @@ export function CanvasPage({
       }));
     },
     [focusOrder, windows],
-  );
-
-  const handleRestore = useCallback(
-    (id: string) => {
-      const target = windows.find((w) => w.id === id);
-      if (!target) return;
-      onFocus(id);
-      onChange(id, { ...target.geometry, minimized: false });
-    },
-    [onChange, onFocus, windows],
   );
 
   const handleDragStart = useCallback((id: string) => {
@@ -366,7 +355,6 @@ export function CanvasPage({
         );
       })}
       <SnapOverlay snap={snapState} zIndex={SNAP_OVERLAY_Z} />
-      <DockStrip windows={minimized} onRestore={handleRestore} />
     </div>
   );
 }

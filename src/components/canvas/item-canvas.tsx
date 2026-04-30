@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FiMessageSquare } from "react-icons/fi";
 import { useUrlState } from "@/lib/use-url-state";
 import { fetchItems, type ItemMeta } from "@/lib/items-api";
 import { loadCanvasOrEmpty, saveCanvas } from "@/lib/canvas/canvas-store";
@@ -152,6 +153,26 @@ export function ItemCanvas({ projectSlug, itemSlug, onOpenSessions }: ItemCanvas
   }, []);
 
   /**
+   * Restore a minimized window. Lifted from CanvasPage because the tab
+   * strip that triggers it now lives in CanvasToolbar (a sibling of
+   * CanvasPage), so the handler has to sit at the parent level.
+   */
+  const restoreWindow = useCallback((id: string) => {
+    setState((current) => {
+      const target = current.windows.find((w) => w.id === id);
+      if (!target) return current;
+      const rest = current.focusOrder.filter((wid) => wid !== id);
+      return {
+        ...current,
+        windows: current.windows.map((win) =>
+          win.id === id ? { ...win, geometry: { ...win.geometry, minimized: false } } : win,
+        ),
+        focusOrder: [id, ...rest],
+      };
+    });
+  }, []);
+
+  /**
    * Patch an individual window's `state` (e.g. preview port edit).
    * Mirrors the `updateGeometry` shape — partial merge on the matching
    * window's discriminated-union state, leaving the rest untouched.
@@ -190,11 +211,18 @@ export function ItemCanvas({ projectSlug, itemSlug, onOpenSessions }: ItemCanvas
     }));
   }, []);
 
+  const handleAddChat = useCallback(() => addWindow("chat"), [addWindow]);
+
   const totalPages = pageCount(state);
   const currentPageWindows = useMemo(
     () => state.windows.filter((w) => w.page === state.currentPage),
     [state.currentPage, state.windows],
   );
+  const minimizedWindows = useMemo(
+    () => currentPageWindows.filter((w) => w.geometry.minimized === true),
+    [currentPageWindows],
+  );
+  const isPageEmpty = currentPageWindows.length === 0;
 
   const itemContextValue = useMemo<ItemContextValue | null>(() => {
     if (!item) return null;
@@ -234,9 +262,11 @@ export function ItemCanvas({ projectSlug, itemSlug, onOpenSessions }: ItemCanvas
           itemSlug={itemSlug}
           currentPage={state.currentPage}
           totalPages={totalPages}
+          minimizedWindows={minimizedWindows}
           onBack={handleBack}
           onPageChange={setPage}
           onAdd={addWindow}
+          onRestoreWindow={restoreWindow}
           onOpenSessions={onOpenSessions}
         />
         <div ref={pageRef} className="relative flex min-h-0 flex-1 flex-col">
@@ -249,9 +279,44 @@ export function ItemCanvas({ projectSlug, itemSlug, onOpenSessions }: ItemCanvas
             onSessionCreated={handleSessionCreated}
             onStateChange={updateState}
           />
+          {isPageEmpty && hydrated && <EmptyState onAddChat={handleAddChat} />}
         </div>
       </div>
     </ItemContext.Provider>
+  );
+}
+
+/**
+ * Empty-state placeholder rendered when the active page has zero
+ * windows. Sits above the dot-grid canvas and below the snap overlay
+ * (z-irrelevant since neither is interactive when the canvas is empty).
+ * The CTA reuses the `addWindow("chat")` callback so spawn placement
+ * goes through the same `nextSpawnGeometry` path as the toolbar button.
+ */
+function EmptyState({ onAddChat }: { onAddChat: () => void }) {
+  return (
+    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
+      <div className="pointer-events-auto flex max-w-sm flex-col items-center gap-3 rounded-2xl border border-canvas-border bg-canvas-surface px-6 py-8 text-center shadow-sm">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-canvas-bg text-canvas-muted">
+          <FiMessageSquare size={20} />
+        </div>
+        <div className="space-y-1">
+          <h2 className="text-[15px] font-semibold text-canvas-fg">Start a chat</h2>
+          <p className="text-[12px] leading-snug text-canvas-muted">
+            Open a chat window to start working on this project. You can drag, resize, and snap
+            windows side-by-side.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onAddChat}
+          className="btn-press inline-flex items-center gap-1.5 rounded-lg bg-accent px-3.5 py-1.5 text-[13px] font-medium text-white hover:opacity-90"
+        >
+          <FiMessageSquare size={13} />
+          Open a chat
+        </button>
+      </div>
+    </div>
   );
 }
 

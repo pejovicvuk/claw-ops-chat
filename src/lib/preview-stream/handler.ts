@@ -118,13 +118,22 @@ export async function handlePreviewStream(
     return;
   }
 
+  // PREVIEW_FPS_EVERY_NTH controls the screencast frame rate: every
+  // Nth paint becomes a frame, so smaller N = smoother. Default of 2
+  // gives ~30 fps on a 60 fps page (vs. the prior default of 6 which
+  // made animations look stepped). Tunable in production without a
+  // code change if a tight VPS uplink struggles with the bandwidth.
+  const everyNthFrame = Math.max(
+    1,
+    Math.min(60, Number.parseInt(process.env.PREVIEW_FPS_EVERY_NTH ?? "2", 10) || 2),
+  );
   try {
     screencast = await startScreencast(page, {
       format: "jpeg",
       quality: 80,
       maxWidth: 1280,
       maxHeight: 800,
-      everyNthFrame: 6,
+      everyNthFrame,
     });
   } catch (err) {
     sendJson({
@@ -145,6 +154,32 @@ export async function handlePreviewStream(
     screencast: { format: "jpeg", maxFps: 10 },
     actorEmail,
   });
+
+  // Mirror the page's URL back to the client whenever it changes —
+  // covers in-app `<Link>` clicks + history.pushState (which don't
+  // round-trip through our `navigate` WS message). Dedup against the
+  // last-sent path because SPAs can fire many framenavigated events
+  // for what visually looks like one navigation.
+  let lastSentPath: string | null = null;
+  const onFrameNavigated = (navFrame: { url: () => string; parentFrame: () => unknown }) => {
+    // Only the main frame's URL counts — iframe navigations inside the
+    // previewed app shouldn't bubble up.
+    if (navFrame.parentFrame() !== null) return;
+    let path: string;
+    try {
+      const u = new URL(navFrame.url());
+      path = u.pathname + u.search + u.hash;
+    } catch {
+      return;
+    }
+    if (path === lastSentPath) return;
+    lastSentPath = path;
+    sendJson({ type: "url_changed", path });
+  };
+  page.on("framenavigated", onFrameNavigated);
+  // Send the initial URL so the client's path input reflects whatever
+  // page Chromium loaded.
+  onFrameNavigated({ url: () => page.url(), parentFrame: () => null });
 
   screencast.onFrame((frame) => {
     if (closed || ws.readyState !== ws.OPEN) return;

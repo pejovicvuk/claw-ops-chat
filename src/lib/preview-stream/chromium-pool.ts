@@ -39,11 +39,21 @@ async function launch(): Promise<Browser> {
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
     headless: true,
     args: [
+      // Container is the security boundary — no setuid sandbox in
+      // Alpine, so disable Chromium's namespacing too.
       "--no-sandbox",
       "--disable-setuid-sandbox",
+      // /dev/shm in Docker is tiny (64 MB by default); without this
+      // Chromium will OOM on shared-memory allocations.
       "--disable-dev-shm-usage",
-      "--disable-gpu",
-      "--disable-software-rasterizer",
+      // Use SwiftShader for compositing + WebGL. We previously had
+      // `--disable-gpu` + `--disable-software-rasterizer` here, which
+      // forced fully-CPU rendering with no compositor acceleration —
+      // CSS transitions, transforms, and rAF animations dropped frames
+      // visibly compared to a real browser tab. Letting SwiftShader
+      // composite costs ~5–15% CPU per active preview but makes
+      // animations look continuous.
+      "--use-gl=swiftshader",
     ],
   });
 }

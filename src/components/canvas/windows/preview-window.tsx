@@ -21,6 +21,8 @@ interface PreviewWindowProps {
   descriptor: WindowDescriptor;
   /** Persist a new port back into the canvas store. */
   onPortChange: (port: number) => void;
+  /** Persist a new path back into the canvas store. */
+  onPathChange: (path: string) => void;
 }
 
 /**
@@ -42,18 +44,29 @@ const PORT_MIN = 1024;
 const PORT_MAX = 65535;
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
 
-export function PreviewWindow({ descriptor, onPortChange }: PreviewWindowProps) {
+export function PreviewWindow({ descriptor, onPortChange, onPathChange }: PreviewWindowProps) {
   if (descriptor.state.kind !== "preview") return null;
-  const { port } = descriptor.state;
-  return <PreviewWindowBody port={port} onPortChange={onPortChange} />;
+  const { port, path } = descriptor.state;
+  return (
+    <PreviewWindowBody
+      port={port}
+      path={path ?? "/"}
+      onPortChange={onPortChange}
+      onPathChange={onPathChange}
+    />
+  );
 }
 
 function PreviewWindowBody({
   port,
+  path,
   onPortChange,
+  onPathChange,
 }: {
   port: number;
+  path: string;
   onPortChange: (port: number) => void;
+  onPathChange: (path: string) => void;
 }) {
   const item = useContext(ItemContext);
   const projectSlug = item?.projectSlug ?? "";
@@ -77,13 +90,51 @@ function PreviewWindowBody({
 
   const [draftPort, setDraftPort] = useState(String(port));
   const [portError, setPortError] = useState<string | null>(null);
+  const [draftPath, setDraftPath] = useState(path);
+  /**
+   * While the path input is focused we don't sync from the page's
+   * actual URL — otherwise mid-typing the input value gets clobbered
+   * by an incoming `url_changed`. On blur the live URL takes over again.
+   */
+  const pathFocusedRef = useRef(false);
   const [logsOpen, setLogsOpen] = useState(false);
 
-  // Sync draft when the descriptor's port changes externally (e.g. on
-  // canvas hydration). Don't fight the user's keystrokes.
+  // Sync drafts when the descriptor changes externally (e.g. canvas
+  // hydration). Don't fight the user's keystrokes.
   useEffect(() => {
     setDraftPort(String(port));
   }, [port]);
+  useEffect(() => {
+    if (!pathFocusedRef.current) setDraftPath(path);
+  }, [path]);
+
+  // Reconcile descriptor.path ↔ Chromium's actual URL. Two cases:
+  //   • Just-connected: page is at `/` (acquirePage's default) but
+  //     descriptor remembers `/about` → tell Chromium to navigate.
+  //   • Already running: user clicked a link → page URL changed →
+  //     update the persisted path to match.
+  // `reconciledRef` separates the two so the initial server-side
+  // `/` doesn't clobber the persisted `/about`.
+  const reconciledRef = useRef(false);
+  useEffect(() => {
+    if (stream.status !== "ready") {
+      reconciledRef.current = false;
+      return;
+    }
+    if (!stream.currentPath) return;
+    if (!reconciledRef.current) {
+      // First url_changed after ready — navigate to persisted path if needed.
+      if (path !== "/" && stream.currentPath !== path) {
+        stream.navigate(path);
+      }
+      reconciledRef.current = true;
+      return;
+    }
+    // Subsequent updates: in-page navigation; persist the new URL.
+    if (stream.currentPath !== path) {
+      onPathChange(stream.currentPath);
+    }
+  }, [stream.status, stream.currentPath, path, onPathChange, stream]);
 
   const commitPort = () => {
     const trimmed = draftPort.trim();
@@ -94,6 +145,15 @@ function PreviewWindowBody({
     }
     setPortError(null);
     if (n !== port) onPortChange(n);
+  };
+
+  const commitPath = () => {
+    let p = draftPath.trim();
+    if (!p) p = "/";
+    if (!p.startsWith("/")) p = "/" + p;
+    if (p !== draftPath) setDraftPath(p);
+    if (p !== path) onPathChange(p);
+    if (isRunning) stream.navigate(p);
   };
 
   const previewUrl = `${BASE_PATH}/preview/${port}/`;
@@ -178,7 +238,36 @@ function PreviewWindowBody({
           </span>
         )}
 
-        <div className="flex-1" />
+        {/* Path input — type a route (e.g. /about, /users/42) and press
+            Enter or blur to navigate. Auto-syncs from the page's actual
+            URL when not focused, so clicking a Link in the previewed
+            app updates this. */}
+        <span className="text-[11px] font-medium text-canvas-muted">/</span>
+        <input
+          id={`preview-path-${port}`}
+          type="text"
+          value={draftPath === "/" ? "" : draftPath.replace(/^\//, "")}
+          placeholder="path/to/page"
+          onChange={(e) => setDraftPath("/" + e.target.value.replace(/^\//, ""))}
+          onFocus={() => {
+            pathFocusedRef.current = true;
+          }}
+          onBlur={() => {
+            pathFocusedRef.current = false;
+            commitPath();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              commitPath();
+              (e.target as HTMLInputElement).blur();
+            }
+          }}
+          className="h-6 min-w-[80px] flex-1 rounded border border-canvas-border bg-canvas-bg px-1.5 font-mono text-[12px] text-canvas-fg focus:border-accent focus:outline-none"
+          aria-label="Page path"
+        />
+
+        <div className="w-2" />
 
         {/* Reload (only meaningful while connected) */}
         <button

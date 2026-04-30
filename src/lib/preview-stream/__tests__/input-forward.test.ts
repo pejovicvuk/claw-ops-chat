@@ -106,4 +106,31 @@ describe("input-forward — payload translation", () => {
     expect(Modifiers.Meta).toBe(4);
     expect(Modifiers.Shift).toBe(8);
   });
+
+  it("supplies windowsVirtualKeyCode for non-printable keys", () => {
+    // Tab: 9, Enter: 13, ArrowLeft: 37 — without the VK code these
+    // silently no-op in many apps when dispatched through CDP.
+    expect(_keyToCdpPayload({ action: "down", key: "Tab", code: "Tab" })).toMatchObject({
+      windowsVirtualKeyCode: 9,
+      nativeVirtualKeyCode: 9,
+    });
+    expect(_keyToCdpPayload({ action: "down", key: "Enter", code: "Enter" })).toMatchObject({
+      windowsVirtualKeyCode: 13,
+    });
+    expect(_keyToCdpPayload({ action: "down", key: "ArrowLeft", code: "ArrowLeft" })).toMatchObject(
+      { windowsVirtualKeyCode: 37 },
+    );
+    expect(_keyToCdpPayload({ action: "down", key: "Backspace", code: "Backspace" })).toMatchObject(
+      { windowsVirtualKeyCode: 8 },
+    );
+  });
+
+  it("does NOT set windowsVirtualKeyCode for printable keys", () => {
+    // Letters/digits get the right behavior from `text` + `key`. A
+    // VK there can over-specify on non-US keyboards.
+    const out = _keyToCdpPayload({ action: "down", key: "a", code: "KeyA", text: "a" });
+    expect(out).not.toHaveProperty("windowsVirtualKeyCode");
+    const digit = _keyToCdpPayload({ action: "down", key: "5", code: "Digit5", text: "5" });
+    expect(digit).not.toHaveProperty("windowsVirtualKeyCode");
+  });
 });

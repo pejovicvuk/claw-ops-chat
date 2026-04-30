@@ -55,6 +55,64 @@ const KEY_ACTION_TO_CDP = {
   char: "char",
 } as const satisfies Record<KeyEvent["action"], "keyDown" | "keyUp" | "char">;
 
+/**
+ * Windows virtual-key codes for non-printable keys. CDP's
+ * `Input.dispatchKeyEvent` reliably synthesizes browser key events
+ * for non-printable keys ONLY when given `windowsVirtualKeyCode` —
+ * `key` + `code` alone are often ignored, so without this table
+ * Tab / Enter / Backspace / Arrow keys silently no-op in many apps.
+ *
+ * Printable keys (letters, digits, symbols) are deliberately absent;
+ * CDP picks the right code from `text` / `key` for those, and
+ * supplying a VK can over-specify and produce wrong characters with
+ * non-US keyboards.
+ *
+ * Source: https://docs.microsoft.com/en-us/windows/win32/inputdev/virtual-key-codes
+ */
+export const WIN_VK_CODES: Record<string, number> = {
+  Backspace: 8,
+  Tab: 9,
+  Enter: 13,
+  ShiftLeft: 16,
+  ShiftRight: 16,
+  ControlLeft: 17,
+  ControlRight: 17,
+  AltLeft: 18,
+  AltRight: 18,
+  Pause: 19,
+  CapsLock: 20,
+  Escape: 27,
+  Space: 32,
+  PageUp: 33,
+  PageDown: 34,
+  End: 35,
+  Home: 36,
+  ArrowLeft: 37,
+  ArrowUp: 38,
+  ArrowRight: 39,
+  ArrowDown: 40,
+  PrintScreen: 44,
+  Insert: 45,
+  Delete: 46,
+  MetaLeft: 91,
+  MetaRight: 92,
+  ContextMenu: 93,
+  F1: 112,
+  F2: 113,
+  F3: 114,
+  F4: 115,
+  F5: 116,
+  F6: 117,
+  F7: 118,
+  F8: 119,
+  F9: 120,
+  F10: 121,
+  F11: 122,
+  F12: 123,
+  NumLock: 144,
+  ScrollLock: 145,
+};
+
 export async function forwardMouse(session: CDPSession, evt: MouseEvent): Promise<void> {
   await session.send("Input.dispatchMouseEvent", {
     type: MOUSE_ACTION_TO_CDP[evt.action],
@@ -79,6 +137,7 @@ export async function forwardWheel(session: CDPSession, evt: WheelEvent): Promis
 }
 
 export async function forwardKey(session: CDPSession, evt: KeyEvent): Promise<void> {
+  const vk = WIN_VK_CODES[evt.code];
   await session.send("Input.dispatchKeyEvent", {
     type: KEY_ACTION_TO_CDP[evt.action],
     key: evt.key,
@@ -86,6 +145,7 @@ export async function forwardKey(session: CDPSession, evt: KeyEvent): Promise<vo
     text: evt.text,
     unmodifiedText: evt.text,
     modifiers: evt.modifiers ?? 0,
+    ...(vk !== undefined ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {}),
   });
 }
 
@@ -124,6 +184,7 @@ export function _wheelToCdpPayload(evt: WheelEvent) {
 }
 
 export function _keyToCdpPayload(evt: KeyEvent) {
+  const vk = WIN_VK_CODES[evt.code];
   return {
     type: KEY_ACTION_TO_CDP[evt.action],
     key: evt.key,
@@ -131,6 +192,7 @@ export function _keyToCdpPayload(evt: KeyEvent) {
     text: evt.text,
     unmodifiedText: evt.text,
     modifiers: evt.modifiers ?? 0,
+    ...(vk !== undefined ? { windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk } : {}),
   };
 }
 

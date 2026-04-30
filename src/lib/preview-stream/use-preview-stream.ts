@@ -40,8 +40,20 @@ export interface UsePreviewStreamResult {
   deviceWidth: number | null;
   deviceHeight: number | null;
   lastError: string | null;
+  /**
+   * The page's current URL path (`pathname + search + hash`). Updated
+   * whenever Chromium fires `framenavigated` — covers both server-
+   * dispatched `navigate` and in-app `<Link>` / `pushState`.
+   * `null` until the first url_changed arrives.
+   */
+  currentPath: string | null;
   /** Manually trigger a reload of the underlying Chromium page. */
   reload: () => void;
+  /**
+   * Navigate the previewed page to a new path. Server clamps to
+   * same-origin (localhost:port) — external URLs are rejected.
+   */
+  navigate: (path: string) => void;
 }
 
 interface ReadyFrame {
@@ -58,6 +70,10 @@ interface StatusFrame {
   type: "status";
   state: "loading" | "ready" | "navigating" | "stopped";
 }
+interface UrlChangedFrame {
+  type: "url_changed";
+  path: string;
+}
 
 export function usePreviewStream({
   projectSlug,
@@ -70,6 +86,7 @@ export function usePreviewStream({
   const [deviceWidth, setDeviceWidth] = useState<number | null>(null);
   const [deviceHeight, setDeviceHeight] = useState<number | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
+  const [currentPath, setCurrentPath] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -120,7 +137,7 @@ export function usePreviewStream({
   const onMessage = useCallback(
     (evt: MessageEvent) => {
       if (typeof evt.data === "string") {
-        let parsed: ReadyFrame | ErrorFrame | StatusFrame;
+        let parsed: ReadyFrame | ErrorFrame | StatusFrame | UrlChangedFrame;
         try {
           parsed = JSON.parse(evt.data);
         } catch {
@@ -136,6 +153,9 @@ export function usePreviewStream({
           const e = parsed as ErrorFrame;
           setLastError(e.message ?? e.code ?? "Stream error");
           setStatus("error");
+        } else if (parsed.type === "url_changed") {
+          const u = parsed as UrlChangedFrame;
+          setCurrentPath(u.path);
         }
         // status frames are informational only for v1 — could surface a navigating spinner later
         return;
@@ -385,5 +405,19 @@ export function usePreviewStream({
     sendJson({ type: "reload" });
   }, [sendJson]);
 
-  return { status, deviceWidth, deviceHeight, lastError, reload };
+  const navigate = useCallback(
+    (path: string) => {
+      // Always start with `/` — server requires same-origin
+      // localhost:port URLs and rejects anything else with
+      // {type: "error", code: "navigate_rejected"}.
+      const normalized = path.startsWith("/") ? path : `/${path}`;
+      sendJson({
+        type: "navigate",
+        url: `http://127.0.0.1:${port}${normalized}`,
+      });
+    },
+    [port, sendJson],
+  );
+
+  return { status, deviceWidth, deviceHeight, lastError, currentPath, reload, navigate };
 }

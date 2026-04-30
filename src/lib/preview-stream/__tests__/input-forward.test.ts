@@ -18,6 +18,18 @@ describe("input-forward — payload translation", () => {
     });
   });
 
+  it("preserves explicit clickCount for double-clicks", () => {
+    // Browser sends `e.detail = 2` for the second click of a double-
+    // click within the OS double-click timing; the hook forwards that
+    // as clickCount and CDP turns it into a `dblclick` DOM event.
+    expect(
+      _mouseToCdpPayload({ action: "down", x: 0, y: 0, button: "left", clickCount: 2 }),
+    ).toMatchObject({ type: "mousePressed", clickCount: 2 });
+    expect(
+      _mouseToCdpPayload({ action: "up", x: 0, y: 0, button: "left", clickCount: 2 }),
+    ).toMatchObject({ type: "mouseReleased", clickCount: 2 });
+  });
+
   it("maps mouse up → mouseReleased", () => {
     expect(_mouseToCdpPayload({ action: "up", x: 5, y: 6, button: "right" })).toEqual({
       type: "mouseReleased",

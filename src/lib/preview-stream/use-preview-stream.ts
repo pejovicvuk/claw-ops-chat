@@ -3,6 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Modifiers } from "./input-forward";
 import { validateClipboardPayload } from "./clipboard-bridge";
+import { toast } from "@/lib/use-toast";
+
+// Phase 3c (#128): MUST stay in sync with file-drop.ts. Inlined here
+// rather than imported because file-drop.ts pulls in node:fs and
+// safe-path.ts which can't run in a browser bundle.
+const MAX_DROP_BYTES = 50 * 1024 * 1024;
+const DROP_CHUNK_SIZE = 64 * 1024;
+const FILE_DROP_TAG_CHUNK = 0x10;
 
 /**
  * Client-side hook driving the preview stream. Two decode paths share
@@ -90,6 +98,12 @@ export interface UsePreviewStreamResult {
    * no point showing a speaker icon for silent video / JPEG.
    */
   audioAvailable: boolean;
+  /**
+   * Phase 3c (#128): true while the user is dragging a file over the
+   * preview element. Drives the blue drop-indicator overlay in
+   * preview-window.tsx.
+   */
+  dragOver: boolean;
   /** Manually trigger a reload of the underlying Chromium page. */
   reload: () => void;
   /**
@@ -154,6 +168,22 @@ interface ClipboardCopyFrame {
   type: "clipboard_copy";
   text: string;
 }
+interface FileDropAckFrame {
+  type: "file_drop_ack";
+  dropId: string;
+  ready: boolean;
+}
+interface FileDropDoneFrame {
+  type: "file_drop_done";
+  dropId: string;
+  target: string;
+}
+interface FileDropErrorFrame {
+  type: "file_drop_error";
+  dropId: string;
+  code: string;
+  message: string;
+}
 
 export function usePreviewStream({
   projectSlug,
@@ -171,6 +201,7 @@ export function usePreviewStream({
   const [lastError, setLastError] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [audioAvailable, setAudioAvailable] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   // Sticky failure flag: once H.264 has failed at runtime, all
   // subsequent connects (including reconnect-with-backoff) skip the
   // capability-detected codec and force ?codec=jpeg. Survives across
@@ -424,7 +455,15 @@ export function usePreviewStream({
   const onMessage = useCallback(
     (evt: MessageEvent) => {
       if (typeof evt.data === "string") {
-        let parsed: ReadyFrame | ErrorFrame | StatusFrame | UrlChangedFrame | ClipboardCopyFrame;
+        let parsed:
+          | ReadyFrame
+          | ErrorFrame
+          | StatusFrame
+          | UrlChangedFrame
+          | ClipboardCopyFrame
+          | FileDropAckFrame
+          | FileDropDoneFrame
+          | FileDropErrorFrame;
         try {
           parsed = JSON.parse(evt.data);
         } catch {
@@ -461,6 +500,16 @@ export function usePreviewStream({
         } else if (parsed.type === "url_changed") {
           const u = parsed as UrlChangedFrame;
           setCurrentPath(u.path);
+        } else if (parsed.type === "file_drop_done") {
+          // Phase 3c (#128): server confirms the upload landed in the
+          // page. Show a brief success toast so the user knows the
+          // file actually got there.
+          toast.success(`File uploaded to preview (${parsed.target})`);
+        } else if (parsed.type === "file_drop_error") {
+          toast.error(`Upload failed: ${parsed.message ?? parsed.code ?? "unknown"}`);
+        } else if (parsed.type === "file_drop_ack") {
+          // Receipt only — the chunked sender is already mid-flight,
+          // so there's nothing UI-visible to do here.
         } else if (parsed.type === "clipboard_copy") {
           // Phase 3b (#127): the previewed page emitted a copy/cut
           // event; mirror it to the user's system clipboard.
@@ -796,12 +845,155 @@ export function usePreviewStream({
       sendJson({ type: "clipboard_paste", text: validated.text });
     };
 
+    // Phase 3c (#128): drag-in file uploads. Depth counter mirrors the
+    // file-dropzone.tsx pattern — dragenter / dragleave fire on every
+    // child boundary crossing, so a naive boolean toggles on/off
+    // wildly during a single drag. Counting nested entries keeps the
+    // overlay stable.
+    let dragDepth = 0;
+    const isFileDrag = (e: DragEvent): boolean => {
+      const types = e.dataTransfer?.types;
+      if (!types) return false;
+      // Some browsers expose types as DOMStringList, others as Array;
+      // includes() works on both.
+      return Array.from(types).includes("Files");
+    };
+    const onDragEnter = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepth++;
+      if (dragDepth === 1) setDragOver(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      dragDepth = Math.max(0, dragDepth - 1);
+      if (dragDepth === 0) setDragOver(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!isFileDrag(e)) return;
+      e.preventDefault();
+      dragDepth = 0;
+      setDragOver(false);
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+      if (files.length > 1) {
+        toast.info(
+          `Multi-file drop not supported in v1 — uploaded ${files[0].name}`,
+        );
+      }
+      const file = files[0];
+      if (file.size > MAX_DROP_BYTES) {
+        toast.error(
+          `File too large (${(file.size / 1024 / 1024).toFixed(1)} MB, max ${MAX_DROP_BYTES / 1024 / 1024} MB)`,
+        );
+        return;
+      }
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      // Fire-and-forget upload. Errors land on the file_drop_error
+      // JSON branch above, which toasts the user.
+      void uploadDroppedFile(file, x, y);
+    };
+
+    /**
+     * Stream a File over the WS using the start / chunks / end
+     * protocol. Paces sends against `bufferedAmount` so we never
+     * inflate the browser-side WS buffer past Phase 2's soft
+     * watermark.
+     */
+    const uploadDroppedFile = async (file: File, x: number, y: number): Promise<void> => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        toast.error("Preview disconnected — drop again after reconnect");
+        return;
+      }
+      const dropId =
+        typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+      sendJson({
+        type: "file_drop_start",
+        dropId,
+        filename: file.name,
+        mimeType: file.type || "application/octet-stream",
+        size: file.size,
+        x,
+        y,
+      });
+
+      const dropIdBytes = new TextEncoder().encode(dropId);
+      // Tag (1) + dropIdLen (1) + dropId (N) + chunk bytes
+      const headerLen = 2 + dropIdBytes.length;
+      const sendChunk = (chunk: Uint8Array): boolean => {
+        if (ws.readyState !== WebSocket.OPEN) return false;
+        const framed = new Uint8Array(headerLen + chunk.length);
+        framed[0] = FILE_DROP_TAG_CHUNK;
+        framed[1] = dropIdBytes.length;
+        framed.set(dropIdBytes, 2);
+        framed.set(chunk, headerLen);
+        ws.send(framed);
+        return true;
+      };
+
+      const buffered = file.stream();
+      const reader = buffered.getReader();
+      let leftover: Uint8Array | null = null;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          let pos = 0;
+          const bytes: Uint8Array = leftover
+            ? (() => {
+                const merged = new Uint8Array(leftover.length + value.length);
+                merged.set(leftover);
+                merged.set(value, leftover.length);
+                return merged;
+              })()
+            : value;
+          leftover = null;
+          while (pos + DROP_CHUNK_SIZE <= bytes.length) {
+            const slice = bytes.subarray(pos, pos + DROP_CHUNK_SIZE);
+            // Pace against bufferedAmount; matches Phase 2's soft
+            // watermark so we share one bandwidth budget.
+            while (ws.bufferedAmount > 4 * 1024 * 1024) {
+              await new Promise((r) => setTimeout(r, 50));
+              if (ws.readyState !== WebSocket.OPEN) return;
+            }
+            if (!sendChunk(slice)) return;
+            pos += DROP_CHUNK_SIZE;
+          }
+          if (pos < bytes.length) leftover = bytes.subarray(pos);
+        }
+        if (leftover && leftover.length > 0) {
+          while (ws.bufferedAmount > 4 * 1024 * 1024) {
+            await new Promise((r) => setTimeout(r, 50));
+            if (ws.readyState !== WebSocket.OPEN) return;
+          }
+          sendChunk(leftover);
+        }
+        sendJson({ type: "file_drop_end", dropId });
+      } catch {
+        // Reader threw — file was unreadable. Server-side temp file
+        // gets garbage-collected by the cron sweeper.
+        toast.error("Upload failed reading file");
+      }
+    };
+
     el.addEventListener("mousedown", onMouseDown);
     el.addEventListener("mouseup", onMouseUp);
     el.addEventListener("mousemove", onMouseMove);
     el.addEventListener("wheel", onWheel, { passive: false });
     el.addEventListener("contextmenu", onContextMenu);
     el.addEventListener("paste", onPaste);
+    el.addEventListener("dragenter", onDragEnter);
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("dragleave", onDragLeave);
+    el.addEventListener("drop", onDrop);
     el.addEventListener("touchstart", onTouchStart, { passive: false });
     el.addEventListener("touchmove", onTouchMove, { passive: false });
     el.addEventListener("touchend", onTouchEnd, { passive: false });
@@ -819,6 +1011,10 @@ export function usePreviewStream({
       el.removeEventListener("wheel", onWheel);
       el.removeEventListener("contextmenu", onContextMenu);
       el.removeEventListener("paste", onPaste);
+      el.removeEventListener("dragenter", onDragEnter);
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("dragleave", onDragLeave);
+      el.removeEventListener("drop", onDrop);
       el.removeEventListener("touchstart", onTouchStart);
       el.removeEventListener("touchmove", onTouchMove);
       el.removeEventListener("touchend", onTouchEnd);
@@ -871,6 +1067,7 @@ export function usePreviewStream({
     lastError,
     currentPath,
     audioAvailable,
+    dragOver,
     reload,
     navigate,
   };

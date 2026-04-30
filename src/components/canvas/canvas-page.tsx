@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Z_INDEX } from "@/lib/z-index";
 import {
+  detectDragRectSnap,
   detectResizeSnap,
   detectSnapZone,
   findResizePartner,
@@ -148,12 +149,27 @@ export function CanvasPage({
   }, []);
 
   const handleDragMove = useCallback(
-    (clientX: number, clientY: number) => {
-      const rect = canvasRectRef.current;
-      if (!rect) return;
-      const pointer = { x: clientX - rect.left, y: clientY - rect.top };
+    (rect: ResizeRect, clientX: number, clientY: number) => {
+      const cr = canvasRectRef.current;
+      if (!cr) return;
       const others = otherWindowsForDrag(draggingIdRef.current);
-      const result = detectSnapZone(pointer, usableBounds, { otherWindows: others });
+
+      // Rect-based first: any window corner / edge near a canvas corner
+      // / edge fires the canvas-edge family. This is the new behaviour —
+      // pre-fix only the cursor's position counted, so dragging a window
+      // by its title bar to the bottom-right couldn't fire `br`.
+      let result: SnapResult | null = detectDragRectSnap(rect, usableBounds, {
+        otherWindows: others,
+      });
+
+      // Fall back to pointer-based detection for gap / split — those are
+      // inherently "what is the cursor over" and not derivable from the
+      // dragged window's geometry.
+      if (!result) {
+        const pointer = { x: clientX - cr.left, y: clientY - cr.top };
+        result = detectSnapZone(pointer, usableBounds, { otherWindows: others });
+      }
+
       // Only re-render when the snap kind actually changes — preserves
       // the overlay's CSS transition between zones.
       if (snapRef.current?.kind !== result?.kind) {

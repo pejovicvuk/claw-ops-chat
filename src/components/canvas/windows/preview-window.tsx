@@ -14,7 +14,7 @@ import {
 import type { WindowDescriptor } from "../canvas-types";
 import { ItemContext } from "../item-context";
 import { useDevServer } from "@/lib/dev-server/use-dev-server";
-import { frameworkLabel } from "@/lib/dev-server/detect-framework";
+import { frameworkLabel } from "@/lib/dev-server/framework-label";
 import { usePreviewStream } from "@/lib/preview-stream/use-preview-stream";
 
 interface PreviewWindowProps {

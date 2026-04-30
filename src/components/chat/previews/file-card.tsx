@@ -58,14 +58,19 @@ function relativeTime(mtime: number): string {
   return new Date(mtime).toISOString().slice(0, 10);
 }
 
-function iconFor(path: string, kind: CardKind) {
-  if (kind === "image") return FiImage;
-  if (kind === "video") return FiVideo;
-  if (kind === "audio") return FiMusic;
-  if (ARCHIVE_EXT.test(path)) return FiArchive;
-  if (CODE_EXT.test(path)) return FiCode;
-  if (TEXT_EXT.test(path) || PDF_EXT.test(path)) return FiFileText;
-  return FiFile;
+function iconFor(path: string, kind: CardKind, size = 16) {
+  // Returns a rendered element rather than a component reference. Returning
+  // a component (e.g. `return FiImage`) and instantiating it inline as
+  // `<Icon size={…} />` trips React 19's `react-hooks/static-components`
+  // rule because each render creates a "fresh" component, resetting state
+  // on every parent re-render.
+  if (kind === "image") return <FiImage size={size} />;
+  if (kind === "video") return <FiVideo size={size} />;
+  if (kind === "audio") return <FiMusic size={size} />;
+  if (ARCHIVE_EXT.test(path)) return <FiArchive size={size} />;
+  if (CODE_EXT.test(path)) return <FiCode size={size} />;
+  if (TEXT_EXT.test(path) || PDF_EXT.test(path)) return <FiFileText size={size} />;
+  return <FiFile size={size} />;
 }
 
 function openInEditor(path: string): void {
@@ -196,7 +201,7 @@ function CardHeader({
   stat: ReturnType<typeof useFileStat>["stat"];
   kind: CardKind;
 }) {
-  const Icon = iconFor(path, kind);
+  const icon = iconFor(path, kind);
   const typeLabel = prettyMimeLabel(path);
   const sizeLabel = stat?.exists ? formatBytes(stat.size) : "";
   const timeLabel = stat?.exists ? relativeTime(stat.mtime) : "";
@@ -205,7 +210,7 @@ function CardHeader({
   return (
     <div className="flex min-w-0 items-start gap-3">
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-canvas-surface-hover text-canvas-fg">
-        <Icon size={16} />
+        {icon}
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-[13px] font-medium text-canvas-fg" title={path}>

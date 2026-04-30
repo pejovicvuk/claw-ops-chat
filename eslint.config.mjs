@@ -13,12 +13,13 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
-    // Compiled JS artifacts and CJS wrappers
+    // Compiled JS artifacts and CJS wrappers. These are tsc outputs of
+    // their .ts siblings (see package.json `dev`/`build` scripts) — never
+    // hand-edit, never lint.
     "server.js",
-    "src/lib/auth-server.js",
-    "src/lib/claude-status.js",
-    "src/lib/terminal-shell.js",
+    "bitbucket-mcp.js",
     "sdk-loader.js",
+    "src/lib/*.js",
   ]),
   // server.ts uses require() for the SDK to work around tsx/esbuild import.meta.url issues.
   {

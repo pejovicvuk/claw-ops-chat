@@ -44,63 +44,74 @@ describe("Claude Agent SDK Integration", () => {
     expect(SDK_CLI_PATH).toMatch(/cli\.js$/);
   });
 
-  it("sends Hello and gets assistant response with text", async () => {
-    const abortController = new AbortController();
-    let gotInit = false;
-    let gotAssistant = false;
-    let responseText = "";
+  // Real-network/subprocess test: spawns the actual `claude` CLI which
+  // hits the live Claude API. Skipped by default (per
+  // .claude/rules/testing.md: "no test should depend on external
+  // services or network calls"). Opt in with RUN_INTEGRATION_TESTS=1
+  // when you want to verify the SDK end-to-end locally. Long-term this
+  // test should mock the SDK rather than spawning a real subprocess.
+  const runIntegration = process.env.RUN_INTEGRATION_TESTS === "1";
+  it.skipIf(!runIntegration)(
+    "sends Hello and gets assistant response with text",
+    async () => {
+      const abortController = new AbortController();
+      let gotInit = false;
+      let gotAssistant = false;
+      let responseText = "";
 
-    const stream = query({
-      prompt: "Respond with exactly one word: hello",
-      options: {
-        cwd: process.cwd(),
-        maxTurns: 1,
-        abortController,
-        pathToClaudeCodeExecutable: SDK_CLI_PATH,
-        spawnClaudeCodeProcess: spawnClaude,
-      },
-    });
+      const stream = query({
+        prompt: "Respond with exactly one word: hello",
+        options: {
+          cwd: process.cwd(),
+          maxTurns: 1,
+          abortController,
+          pathToClaudeCodeExecutable: SDK_CLI_PATH,
+          spawnClaudeCodeProcess: spawnClaude,
+        },
+      });
 
-    for await (const raw of stream) {
-      const m = raw as Record<string, unknown>;
+      for await (const raw of stream) {
+        const m = raw as Record<string, unknown>;
 
-      if (m.type === "system" && m.subtype === "init") {
-        gotInit = true;
-        console.log("  [test] init OK, session:", m.session_id);
-      }
+        if (m.type === "system" && m.subtype === "init") {
+          gotInit = true;
+          console.log("  [test] init OK, session:", m.session_id);
+        }
 
-      // The SDK sends the response as an "assistant" message (not "result").
-      // This matches what claude --output-format stream-json produces.
-      if (m.type === "assistant") {
-        const msg = m.message as Record<string, unknown>;
-        const content = msg?.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            if (block.type === "text" && block.text) {
-              responseText += block.text;
+        // The SDK sends the response as an "assistant" message (not "result").
+        // This matches what claude --output-format stream-json produces.
+        if (m.type === "assistant") {
+          const msg = m.message as Record<string, unknown>;
+          const content = msg?.content;
+          if (Array.isArray(content)) {
+            for (const block of content) {
+              if (block.type === "text" && block.text) {
+                responseText += block.text;
+              }
             }
           }
+          if (responseText) {
+            gotAssistant = true;
+            console.log("  [test] response:", responseText);
+            // Close stream — no "result" event will come
+            stream.close?.();
+            break;
+          }
         }
-        if (responseText) {
+
+        // Also handle "result" in case the SDK does send it
+        if (m.type === "result") {
           gotAssistant = true;
-          console.log("  [test] response:", responseText);
-          // Close stream — no "result" event will come
-          stream.close?.();
+          responseText = (m.result as string) || responseText;
+          console.log("  [test] result:", responseText);
           break;
         }
       }
 
-      // Also handle "result" in case the SDK does send it
-      if (m.type === "result") {
-        gotAssistant = true;
-        responseText = (m.result as string) || responseText;
-        console.log("  [test] result:", responseText);
-        break;
-      }
-    }
-
-    expect(gotInit).toBe(true);
-    expect(gotAssistant).toBe(true);
-    expect(responseText.length).toBeGreaterThan(0);
-  }, 15_000);
+      expect(gotInit).toBe(true);
+      expect(gotAssistant).toBe(true);
+      expect(responseText.length).toBeGreaterThan(0);
+    },
+    15_000,
+  );
 });

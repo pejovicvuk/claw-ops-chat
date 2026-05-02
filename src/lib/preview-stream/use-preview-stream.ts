@@ -30,7 +30,11 @@ const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
 const RECONNECT_BASE_MS = 1_000;
 const RECONNECT_MAX_MS = 15_000;
 const MOUSEMOVE_MIN_INTERVAL_MS = 16; // ~60fps
-const MSE_CODEC = 'video/mp4; codecs="avc1.42E01E"'; // H.264 baseline 3.0
+// H.264 baseline 3.0. Phase 3a (#126) prefers the audio variant
+// (`avc1+opus`) when MSE supports it — the server muxes Opus audio
+// into the same fragmented MP4 so we keep one SourceBuffer.
+const MSE_CODEC_VIDEO = 'video/mp4; codecs="avc1.42E01E"';
+const MSE_CODEC_VIDEO_AUDIO = 'video/mp4; codecs="avc1.42E01E,opus"';
 const MSE_BUFFER_TARGET_S = 10; // evict everything older than this
 
 export type PreviewStreamStatus = "idle" | "connecting" | "ready" | "error" | "closed";
@@ -51,6 +55,14 @@ export interface UsePreviewStreamArgs {
   enabled: boolean;
   /** Streaming quality preset. Defaults to "balanced" server-side when absent. */
   quality?: QualityPreset;
+  /**
+   * Phase 3a (#126): user's preferred mute state. Persisted by the
+   * caller (e.g. via `WindowState["preview"].muted`). Applied to the
+   * `<video>` element on attach and on every reconnect. Browsers
+   * block autoplay-with-sound without a gesture, so the safe initial
+   * value is `true`.
+   */
+  muted?: boolean;
 }
 
 export interface UsePreviewStreamResult {
@@ -71,6 +83,12 @@ export interface UsePreviewStreamResult {
    * `null` until the first url_changed arrives.
    */
   currentPath: string | null;
+  /**
+   * Phase 3a (#126): true when the active connection is H.264 muxed
+   * with Opus audio. Drives the mute-toggle UI's visibility — there's
+   * no point showing a speaker icon for silent video / JPEG.
+   */
+  audioAvailable: boolean;
   /** Manually trigger a reload of the underlying Chromium page. */
   reload: () => void;
   /**
@@ -81,19 +99,33 @@ export interface UsePreviewStreamResult {
 }
 
 /**
- * Capability-detect MSE H.264 baseline support. Older Safari and
- * locked-down embedded browsers return false; everything modern
- * returns true. Wrapped in a guard so SSR doesn't crash on undefined
- * `MediaSource`.
+ * Capability-detect MSE H.264 baseline support, with optional Opus
+ * audio. Returns:
+ *   "video+audio" — MSE supports `avc1+opus`. Use audio path.
+ *   "video"       — MSE supports avc1 but not opus-in-mp4 (Safari).
+ *                   Connect with H.264 video, no audio.
+ *   "none"        — MSE not supported. Fall back to JPEG canvas.
+ *
+ * Wrapped in a guard so SSR doesn't crash on undefined `MediaSource`.
  */
-function detectMseSupport(): boolean {
-  if (typeof window === "undefined") return false;
-  if (typeof window.MediaSource === "undefined") return false;
+function detectMseSupport(): "video+audio" | "video" | "none" {
+  if (typeof window === "undefined") return "none";
+  if (typeof window.MediaSource === "undefined") return "none";
   try {
-    return window.MediaSource.isTypeSupported(MSE_CODEC);
+    if (window.MediaSource.isTypeSupported(MSE_CODEC_VIDEO_AUDIO)) {
+      return "video+audio";
+    }
+    if (window.MediaSource.isTypeSupported(MSE_CODEC_VIDEO)) {
+      return "video";
+    }
   } catch {
-    return false;
+    /* fall through */
   }
+  return "none";
+}
+
+function chosenMseCodec(level: "video+audio" | "video"): string {
+  return level === "video+audio" ? MSE_CODEC_VIDEO_AUDIO : MSE_CODEC_VIDEO;
 }
 
 interface ReadyFrame {
@@ -101,6 +133,8 @@ interface ReadyFrame {
   deviceWidth: number;
   deviceHeight: number;
   codec?: "h264" | "jpeg";
+  /** Phase 3a (#126): server muxed an Opus audio track into the H.264 stream. */
+  audio?: boolean;
 }
 interface ErrorFrame {
   type: "error";
@@ -124,20 +158,31 @@ export function usePreviewStream({
   videoRef,
   enabled,
   quality,
+  muted,
 }: UsePreviewStreamArgs): UsePreviewStreamResult {
   const [status, setStatus] = useState<PreviewStreamStatus>("idle");
   const [deviceWidth, setDeviceWidth] = useState<number | null>(null);
   const [deviceHeight, setDeviceHeight] = useState<number | null>(null);
   const [lastError, setLastError] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
+  const [audioAvailable, setAudioAvailable] = useState(false);
   // Sticky failure flag: once H.264 has failed at runtime, all
   // subsequent connects (including reconnect-with-backoff) skip the
   // capability-detected codec and force ?codec=jpeg. Survives across
   // reconnects so a flaky stream doesn't keep retrying H.264 forever.
   const codecFailureRef = useRef(false);
   const [mode, setMode] = useState<PreviewStreamMode>(() =>
-    detectMseSupport() ? "video" : "canvas",
+    detectMseSupport() === "none" ? "canvas" : "video",
   );
+
+  // Apply the `muted` prop to the video element whenever it changes.
+  // Browsers honour `<video muted>` for autoplay; flipping muted to
+  // false while the video is already playing is what unmute click does.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = muted ?? true;
+  }, [muted, videoRef, mode]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -250,12 +295,23 @@ export function usePreviewStream({
     mediaSourceRef.current = ms;
     const url = URL.createObjectURL(ms);
     mseObjectUrlRef.current = url;
+    // Sync the muted state before we set src so autoplay isn't blocked.
+    // The persistence layer (caller passes `muted` prop) decides the
+    // initial value; default to true if the caller forgot.
+    video.muted = muted ?? true;
     video.src = url;
     const onSourceOpen = () => {
       if (mediaSourceRef.current !== ms) return;
+      // Pick the codec string based on what the browser actually
+      // supports. The server muxes Opus into the same fMP4 when the
+      // client asked for it, but `MediaSource.isTypeSupported` is the
+      // source of truth — we never advertise a codec the browser
+      // can't decode.
+      const support = detectMseSupport();
+      const codecStr = support === "video+audio" ? chosenMseCodec("video+audio") : chosenMseCodec("video");
       let sb: SourceBuffer;
       try {
-        sb = ms.addSourceBuffer(MSE_CODEC);
+        sb = ms.addSourceBuffer(codecStr);
       } catch (err) {
         onCodecFailure(`addSourceBuffer: ${err instanceof Error ? err.message : String(err)}`);
         return;
@@ -291,7 +347,7 @@ export function usePreviewStream({
       // Some browsers reject autoplay without a gesture. Silent retry
       // happens on the first click anyway.
     });
-  }, [drainAppendQueue, onCodecFailure, teardownMse, videoRef]);
+  }, [drainAppendQueue, onCodecFailure, teardownMse, videoRef, muted]);
 
   const handleH264Frame = useCallback(
     (data: ArrayBuffer) => {
@@ -375,6 +431,9 @@ export function usePreviewStream({
           setDeviceHeight(r.deviceHeight);
           setStatus("ready");
           setLastError(null);
+          // Phase 3a: server tells us whether it muxed an audio track.
+          // Drives the mute-toggle UI's visibility.
+          setAudioAvailable(Boolean(r.audio));
           // Server confirms which codec is active — should match what
           // we asked for, but trust the server in case we get something
           // unexpected (older deploy, env override).
@@ -438,11 +497,11 @@ export function usePreviewStream({
     if (intentionalCloseRef.current) return;
     if (!enabled) return;
     setStatus("connecting");
-    // Decide codec for this connection. Sticky failure flag forces JPEG
-    // for the rest of the session. Otherwise: H.264 if the browser
-    // actually supports it, JPEG otherwise.
-    const codec: "h264" | "jpeg" =
-      codecFailureRef.current || !detectMseSupport() ? "jpeg" : "h264";
+    // Decide codec for this connection. Sticky failure flag forces
+    // JPEG for the rest of the session. Otherwise: H.264 (with or
+    // without Opus audio) if the browser supports it, JPEG otherwise.
+    const support = codecFailureRef.current ? "none" : detectMseSupport();
+    const codec: "h264" | "jpeg" = support === "none" ? "jpeg" : "h264";
     setMode(codec === "h264" ? "video" : "canvas");
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams();
@@ -758,5 +817,15 @@ export function usePreviewStream({
     [port, sendJson],
   );
 
-  return { status, mode, deviceWidth, deviceHeight, lastError, currentPath, reload, navigate };
+  return {
+    status,
+    mode,
+    deviceWidth,
+    deviceHeight,
+    lastError,
+    currentPath,
+    audioAvailable,
+    reload,
+    navigate,
+  };
 }

@@ -10,6 +10,8 @@ import {
   FiPlay,
   FiRefreshCw,
   FiSquare,
+  FiVolume2,
+  FiVolumeX,
 } from "react-icons/fi";
 import type { WindowDescriptor } from "../canvas-types";
 import { ItemContext } from "../item-context";
@@ -25,6 +27,8 @@ interface PreviewWindowProps {
   onPathChange: (path: string) => void;
   /** Persist a new streaming-quality preset back into the canvas store. */
   onQualityChange: (quality: "performance" | "balanced" | "quality") => void;
+  /** Phase 3a (#126): persist the user's mute preference. */
+  onMutedChange: (muted: boolean) => void;
 }
 
 /**
@@ -51,17 +55,20 @@ export function PreviewWindow({
   onPortChange,
   onPathChange,
   onQualityChange,
+  onMutedChange,
 }: PreviewWindowProps) {
   if (descriptor.state.kind !== "preview") return null;
-  const { port, path, quality } = descriptor.state;
+  const { port, path, quality, muted } = descriptor.state;
   return (
     <PreviewWindowBody
       port={port}
       path={path ?? "/"}
       quality={quality ?? "balanced"}
+      muted={muted ?? true}
       onPortChange={onPortChange}
       onPathChange={onPathChange}
       onQualityChange={onQualityChange}
+      onMutedChange={onMutedChange}
     />
   );
 }
@@ -70,16 +77,20 @@ function PreviewWindowBody({
   port,
   path,
   quality,
+  muted,
   onPortChange,
   onPathChange,
   onQualityChange,
+  onMutedChange,
 }: {
   port: number;
   path: string;
   quality: "performance" | "balanced" | "quality";
+  muted: boolean;
   onPortChange: (port: number) => void;
   onPathChange: (path: string) => void;
   onQualityChange: (quality: "performance" | "balanced" | "quality") => void;
+  onMutedChange: (muted: boolean) => void;
 }) {
   const item = useContext(ItemContext);
   const projectSlug = item?.projectSlug ?? "";
@@ -102,6 +113,7 @@ function PreviewWindowBody({
     videoRef,
     enabled: isRunning,
     quality,
+    muted,
   });
 
   const [draftPort, setDraftPort] = useState(String(port));
@@ -301,6 +313,23 @@ function PreviewWindowBody({
           <option value="balanced">Med</option>
           <option value="quality">High</option>
         </select>
+
+        {/* Mute toggle — only shown when the active stream actually
+            carries audio (Phase 3a). Defaults to muted because the
+            browser blocks autoplay-with-sound until the user clicks. */}
+        {stream.audioAvailable && (
+          <button
+            type="button"
+            onClick={() => onMutedChange(!muted)}
+            disabled={!isRunning || stream.status !== "ready"}
+            title={muted ? "Unmute preview" : "Mute preview"}
+            aria-label={muted ? "Unmute preview" : "Mute preview"}
+            aria-pressed={!muted}
+            className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+          >
+            {muted ? <FiVolumeX size={12} /> : <FiVolume2 size={12} />}
+          </button>
+        )}
 
         {/* Reload (only meaningful while connected) */}
         <button

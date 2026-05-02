@@ -1,7 +1,8 @@
 import type { WebSocket } from "ws";
 import { acquirePage, type AcquiredPage } from "./chromium-pool";
 import { startScreencast, type Screencast } from "./cdp-screencast";
-import { H264Encoder, type SegmentEvent } from "./h264-encoder";
+import { H264Encoder, type SegmentEvent, type AudioMuxOptions } from "./h264-encoder";
+import { AudioCapture } from "./audio-capture";
 import { decodePngToRgb24 } from "./png-decoder";
 import {
   forwardKey,
@@ -122,6 +123,19 @@ function resolveQuality(input: QualityPreset | undefined): ScreencastSettings {
  *  GOP cadence in `h264-encoder.ts` (one keyframe every 2 s). */
 const H264_FPS = 30;
 
+/** Phase 3a (#126): audio mux defaults. 48 kHz stereo PCM in, 64 kbps
+ *  Opus out. Matches what realtime communication apps (Discord, Meet)
+ *  use for voice + content audio. Bandwidth cost is trivial vs. video. */
+const AUDIO_MUX: AudioMuxOptions = {
+  sampleRate: 48_000,
+  channels: 2,
+  bitrateKbps: 64,
+};
+
+function audioEnabled(): boolean {
+  return process.env.PREVIEW_AUDIO !== "disabled";
+}
+
 interface ClientFrame {
   type: string;
   [k: string]: unknown;
@@ -135,6 +149,7 @@ export async function handlePreviewStream(
   let acquired: AcquiredPage | null = null;
   let screencast: Screencast | null = null;
   let encoder: H264Encoder | null = null;
+  let audio: AudioCapture | null = null;
   let resizeTimer: NodeJS.Timeout | null = null;
   let closed = false;
 
@@ -157,6 +172,13 @@ export async function handlePreviewStream(
     if (screencast) {
       try {
         await screencast.stop();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (audio) {
+      try {
+        await audio.stop();
       } catch {
         /* ignore */
       }
@@ -251,10 +273,17 @@ export async function handlePreviewStream(
     });
   };
 
+  // Audio is opt-out via env (PREVIEW_AUDIO=disabled). The encoder
+  // dimensions don't change between video and video+audio, but the
+  // ffmpeg argv does, so the encoder needs to know up front.
+  const useAudio = audioEnabled();
+
   /**
-   * Spawn a fresh encoder + screencast pair sized to the current
-   * viewport. Returns the new screencast so the caller can wire its
-   * onFrame handler.
+   * Spawn a fresh encoder + screencast (+ optional audio capture)
+   * sized to the current viewport. Returns the new screencast so the
+   * caller can wire its onFrame handler. Audio is started inside this
+   * helper so resize / hard-ceiling reset paths automatically respawn
+   * `parec` alongside ffmpeg in lockstep.
    */
   const bringUpH264 = async (): Promise<Screencast> => {
     const vp = page.viewportSize() ?? initialViewport;
@@ -263,9 +292,49 @@ export async function handlePreviewStream(
       height: vp.height * dsf,
       fps: H264_FPS,
       bitrateKbps,
+      audio: useAudio ? AUDIO_MUX : null,
     });
     wireEncoderEvents(encoder);
     encoder.start();
+
+    if (useAudio) {
+      audio = new AudioCapture({
+        sampleRate: AUDIO_MUX.sampleRate,
+        channels: AUDIO_MUX.channels,
+        clientName: `preview-${route.projectSlug}-${route.itemSlug}-${route.port}`,
+      });
+      audio.on("warn", (msg: string) => {
+        // parec error messages — log but don't fail the stream.
+        // ffmpeg will emit silence-substitute and the JPEG fallback
+        // already covers Safari (which gets silent video anyway).
+        sendJson({ type: "status", state: "audio_warn", message: msg });
+      });
+      audio.on("exit", (info: { code: number | null; signal: string | null }) => {
+        // parec died unexpectedly. Log; encoder keeps producing video.
+        sendJson({
+          type: "status",
+          state: "audio_exit",
+          message: `parec exited code=${info.code ?? "null"} signal=${info.signal ?? "null"}`,
+        });
+      });
+      try {
+        const pcm = audio.start();
+        const fd3 = encoder.audioStdin();
+        if (fd3) {
+          // Kernel-level backpressure: parec pauses pulse reads when
+          // its stdout blocks; ffmpeg drains as fast as it can.
+          pcm.pipe(fd3, { end: false });
+          pcm.on("error", () => {
+            /* parec disconnect — exit handler logs */
+          });
+        }
+      } catch {
+        // parec spawn failed (binary missing, permission denied).
+        // Drop audio for this connection; video continues normally.
+        audio = null;
+      }
+    }
+
     return startScreencast(page, {
       format: "png",
       maxWidth: 3200,
@@ -319,6 +388,10 @@ export async function handlePreviewStream(
     deviceWidth: initialViewport.width,
     deviceHeight: initialViewport.height,
     codec,
+    // Phase 3a: tell the client whether the H.264 stream carries an
+    // Opus audio track. Drives the mute UI's visibility — there's no
+    // point showing a speaker icon when the stream is silent video.
+    audio: codec === "h264" && useAudio,
     screencast: {
       format: codec === "h264" ? "h264" : "jpeg",
       maxFps: codec === "h264" ? H264_FPS : 10,
@@ -424,11 +497,23 @@ export async function handlePreviewStream(
       sendJson({ type: "status", state: "restarting", reason });
       const oldScreencast = screencast;
       const oldEncoder = encoder;
+      const oldAudio = audio;
       screencast = null;
       encoder = null;
+      audio = null;
       if (oldScreencast) {
         try {
           await oldScreencast.stop();
+        } catch {
+          /* ignore */
+        }
+      }
+      // Stop audio BEFORE encoder so parec stops trying to write into
+      // a soon-to-be-closed pipe. parec's ~50 ms shutdown is part of
+      // the resize freeze budget and is imperceptible.
+      if (oldAudio) {
+        try {
+          await oldAudio.stop();
         } catch {
           /* ignore */
         }

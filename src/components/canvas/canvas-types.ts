@@ -56,6 +56,13 @@ export type WindowState =
        * + frame rate. Defaults to `balanced` when absent.
        */
       quality?: "performance" | "balanced" | "quality";
+      /**
+       * Phase 3a (#126): user's preferred mute state for the H.264
+       * audio track. Defaults to `true` (muted) when absent so autoplay
+       * blockers don't reject the initial play(). Persists across
+       * reconnects so a user who unmuted once stays unmuted.
+       */
+      muted?: boolean;
     };
 
 export interface WindowDescriptor {

@@ -61,6 +61,12 @@ async function launch(): Promise<Browser> {
       // colored UI elements don't clip on saturated colors (defaults to
       // limited range in some Chromium builds).
       "--force-color-profile=srgb",
+      // Phase 3a: let the previewed app autoplay audio without a user
+      // gesture inside the headless tab. The user-facing autoplay block
+      // still applies on the chat client's `<video>` (browser-level),
+      // so this only affects what plays *into* the virtual_sink — not
+      // what plays out to the user without their consent.
+      "--autoplay-policy=no-user-gesture-required",
     ],
   });
 }

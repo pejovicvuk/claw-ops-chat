@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Modifiers } from "./input-forward";
 import { validateClipboardPayload } from "./clipboard-bridge";
 import { toast } from "@/lib/use-toast";
+import { ZOOM_DEFAULT, clampZoom, nextZoomIn, nextZoomOut } from "./zoom-steps";
 
 // Phase 3c (#128): MUST stay in sync with file-drop.ts. Inlined here
 // rather than imported because file-drop.ts pulls in node:fs and
@@ -167,6 +168,18 @@ export interface UsePreviewStreamArgs {
    * value is `true`.
    */
   muted?: boolean;
+  /**
+   * Phase 5b (#132): page zoom factor (1.0 = 100%). When this changes
+   * the hook sends a `set_zoom` frame so the server reapplies it.
+   * Persists via `WindowState["preview"].zoom`. Defaults to 1.0.
+   */
+  zoom?: number;
+  /**
+   * Phase 5b (#132): called when the user presses a zoom shortcut
+   * (Ctrl/Cmd + `=`/`+`/`-`/`_`/`0`). The hook computes the new factor
+   * and the consumer persists it back into `WindowState`.
+   */
+  onZoomChange?: (zoom: number) => void;
 }
 
 export interface UsePreviewStreamResult {
@@ -229,6 +242,8 @@ export interface UsePreviewStreamResult {
   goBack: () => void;
   /** Phase 5a (#131): navigate one entry forward in the previewed page's history. */
   goForward: () => void;
+  /** Phase 5b (#132): set the previewed page's zoom factor. */
+  setZoom: (factor: number) => void;
 }
 
 /**
@@ -361,6 +376,8 @@ export function usePreviewStream({
   enabled,
   quality,
   muted,
+  zoom,
+  onZoomChange,
 }: UsePreviewStreamArgs): UsePreviewStreamResult {
   const [status, setStatus] = useState<PreviewStreamStatus>("idle");
   const [deviceWidth, setDeviceWidth] = useState<number | null>(null);
@@ -435,6 +452,17 @@ export function usePreviewStream({
   // a fallback to MSE. Stays at the connection scope — survives
   // across renegotiation, resets when the socket dies entirely.
   const rtcIceRestartedRef = useRef(false);
+  // Phase 5b (#132): refs for zoom + onZoomChange so the input-handler
+  // effect can read the current values without re-binding listeners
+  // every zoom step (which would lose any in-progress drag/key state).
+  const zoomRef = useRef<number>(zoom ?? ZOOM_DEFAULT);
+  const onZoomChangeRef = useRef<typeof onZoomChange>(onZoomChange);
+  useEffect(() => {
+    zoomRef.current = zoom ?? ZOOM_DEFAULT;
+  }, [zoom]);
+  useEffect(() => {
+    onZoomChangeRef.current = onZoomChange;
+  }, [onZoomChange]);
 
   // MSE state. Lifecycle is per-WS-connection — `setupMse()` runs on
   // open, `teardownMse()` on close. The append queue drains via the
@@ -1282,6 +1310,34 @@ export function usePreviewStream({
     };
     const onContextMenu = (e: MouseEvent) => e.preventDefault();
     const onKeyDown = (e: KeyboardEvent) => {
+      // Phase 5b (#132): intercept Ctrl/Cmd + `=`/`+`/`-`/`_`/`0`
+      // BEFORE forwarding to the page. These are zoom shortcuts in
+      // every real browser; users hitting them inside the preview
+      // expect to zoom the previewed page, not for the previewed page
+      // to receive a synthetic Ctrl+= keystroke. Reads through refs
+      // so the listener doesn't have to rebind on every zoom step.
+      const zoomMod = e.ctrlKey || e.metaKey;
+      if (zoomMod && !e.altKey && !e.shiftKey) {
+        const current = zoomRef.current;
+        const cb = onZoomChangeRef.current;
+        if (e.key === "=" || e.key === "+") {
+          e.preventDefault();
+          const next = nextZoomIn(current);
+          if (next !== current) cb?.(next);
+          return;
+        }
+        if (e.key === "-" || e.key === "_") {
+          e.preventDefault();
+          const next = nextZoomOut(current);
+          if (next !== current) cb?.(next);
+          return;
+        }
+        if (e.key === "0") {
+          e.preventDefault();
+          if (current !== ZOOM_DEFAULT) cb?.(ZOOM_DEFAULT);
+          return;
+        }
+      }
       e.preventDefault();
       sendJson({
         type: "key",
@@ -1637,6 +1693,29 @@ export function usePreviewStream({
     sendJson({ type: "go_forward" });
   }, [sendJson]);
 
+  // Phase 5b (#132): persist + send. The consumer keeps `zoom` in
+  // WindowState so it survives chat-tab reloads; the effect below
+  // mirrors the muted/quality re-apply pattern by sending `set_zoom`
+  // whenever the prop changes (including the initial connect).
+  const setZoom = useCallback(
+    (factor: number) => {
+      const clamped = clampZoom(factor);
+      onZoomChange?.(clamped);
+      sendJson({ type: "set_zoom", factor: clamped });
+    },
+    [onZoomChange, sendJson],
+  );
+
+  // Re-apply zoom whenever the upstream prop changes — covers initial
+  // connect (server resets to 1.0 on every page navigation, so we
+  // re-push the user's persisted value) and any cross-window state
+  // sync. Skipped when `enabled` is false (no live stream to update).
+  useEffect(() => {
+    if (!enabled) return;
+    if (zoom == null) return;
+    sendJson({ type: "set_zoom", factor: clampZoom(zoom) });
+  }, [enabled, zoom, sendJson, status]);
+
   const navigate = useCallback(
     (path: string) => {
       // Always start with `/` — server requires same-origin
@@ -1668,5 +1747,6 @@ export function usePreviewStream({
     canGoForward,
     goBack,
     goForward,
+    setZoom,
   };
 }

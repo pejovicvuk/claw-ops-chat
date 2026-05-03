@@ -63,6 +63,13 @@ export type WindowState =
        * reconnects so a user who unmuted once stays unmuted.
        */
       muted?: boolean;
+      /**
+       * Phase 5b (#132): page zoom factor (1.0 = 100%). Persists in
+       * `WindowState` so the user's zoom survives chat-tab reloads.
+       * Clamped to the supported range by `clampZoom` from
+       * `src/lib/preview-stream/zoom-steps.ts`. Absent = 1.0.
+       */
+      zoom?: number;
     };
 
 export interface WindowDescriptor {

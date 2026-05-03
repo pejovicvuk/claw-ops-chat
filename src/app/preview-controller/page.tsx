@@ -71,7 +71,8 @@ interface InputFrame {
     | "resize"
     | "clipboard_paste"
     | "go_back"
-    | "go_forward";
+    | "go_forward"
+    | "set_zoom";
   [key: string]: unknown;
 }
 
@@ -495,6 +496,32 @@ function dispatchInputToIframe(iframe: HTMLIFrameElement | null, frame: InputFra
         /* no forward history — silently no-op */
       }
       break;
+    case "set_zoom": {
+      // Phase 5b (#132): RTC parity. The MSE path uses CDP
+      // `Emulation.setPageScaleFactor`, which doesn't apply when
+      // capture is via getDisplayMedia (the controller's own DOM is
+      // what's captured, not the page-scale-factor-emulated viewport).
+      // Apply CSS `zoom` on the iframe instead — same-origin proxy
+      // means the captured stream reflects the zoom transform.
+      const factor = Number(frame.factor);
+      if (!Number.isFinite(factor) || factor < 0.25 || factor > 5) break;
+      try {
+        const root = doc.documentElement;
+        // CSS `zoom` is well-supported in Chromium; fall back to
+        // `transform: scale()` if a future engine drops it.
+        if (root) {
+          const styleObj = root.style as CSSStyleDeclaration & { zoom?: string };
+          styleObj.zoom = String(factor);
+          if (styleObj.zoom !== String(factor)) {
+            root.style.transform = `scale(${factor})`;
+            root.style.transformOrigin = "0 0";
+          }
+        }
+      } catch {
+        /* iframe gone or cross-origin — silently no-op */
+      }
+      break;
+    }
     case "clipboard_paste":
       // Paste synthesizes a clipboardData InputEvent; we just blur+focus
       // and synthesize a 'paste' event with the text in clipboardData.

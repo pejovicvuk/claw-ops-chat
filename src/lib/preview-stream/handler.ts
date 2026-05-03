@@ -1065,6 +1065,27 @@ async function dispatchClientFrame(
           /* no forward history or timeout — silently ignore */
         }
         return;
+      case "set_zoom": {
+        // Phase 5b (#132): page-zoom shortcut. CDP
+        // `Emulation.setPageScaleFactor` accepts the factor directly —
+        // 1.0 = 100%. Validate the range here too (defense in depth;
+        // the client clamps via `zoom-steps.ts` already).
+        const factor = Number((frame as { factor?: unknown }).factor);
+        if (!Number.isFinite(factor) || factor < 0.25 || factor > 5) return;
+        try {
+          // Not in Playwright's typed CDP map — cast through a string-
+          // keyed sender. Same pattern as Page.getNavigationHistory.
+          const rawSend = (
+            session as unknown as {
+              send: (m: string, p?: unknown) => Promise<unknown>;
+            }
+          ).send.bind(session);
+          await rawSend("Emulation.setPageScaleFactor", { pageScaleFactor: factor });
+        } catch {
+          /* CDP errors non-fatal — zoom is best-effort */
+        }
+        return;
+      }
       case "navigate": {
         const url = String((frame as { url?: string }).url ?? "");
         // Restrict to same-port localhost — preventing the user from

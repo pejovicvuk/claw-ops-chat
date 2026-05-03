@@ -53,6 +53,7 @@ import { ensureAuditTree } from "./src/lib/audit/paths";
 import { purgeOldAuditFiles } from "./src/lib/audit/retention";
 import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
 import { purgeOldImages } from "./src/lib/proxy/image-cache";
+import { sweepStaleDrops } from "./src/lib/preview-stream/file-drop";
 import { migrateGoogleMcpTier } from "./src/lib/google-custom-config";
 import { logWsUpgrade } from "./src/lib/audit/api-wrap";
 import {
@@ -2567,6 +2568,29 @@ setChatSendHandle({
     console.log(`> Preview caches ready at /root/.cache (unfurl 24h, images 7d)`);
   } catch (err) {
     console.warn(`!! Could not initialize preview caches: ${(err as Error).message}`);
+  }
+})();
+
+// Phase 3c (#128): per-WS preview file uploads land at
+// /root/.cache/preview-uploads/<dropId>-<filename>. The handler
+// schedules a setTimeout to unlink each file 60 s after the drop
+// completes; this cron is the safety net for files orphaned by
+// crashed / hard-killed processes that never reached that timer.
+(async () => {
+  try {
+    await sweepStaleDrops();
+    cron.schedule(
+      "*/5 * * * *",
+      () => {
+        sweepStaleDrops().catch((err) => {
+          console.warn(`[preview] file-drop sweeper failed: ${(err as Error).message}`);
+        });
+      },
+      { timezone: "UTC" },
+    );
+    console.log(`> Preview file-drop sweeper scheduled (every 5 min, 60 s TTL)`);
+  } catch (err) {
+    console.warn(`!! Could not initialize file-drop sweeper: ${(err as Error).message}`);
   }
 })();
 

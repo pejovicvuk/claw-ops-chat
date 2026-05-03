@@ -45,6 +45,7 @@ const paths_2 = require("./src/lib/audit/paths");
 const retention_1 = require("./src/lib/audit/retention");
 const unfurl_cache_1 = require("./src/lib/proxy/unfurl-cache");
 const image_cache_1 = require("./src/lib/proxy/image-cache");
+const file_drop_1 = require("./src/lib/preview-stream/file-drop");
 const google_custom_config_1 = require("./src/lib/google-custom-config");
 const api_wrap_1 = require("./src/lib/audit/api-wrap");
 const http_forward_1 = require("./src/lib/preview-proxy/http-forward");
@@ -2190,6 +2191,25 @@ globalThis.__clawListSessionBranches = () => sessionManager.listBranchSnapshots(
     }
     catch (err) {
         console.warn(`!! Could not initialize preview caches: ${err.message}`);
+    }
+})();
+// Phase 3c (#128): per-WS preview file uploads land at
+// /root/.cache/preview-uploads/<dropId>-<filename>. The handler
+// schedules a setTimeout to unlink each file 60 s after the drop
+// completes; this cron is the safety net for files orphaned by
+// crashed / hard-killed processes that never reached that timer.
+(async () => {
+    try {
+        await (0, file_drop_1.sweepStaleDrops)();
+        node_cron_1.default.schedule("*/5 * * * *", () => {
+            (0, file_drop_1.sweepStaleDrops)().catch((err) => {
+                console.warn(`[preview] file-drop sweeper failed: ${err.message}`);
+            });
+        }, { timezone: "UTC" });
+        console.log(`> Preview file-drop sweeper scheduled (every 5 min, 60 s TTL)`);
+    }
+    catch (err) {
+        console.warn(`!! Could not initialize file-drop sweeper: ${err.message}`);
     }
 })();
 app.prepare().then(() => {

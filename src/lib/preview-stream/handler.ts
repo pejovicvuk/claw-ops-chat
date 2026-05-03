@@ -10,6 +10,20 @@ import {
   validateClipboardPayload,
 } from "./clipboard-bridge";
 import {
+  DROP_DISPATCH_BINDING,
+  DROP_FETCH_BYTES_BINDING,
+  appendChunk,
+  buildInjectedFileDropScript,
+  cancelDrop,
+  closeDrop,
+  openDrop,
+  scheduleCleanup,
+  validateFileDropStart,
+  validateUuid,
+  type DropEntry,
+} from "./file-drop";
+import { readFile } from "node:fs/promises";
+import {
   forwardKey,
   forwardMouse,
   forwardTouch,
@@ -61,6 +75,13 @@ const RESIZE_DEBOUNCE_MS = 150;
 const H264_TAG_INIT = 0x00;
 const H264_TAG_MEDIA = 0x01;
 const H264_TAG_RESET = 0x02;
+
+/** Phase 3c (#128): client → server tag carrying file-drop chunks.
+ *  Frame layout: [0x10][16-byte UTF-8 dropId truncated/padded][chunk bytes].
+ *  Actually we let the dropId be variable-length: a 1-byte length prefix
+ *  follows the tag, then the dropId UTF-8 bytes, then the chunk. Keeps
+ *  the protocol robust to UUID-format changes. */
+const FILE_DROP_TAG_CHUNK = 0x10;
 
 export type QualityPreset = "performance" | "balanced" | "quality";
 
@@ -157,6 +178,9 @@ export async function handlePreviewStream(
   let audio: AudioCapture | null = null;
   let resizeTimer: NodeJS.Timeout | null = null;
   let closed = false;
+  // Phase 3c (#128): in-flight file-drop state. Keyed by dropId.
+  // Survives until the per-drop ttl timer fires OR the WS closes.
+  const drops: Map<string, DropEntry> = new Map();
 
   const sendJson = (payload: Record<string, unknown>) => {
     if (closed || ws.readyState !== ws.OPEN) return;
@@ -195,6 +219,16 @@ export async function handlePreviewStream(
         /* ignore */
       }
     }
+    // Phase 3c: cancel any in-flight file uploads. Closes the write
+    // streams + unlinks the temp files. Run BEFORE acquired.release
+    // so we don't lose dropIds when the context dies.
+    for (const dropId of Array.from(drops.keys())) {
+      try {
+        await cancelDrop(drops, dropId);
+      } catch {
+        /* ignore */
+      }
+    }
     if (acquired) {
       try {
         await acquired.release();
@@ -218,6 +252,7 @@ export async function handlePreviewStream(
       // Bound at the BrowserContext level so all frames (iframes,
       // post-reload documents) inherit both the binding + hook.
       beforeNavigate: async (_page, context) => {
+        // Clipboard bridge (Phase 3b).
         await context.exposeBinding(CLIPBOARD_BINDING_NAME, async (_source, raw) => {
           if (closed) return;
           const validated = validateClipboardPayload(raw);
@@ -225,6 +260,27 @@ export async function handlePreviewStream(
           sendJson({ type: "clipboard_copy", text: validated.text });
         });
         await context.addInitScript({ content: buildInjectedClipboardScript() });
+
+        // File-drop bridge (Phase 3c). The page-side script defines
+        // window.__clawDispatchDrop; the binding here returns the
+        // base64-encoded bytes for a given dropId so the page can
+        // reconstruct a File and dispatch a synthetic drop. Bytes
+        // are read from disk per-call — the temp file may have been
+        // unlinked already if delivery is slow, in which case we
+        // return an empty string (page treats as failure).
+        await context.exposeBinding(DROP_FETCH_BYTES_BINDING, async (_source, raw) => {
+          if (closed) return "";
+          if (!validateUuid(raw)) return "";
+          const entry = drops.get(raw as string);
+          if (!entry) return "";
+          try {
+            const buf = await readFile(entry.path);
+            return buf.toString("base64");
+          } catch {
+            return "";
+          }
+        });
+        await context.addInitScript({ content: buildInjectedFileDropScript() });
       },
     });
   } catch (err) {
@@ -597,15 +653,53 @@ export async function handlePreviewStream(
     }, RESIZE_DEBOUNCE_MS);
   };
 
-  ws.on("message", (raw) => {
+  /**
+   * Phase 3c (#128): handle a binary file-drop chunk frame.
+   * Layout: [tag(1)][dropIdLen(1)][dropId(N)][chunk bytes]
+   */
+  const handleFileDropChunk = (buf: Buffer): void => {
     if (closed) return;
+    if (buf.length < 2) return;
+    const dropIdLen = buf[1];
+    if (buf.length < 2 + dropIdLen) return;
+    const dropId = buf.subarray(2, 2 + dropIdLen).toString("utf8");
+    const chunk = buf.subarray(2 + dropIdLen);
+    if (!validateUuid(dropId)) return;
+    const entry = drops.get(dropId);
+    if (!entry) return;
+    if (!appendChunk(entry, chunk)) {
+      // Cap exceeded — mid-stream lying header. Tear down + notify.
+      void cancelDrop(drops, dropId);
+      sendJson({
+        type: "file_drop_error",
+        dropId,
+        code: "size_too_large",
+        message: `Upload exceeded ${50}MB cap`,
+      });
+    }
+  };
+
+  ws.on("message", (raw, isBinary) => {
+    if (closed) return;
+    if (isBinary && Buffer.isBuffer(raw)) {
+      // Today only file-drop chunks are client → server binary frames.
+      // Tag dispatch keeps the door open for future tag types.
+      if (raw.length < 1) return;
+      const tag = raw[0];
+      if (tag === FILE_DROP_TAG_CHUNK) {
+        handleFileDropChunk(raw);
+      }
+      // Unknown tag — silently drop. Forward-compat: older servers
+      // tolerate newer client tags by ignoring.
+      return;
+    }
     let parsed: ClientFrame;
     try {
       parsed = JSON.parse(raw.toString()) as ClientFrame;
     } catch {
       return;
     }
-    void dispatchClientFrame(parsed, screencast, page, route, sendJson, onResize);
+    void dispatchClientFrame(parsed, screencast, page, route, sendJson, onResize, drops);
   });
 }
 
@@ -616,6 +710,7 @@ async function dispatchClientFrame(
   route: PreviewStreamRoute,
   sendJson: (payload: Record<string, unknown>) => void,
   onResize: (evt: ResizeEvent) => void,
+  drops: Map<string, DropEntry>,
 ): Promise<void> {
   if (!screencast) return;
   const { session } = screencast;
@@ -647,6 +742,119 @@ async function dispatchClientFrame(
         const validated = validateClipboardPayload((frame as { text?: unknown }).text);
         if (!validated.ok || !validated.text) return;
         await page.keyboard.insertText(validated.text);
+        return;
+      }
+      case "file_drop_start": {
+        // Phase 3c (#128): client opens a file upload. Validate the
+        // header, open a write stream, ack so the client can start
+        // sending binary chunks. Actual CDP delivery happens on
+        // file_drop_end (commit C).
+        const validated = validateFileDropStart(frame);
+        if (!validated.ok || !validated.start) {
+          sendJson({
+            type: "file_drop_error",
+            dropId: (frame as { dropId?: unknown }).dropId,
+            code: validated.reason ?? "invalid",
+            message: `file_drop_start rejected: ${validated.reason ?? "invalid"}`,
+          });
+          return;
+        }
+        try {
+          await openDrop(drops, validated.start);
+          sendJson({ type: "file_drop_ack", dropId: validated.start.dropId, ready: true });
+        } catch (err) {
+          sendJson({
+            type: "file_drop_error",
+            dropId: validated.start.dropId,
+            code: "open_failed",
+            message: err instanceof Error ? err.message : "could not open temp file",
+          });
+        }
+        return;
+      }
+      case "file_drop_end": {
+        // Close the write stream, then invoke the page-side dispatcher.
+        // The page's __clawDispatchDrop walks frames to find the target
+        // at (x, y), pulls the bytes via the __clawFetchDropBytes
+        // binding, and either sets <input type=file>.files or
+        // synthesizes a dragenter/dragover/drop sequence.
+        const dropId = (frame as { dropId?: unknown }).dropId;
+        if (!validateUuid(dropId)) return;
+        const entry = drops.get(dropId as string);
+        if (!entry) return;
+        try {
+          await closeDrop(entry);
+        } catch {
+          sendJson({
+            type: "file_drop_error",
+            dropId,
+            code: "close_failed",
+            message: "could not close temp file",
+          });
+          scheduleCleanup(drops, entry);
+          return;
+        }
+        try {
+          // Cast the result as a structured response from the injected
+          // dispatcher. Playwright serializes via structured clone so
+          // returning `{ok, target, reason?}` round-trips fine.
+          interface DispatchResult {
+            ok: boolean;
+            target?: string;
+            reason?: string;
+          }
+          const result: DispatchResult = await page.evaluate(
+            async ({
+              bindingName,
+              req,
+            }: {
+              bindingName: string;
+              req: Record<string, unknown>;
+            }): Promise<DispatchResult> => {
+              const w = window as unknown as Record<string, unknown>;
+              const fn = w[bindingName] as
+                | ((r: unknown) => Promise<DispatchResult>)
+                | undefined;
+              if (typeof fn !== "function") {
+                return { ok: false, reason: "binding_missing" };
+              }
+              return fn(req);
+            },
+            {
+              bindingName: DROP_DISPATCH_BINDING,
+              req: {
+                dropId: entry.start.dropId,
+                filename: entry.start.filename,
+                mimeType: entry.start.mimeType,
+                x: entry.start.x,
+                y: entry.start.y,
+              },
+            },
+          );
+          if (result.ok) {
+            sendJson({
+              type: "file_drop_done",
+              dropId,
+              target: result.target ?? "unknown",
+            });
+          } else {
+            sendJson({
+              type: "file_drop_error",
+              dropId,
+              code: result.reason ?? "dispatch_failed",
+              message: `dispatch failed: ${result.reason ?? "unknown"}`,
+            });
+          }
+        } catch (err) {
+          sendJson({
+            type: "file_drop_error",
+            dropId,
+            code: "evaluate_failed",
+            message: err instanceof Error ? err.message : "page evaluate threw",
+          });
+        } finally {
+          scheduleCleanup(drops, entry);
+        }
         return;
       }
       case "reload":

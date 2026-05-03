@@ -216,6 +216,19 @@ export interface UsePreviewStreamResult {
   remoteStream: MediaStream | null;
   /** Phase 4 (#130): which transport is currently active. */
   transport: "rtc" | "mse";
+  /**
+   * Phase 5a (#131): true when the previewed page has back history.
+   * Driven by `history_state` frames from the server (CDP
+   * `Page.getNavigationHistory`) or the WebRTC controller (iframe
+   * history tracking).
+   */
+  canGoBack: boolean;
+  /** Phase 5a (#131): true when the previewed page has forward history. */
+  canGoForward: boolean;
+  /** Phase 5a (#131): navigate one entry back in the previewed page's history. */
+  goBack: () => void;
+  /** Phase 5a (#131): navigate one entry forward in the previewed page's history. */
+  goForward: () => void;
 }
 
 /**
@@ -268,6 +281,11 @@ interface StatusFrame {
 interface UrlChangedFrame {
   type: "url_changed";
   path: string;
+}
+interface HistoryStateFrame {
+  type: "history_state";
+  canGoBack: boolean;
+  canGoForward: boolean;
 }
 interface ClipboardCopyFrame {
   type: "clipboard_copy";
@@ -350,6 +368,12 @@ export function usePreviewStream({
   const [lastError, setLastError] = useState<string | null>(null);
   const [currentPath, setCurrentPath] = useState<string | null>(null);
   const [audioAvailable, setAudioAvailable] = useState(false);
+  // Phase 5a (#131): canGoBack/canGoForward come from the server via
+  // `history_state` frames (CDP `Page.getNavigationHistory` on every
+  // framenavigated). They drive the disabled state of the toolbar's
+  // ⏪ / ⏩ buttons. Default false until the first frame arrives.
+  const [canGoBack, setCanGoBack] = useState(false);
+  const [canGoForward, setCanGoForward] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // Sticky failure flag: once H.264 has failed at runtime, all
   // subsequent connects (including reconnect-with-backoff) skip the
@@ -658,6 +682,7 @@ export function usePreviewStream({
           | ErrorFrame
           | StatusFrame
           | UrlChangedFrame
+          | HistoryStateFrame
           | ClipboardCopyFrame
           | FileDropAckFrame
           | DownloadReadyFrame
@@ -698,6 +723,13 @@ export function usePreviewStream({
           if (e.code === "encoder_failed") {
             onCodecFailure(e.message ?? "encoder_failed");
           }
+        } else if (parsed.type === "history_state") {
+          // Phase 5a (#131): server emits this from CDP
+          // Page.getNavigationHistory after every framenavigated. The
+          // server already dedups, so we can apply directly.
+          const h = parsed as HistoryStateFrame;
+          setCanGoBack(Boolean(h.canGoBack));
+          setCanGoForward(Boolean(h.canGoForward));
         } else if (parsed.type === "url_changed") {
           const u = parsed as UrlChangedFrame;
           setCurrentPath(u.path);
@@ -905,7 +937,12 @@ export function usePreviewStream({
             try {
               const f = JSON.parse(msg.data);
               if (f.type === "url_changed") setCurrentPath(String(f.path ?? ""));
-              else if (f.type === "clipboard_copy") {
+              else if (f.type === "history_state") {
+                // Phase 5a (#131): RTC parity. Controller page emits
+                // history_state when the iframe navigates.
+                setCanGoBack(Boolean(f.canGoBack));
+                setCanGoForward(Boolean(f.canGoForward));
+              } else if (f.type === "clipboard_copy") {
                 const validated = validateClipboardPayload(f.text);
                 if (validated.ok && validated.text && navigator.clipboard) {
                   void navigator.clipboard.writeText(validated.text).catch(() => {});
@@ -1103,6 +1140,10 @@ export function usePreviewStream({
       wsRef.current = null;
       if (intentionalCloseRef.current) return;
       setStatus("closed");
+      // Phase 5a: clear history state so the buttons go back to a
+      // clean disabled state until the new server emits a frame.
+      setCanGoBack(false);
+      setCanGoForward(false);
       teardownMse();
       scheduleReconnect();
     };
@@ -1584,6 +1625,18 @@ export function usePreviewStream({
     sendJson({ type: "reload" });
   }, [sendJson]);
 
+  // Phase 5a (#131): same wire format on both transports — sendJson
+  // routes through the data channel when WebRTC is active, the WS
+  // otherwise. The server / controller decide what `Page.goBack` /
+  // `iframe.history.back()` actually means in their context.
+  const goBack = useCallback(() => {
+    sendJson({ type: "go_back" });
+  }, [sendJson]);
+
+  const goForward = useCallback(() => {
+    sendJson({ type: "go_forward" });
+  }, [sendJson]);
+
   const navigate = useCallback(
     (path: string) => {
       // Always start with `/` — server requires same-origin
@@ -1611,5 +1664,9 @@ export function usePreviewStream({
     navigate,
     remoteStream,
     transport,
+    canGoBack,
+    canGoForward,
+    goBack,
+    goForward,
   };
 }

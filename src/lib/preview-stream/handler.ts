@@ -43,6 +43,7 @@ import {
   type TouchEvent,
   type WheelEvent,
 } from "./input-forward";
+import { HistoryStateDeduper, computeHistoryState, type NavigationHistory } from "./history-state";
 
 /**
  * WebSocket handler for `/ws/preview-stream/<projectSlug>/<itemSlug>/<port>`.
@@ -470,7 +471,9 @@ export async function handlePreviewStream(
   const sendTagged = (tag: number, payload?: Buffer): void => {
     if (closed || ws.readyState !== ws.OPEN) return;
     const framed =
-      payload && payload.length > 0 ? Buffer.concat([Buffer.from([tag]), payload]) : Buffer.from([tag]);
+      payload && payload.length > 0
+        ? Buffer.concat([Buffer.from([tag]), payload])
+        : Buffer.from([tag]);
     try {
       ws.send(framed, { binary: true });
     } catch {
@@ -626,6 +629,35 @@ export async function handlePreviewStream(
   // last-sent path because SPAs can fire many framenavigated events
   // for what visually looks like one navigation.
   let lastSentPath: string | null = null;
+  const historyDedup = new HistoryStateDeduper();
+
+  /**
+   * Phase 5a (#131): query CDP for the current navigation history and
+   * emit `history_state` when the (canGoBack, canGoForward) shape
+   * changes. Wired into `framenavigated` so the client buttons stay
+   * in sync with what Chromium actually has — covers both in-app
+   * link clicks and `history.pushState`. Dedup logic lives in
+   * `history-state.ts` for unit-test coverage.
+   */
+  const emitHistoryState = async (): Promise<void> => {
+    const session = screencast?.session;
+    if (!session) return;
+    try {
+      // `Page.getNavigationHistory` is a real CDP method but isn't in
+      // Playwright's typed command map. Cast through `unknown` to a
+      // string-keyed sender — the runtime call is identical.
+      const rawSend = (session as unknown as { send: (m: string) => Promise<unknown> }).send.bind(
+        session,
+      );
+      const hist = (await rawSend("Page.getNavigationHistory")) as NavigationHistory;
+      const next = historyDedup.shouldEmit(computeHistoryState(hist));
+      if (!next) return;
+      sendJson({ type: "history_state", ...next });
+    } catch {
+      /* CDP errors are non-fatal — history state is best-effort */
+    }
+  };
+
   const onFrameNavigated = (navFrame: { url: () => string; parentFrame: () => unknown }) => {
     // Only the main frame's URL counts — iframe navigations inside the
     // previewed app shouldn't bubble up.
@@ -637,9 +669,14 @@ export async function handlePreviewStream(
     } catch {
       return;
     }
-    if (path === lastSentPath) return;
-    lastSentPath = path;
-    sendJson({ type: "url_changed", path });
+    if (path !== lastSentPath) {
+      lastSentPath = path;
+      sendJson({ type: "url_changed", path });
+    }
+    // Forward → back can land on a previously-visited URL with the
+    // SAME path but a DIFFERENT history shape, so always check —
+    // dedup happens inside emitHistoryState before sending.
+    void emitHistoryState();
   };
   page.on("framenavigated", onFrameNavigated);
   // Send the initial URL so the client's path input reflects whatever
@@ -958,9 +995,7 @@ async function dispatchClientFrame(
               req: Record<string, unknown>;
             }): Promise<DispatchResult> => {
               const w = window as unknown as Record<string, unknown>;
-              const fn = w[bindingName] as
-                | ((r: unknown) => Promise<DispatchResult>)
-                | undefined;
+              const fn = w[bindingName] as ((r: unknown) => Promise<DispatchResult>) | undefined;
               if (typeof fn !== "function") {
                 return { ok: false, reason: "binding_missing" };
               }
@@ -1010,6 +1045,25 @@ async function dispatchClientFrame(
           timeout: 10_000,
         });
         sendJson({ type: "status", state: "ready" });
+        return;
+      case "go_back":
+        // Phase 5a (#131): Playwright's typed wrapper around the CDP
+        // Page.goBack call. Returns null when there's no history —
+        // the framenavigated listener re-emits history_state once the
+        // (possibly identical) URL settles, so the client's button
+        // states stay coherent.
+        try {
+          await page.goBack({ timeout: 10_000 });
+        } catch {
+          /* no history or timeout — silently ignore */
+        }
+        return;
+      case "go_forward":
+        try {
+          await page.goForward({ timeout: 10_000 });
+        } catch {
+          /* no forward history or timeout — silently ignore */
+        }
         return;
       case "navigate": {
         const url = String((frame as { url?: string }).url ?? "");

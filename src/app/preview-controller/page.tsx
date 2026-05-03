@@ -61,7 +61,17 @@ function parseIceServersFromUrl(params: URLSearchParams): RTCIceServer[] {
 }
 
 interface InputFrame {
-  type: "mouse" | "wheel" | "key" | "touch" | "navigate" | "reload" | "resize" | "clipboard_paste";
+  type:
+    | "mouse"
+    | "wheel"
+    | "key"
+    | "touch"
+    | "navigate"
+    | "reload"
+    | "resize"
+    | "clipboard_paste"
+    | "go_back"
+    | "go_forward";
   [key: string]: unknown;
 }
 
@@ -179,13 +189,90 @@ export default function PreviewControllerPage(): ReactElement {
       }
       const ctrl = pc.createDataChannel("ctrl", { ordered: true });
       const file = pc.createDataChannel("file", { ordered: true });
+
+      // Phase 5a (#131): track iframe history so the viewer's
+      // back/forward buttons can be enabled/disabled correctly. Pure
+      // closure state — keyed off the load event, which fires for
+      // every full navigation (link click, history back/forward,
+      // history.pushState does NOT fire load, but the existing
+      // `dispatchNavigate` updates history through .src reload).
+      let historyIndex = 0;
+      let historyMax = 0;
+      let pendingNavType: "back" | "forward" | null = null;
+      let lastEmittedPath: string | null = null;
+      let lastEmittedCanGoBack = false;
+      let lastEmittedCanGoForward = false;
+
+      const sendCtrl = (frame: Record<string, unknown>) => {
+        if (ctrl.readyState !== "open") return;
+        try {
+          ctrl.send(JSON.stringify(frame));
+        } catch {
+          /* channel closing */
+        }
+      };
+
+      const emitHistoryState = () => {
+        const canGoBack = historyIndex > 0;
+        const canGoForward = historyIndex < historyMax;
+        if (canGoBack === lastEmittedCanGoBack && canGoForward === lastEmittedCanGoForward) {
+          return;
+        }
+        lastEmittedCanGoBack = canGoBack;
+        lastEmittedCanGoForward = canGoForward;
+        sendCtrl({ type: "history_state", canGoBack, canGoForward });
+      };
+
+      const emitUrlChanged = () => {
+        const iframe = iframeRef.current;
+        if (!iframe || !iframe.contentWindow) return;
+        let path: string;
+        try {
+          const u = new URL(iframe.contentWindow.location.href);
+          path = u.pathname + u.search + u.hash;
+        } catch {
+          return;
+        }
+        if (path === lastEmittedPath) return;
+        lastEmittedPath = path;
+        sendCtrl({ type: "url_changed", path });
+      };
+
+      const onIframeLoad = () => {
+        if (pendingNavType === "back") {
+          historyIndex = Math.max(0, historyIndex - 1);
+        } else if (pendingNavType === "forward") {
+          historyIndex = Math.min(historyMax, historyIndex + 1);
+        } else {
+          historyIndex += 1;
+          historyMax = historyIndex; // forward nav truncates forward history
+        }
+        pendingNavType = null;
+        emitUrlChanged();
+        emitHistoryState();
+      };
+
+      const iframe = iframeRef.current;
+      if (iframe) iframe.addEventListener("load", onIframeLoad);
+
       ctrl.onmessage = (evt) => {
         try {
           const frame = JSON.parse(evt.data as string) as InputFrame;
+          // Mark the next iframe load so we can attribute it
+          // correctly. Browsers don't expose "is this load from
+          // history.back()" otherwise.
+          if (frame.type === "go_back") pendingNavType = "back";
+          else if (frame.type === "go_forward") pendingNavType = "forward";
           dispatchInputToIframe(iframeRef.current, frame);
         } catch {
           /* drop malformed frames */
         }
+      };
+
+      // Open ctrl channel triggers the initial state push.
+      ctrl.onopen = () => {
+        emitUrlChanged();
+        emitHistoryState();
       };
       // File chunks arrive as binary frames. The viewer's chunk envelope
       // is `[tag(1)][dropIdLen(1)][dropId(N)][bytes]`. The controller
@@ -388,6 +475,24 @@ function dispatchInputToIframe(iframe: HTMLIFrameElement | null, frame: InputFra
         win.location.reload();
       } catch {
         iframe.src = iframe.src;
+      }
+      break;
+    case "go_back":
+      // Phase 5a (#131): same-origin iframe means we can call history
+      // directly. The bootstrap-scope `pendingNavType = "back"` (set
+      // before this dispatch) tags the next load event so history
+      // tracking attributes the URL change correctly.
+      try {
+        win.history.back();
+      } catch {
+        /* no history — silently no-op */
+      }
+      break;
+    case "go_forward":
+      try {
+        win.history.forward();
+      } catch {
+        /* no forward history — silently no-op */
       }
       break;
     case "clipboard_paste":

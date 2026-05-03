@@ -62,8 +62,50 @@ const VALID_FRAME_TYPES = new Set<SignalFrame["type"]>([
 const acquiredPages = new Map<string, Promise<AcquiredPage>>();
 const peerRegistry = new Map<string, Set<WebSocket>>();
 
+/**
+ * Phase 4 hardening: per-actor concurrent room cap. Without it a
+ * single authenticated user could spin up unlimited Chromium tabs
+ * (each WebRTC pairing acquires one). Configurable via env so an
+ * operator with more capacity can raise it.
+ */
+const MAX_CONCURRENT_RTC_ROOMS_PER_ACTOR = (() => {
+  const raw = process.env.MAX_CONCURRENT_RTC_ROOMS_PER_ACTOR;
+  if (!raw) return 8;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1 || n > 256) return 8;
+  return Math.floor(n);
+})();
+
+const roomsByActor = new Map<string, Set<string>>();
+
+/**
+ * Phase 4 hardening: collision-safe session key. The previous
+ * implementation used `${actor}|${project}|${item}|${port}` which
+ * collides if any field contains `|`. JSON.stringify on a tuple is
+ * unambiguous and deterministic — same shape for the same inputs.
+ */
 function buildKey(actorEmail: string, route: WebRtcRoute): string {
-  return `${actorEmail}|${route.projectSlug}|${route.itemSlug}|${route.port}`;
+  return JSON.stringify([actorEmail, route.projectSlug, route.itemSlug, route.port]);
+}
+
+function trackActorRoom(actor: string, key: string): void {
+  let set = roomsByActor.get(actor);
+  if (!set) {
+    set = new Set();
+    roomsByActor.set(actor, set);
+  }
+  set.add(key);
+}
+
+function untrackActorRoom(actor: string, key: string): void {
+  const set = roomsByActor.get(actor);
+  if (!set) return;
+  set.delete(key);
+  if (set.size === 0) roomsByActor.delete(actor);
+}
+
+function actorRoomCount(actor: string): number {
+  return roomsByActor.get(actor)?.size ?? 0;
 }
 
 function buildControllerUrl(
@@ -131,13 +173,14 @@ async function releaseAcquiredPage(key: string): Promise<void> {
   }
 }
 
-function teardownSession(key: string, reason: string): void {
+function teardownSession(key: string, reason: string, actorEmail?: string): void {
   const peers = peerRegistry.get(key);
   if (peers) {
     for (const peer of peers) safeClose(peer, 1011, reason);
     peerRegistry.delete(key);
   }
   dropSession(key);
+  if (actorEmail) untrackActorRoom(actorEmail, key);
   void releaseAcquiredPage(key);
 }
 
@@ -150,8 +193,22 @@ export async function handlePreviewRtc(
 ): Promise<void> {
   const role = parseRole(roleParam);
   const key = buildKey(actorEmail, route);
+
+  // Rate limit BEFORE creating any session state — only viewers count
+  // against the cap (a controller is paired with an existing viewer
+  // slot, not a new room). Already-known keys are exempt so a
+  // legitimate reconnect to an existing room isn't blocked.
+  if (
+    role === VIEWER_ROLE &&
+    !roomsByActor.get(actorEmail)?.has(key) &&
+    actorRoomCount(actorEmail) >= MAX_CONCURRENT_RTC_ROOMS_PER_ACTOR
+  ) {
+    safeClose(ws, 1008, "rate_limited");
+    return;
+  }
+
   const session = getOrCreateSession(key, () => {
-    teardownSession(key, "pair_timeout");
+    teardownSession(key, "pair_timeout", actorEmail);
   });
 
   const attachResult = attachPeer(session, ws, role);
@@ -162,6 +219,7 @@ export async function handlePreviewRtc(
   }
 
   registerPeer(key, ws);
+  if (role === VIEWER_ROLE) trackActorRoom(actorEmail, key);
 
   ws.on("message", (data) => {
     const text = typeof data === "string" ? data : data.toString();
@@ -180,7 +238,7 @@ export async function handlePreviewRtc(
     if (frame.type === "role") return; // already learned from URL
     relay(session, role, frame);
     if (frame.type === "bye") {
-      teardownSession(key, "bye");
+      teardownSession(key, "bye", actorEmail);
     }
   });
 
@@ -189,13 +247,13 @@ export async function handlePreviewRtc(
     // Tell the partner the peer is gone so it can tear down its
     // RTCPeerConnection without waiting for ICE timeouts.
     relay(session, role, { type: "bye" });
-    teardownSession(key, "peer_closed");
+    teardownSession(key, "peer_closed", actorEmail);
   });
 
   ws.on("error", () => {
     unregisterPeer(key, ws);
     relay(session, role, { type: "bye" });
-    teardownSession(key, "peer_error");
+    teardownSession(key, "peer_error", actorEmail);
   });
 
   // Viewer connects first; spin up the controller via Chromium so its
@@ -221,10 +279,16 @@ export async function handlePreviewRtc(
 export function _stats(): {
   acquiredPageCount: number;
   peerKeys: string[];
+  actorRoomCounts: Record<string, number>;
 } {
+  const actorRoomCounts: Record<string, number> = {};
+  for (const [actor, set] of roomsByActor.entries()) {
+    actorRoomCounts[actor] = set.size;
+  }
   return {
     acquiredPageCount: acquiredPages.size,
     peerKeys: Array.from(peerRegistry.keys()),
+    actorRoomCounts,
   };
 }
 
@@ -232,4 +296,5 @@ export function _stats(): {
 export function _resetForTests(): void {
   acquiredPages.clear();
   peerRegistry.clear();
+  roomsByActor.clear();
 }

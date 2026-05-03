@@ -173,3 +173,107 @@ describe("handlePreviewRtc teardown", () => {
     expect(controller.closed?.code).toBe(1011);
   });
 });
+
+describe("handlePreviewRtc rate limiting", () => {
+  it("rejects an actor's 9th concurrent room with 1008/rate_limited (default cap is 8)", async () => {
+    const viewers: ReturnType<typeof fakeWs>[] = [];
+    for (let i = 0; i < 8; i++) {
+      const v = fakeWs();
+      viewers.push(v);
+      await handlePreviewRtc(
+        v as unknown as WebSocket,
+        "alice@x",
+        { ...route, port: 4000 + i },
+        ctx,
+        "viewer",
+      );
+    }
+    // First 8 are accepted.
+    for (const v of viewers) expect(v.closed).toBeNull();
+
+    // 9th rejected.
+    const ninth = fakeWs();
+    await handlePreviewRtc(
+      ninth as unknown as WebSocket,
+      "alice@x",
+      { ...route, port: 4099 },
+      ctx,
+      "viewer",
+    );
+    expect(ninth.closed).toEqual({ code: 1008, reason: "rate_limited" });
+  });
+
+  it("frees a slot when an existing viewer disconnects", async () => {
+    const viewers: ReturnType<typeof fakeWs>[] = [];
+    for (let i = 0; i < 8; i++) {
+      const v = fakeWs();
+      viewers.push(v);
+      await handlePreviewRtc(
+        v as unknown as WebSocket,
+        "alice@x",
+        { ...route, port: 5000 + i },
+        ctx,
+        "viewer",
+      );
+    }
+    // Disconnect one — should drop the actor's room count and let a new one in.
+    viewers[0].emit("close");
+    expect(_stats().actorRoomCounts["alice@x"]).toBeLessThan(8);
+
+    const fresh = fakeWs();
+    await handlePreviewRtc(
+      fresh as unknown as WebSocket,
+      "alice@x",
+      { ...route, port: 5099 },
+      ctx,
+      "viewer",
+    );
+    expect(fresh.closed).toBeNull();
+  });
+
+  it("does not count controllers against the cap (only viewers)", async () => {
+    const viewers: ReturnType<typeof fakeWs>[] = [];
+    for (let i = 0; i < 8; i++) {
+      const v = fakeWs();
+      viewers.push(v);
+      await handlePreviewRtc(
+        v as unknown as WebSocket,
+        "alice@x",
+        { ...route, port: 6000 + i },
+        ctx,
+        "viewer",
+      );
+    }
+    // Controller for an existing room must still be accepted.
+    const controller = fakeWs();
+    await handlePreviewRtc(
+      controller as unknown as WebSocket,
+      "alice@x",
+      { ...route, port: 6000 },
+      ctx,
+      "controller",
+    );
+    expect(controller.closed).toBeNull();
+  });
+});
+
+describe("handlePreviewRtc session key encoding", () => {
+  it("uses an unambiguous JSON-tuple key — fields containing | don't collide", async () => {
+    // Pre-collision-safe key was `${actor}|${proj}|${item}|${port}`,
+    // so an actor email like "a|b@x" collided with project "b@x" etc.
+    const v1 = fakeWs();
+    const v2 = fakeWs();
+    await handlePreviewRtc(v1 as unknown as WebSocket, "a|b@x", route, ctx, "viewer");
+    await handlePreviewRtc(
+      v2 as unknown as WebSocket,
+      "a",
+      { ...route, projectSlug: "b@x" },
+      ctx,
+      "viewer",
+    );
+    // Two distinct sessions.
+    expect(_stats().peerKeys.length).toBe(2);
+    expect(v1.closed).toBeNull();
+    expect(v2.closed).toBeNull();
+  });
+});

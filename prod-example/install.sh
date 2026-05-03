@@ -114,6 +114,11 @@ services:
     env_file: .env
     volumes:
       - /root:/root
+      # Read-only Docker socket — powers the Settings → Monitoring → Docker
+      # section (container metrics, prune, container actions). Without this
+      # mount the Docker tab shows "not configured" and the auto-prune
+      # cron is a no-op.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
     expose:
       - "3100"
     init: true

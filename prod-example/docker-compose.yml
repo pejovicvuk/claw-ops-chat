@@ -7,6 +7,11 @@ services:
       # Host filesystem access for Claude Code tools — matches CLAUDE_CWD=/root.
       # The container needs the Claude creds + session history that live under /root/.claude.
       - /root:/root
+      # Read-only Docker socket — powers Settings → Monitoring → Docker
+      # (container metrics, the auto-prune disk-cleanup panel, container
+      # start/stop/restart actions). Drop this line if you don't want the
+      # chat to talk to the host's Docker daemon.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
       # Optional: Bitbucket MCP skill (clone the repo on the server if you want this).
       # - ./skills/bitbucket:/opt/skills/bitbucket:ro
     expose:

@@ -59,15 +59,60 @@ export type QualityPreset = "performance" | "balanced" | "quality";
  */
 export type PreviewStreamMode = "video-rtc" | "video" | "canvas";
 
-/** Phase 4 (#130): public STUN servers. No TURN — defer to a future phase. */
-const RTC_ICE_SERVERS: RTCIceServer[] = [
+/**
+ * Phase 4 (#130): default ICE servers used as a last-resort fallback
+ * if `/api/preview/rtc-config` is unreachable. Production deployments
+ * configure WEBRTC_TURN_URL / WEBRTC_TURN_USERNAME / WEBRTC_TURN_PASSWORD
+ * server-side and the endpoint returns those — see
+ * `src/lib/preview-stream/webrtc-config.ts`.
+ */
+const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
 ];
 
-/** Phase 4 (#130): how long we wait for `RTCPeerConnection.connectionState`
- *  to reach `connected` before flipping sticky-RTC-failure and falling
- *  through to MSE. */
-const RTC_CONNECT_TIMEOUT_MS = 5_000;
+/**
+ * Phase 4 (#130): default time we wait for
+ * `RTCPeerConnection.connectionState` to reach `connected` before
+ * flipping sticky-RTC-failure and falling through to MSE. The
+ * server-side `/api/preview/rtc-config` may override this via
+ * WEBRTC_CONNECT_TIMEOUT_MS.
+ */
+const FALLBACK_CONNECT_TIMEOUT_MS = 5_000;
+
+interface FetchedRtcConfig {
+  iceServers: RTCIceServer[];
+  connectTimeoutMs: number;
+}
+
+async function fetchRtcConfig(): Promise<FetchedRtcConfig> {
+  try {
+    const res = await fetch(`${BASE_PATH}/api/preview/rtc-config`, {
+      credentials: "include",
+    });
+    if (!res.ok) {
+      return {
+        iceServers: FALLBACK_ICE_SERVERS,
+        connectTimeoutMs: FALLBACK_CONNECT_TIMEOUT_MS,
+      };
+    }
+    const cfg = (await res.json()) as Partial<FetchedRtcConfig>;
+    return {
+      iceServers:
+        Array.isArray(cfg.iceServers) && cfg.iceServers.length > 0
+          ? cfg.iceServers
+          : FALLBACK_ICE_SERVERS,
+      connectTimeoutMs:
+        typeof cfg.connectTimeoutMs === "number" && cfg.connectTimeoutMs > 0
+          ? cfg.connectTimeoutMs
+          : FALLBACK_CONNECT_TIMEOUT_MS,
+    };
+  } catch {
+    return {
+      iceServers: FALLBACK_ICE_SERVERS,
+      connectTimeoutMs: FALLBACK_CONNECT_TIMEOUT_MS,
+    };
+  }
+}
 
 export interface UsePreviewStreamArgs {
   projectSlug: string;
@@ -739,13 +784,19 @@ export function usePreviewStream({
    * survives reconnects so a flaky link doesn't keep retrying RTC.
    */
   const connectRtc = useCallback(
-    (onFail: (reason: string) => void): void => {
+    async (onFail: (reason: string) => void): Promise<void> => {
       if (typeof RTCPeerConnection === "undefined") {
         rtcFailureRef.current = true;
         onFail("RTCPeerConnection unavailable");
         return;
       }
       teardownRtc();
+
+      // Fetch the env-configured ICE servers + connect timeout. A
+      // failed fetch falls back to public Google STUN + 5 s default,
+      // so the user-facing path is always live.
+      const cfg = await fetchRtcConfig();
+
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
       const wsUrl =
         `${proto}//${window.location.host}${BASE_PATH}/ws/preview-rtc/` +
@@ -761,7 +812,7 @@ export function usePreviewStream({
       }
       rtcSignalingWsRef.current = sigWs;
 
-      const pc = new RTCPeerConnection({ iceServers: RTC_ICE_SERVERS });
+      const pc = new RTCPeerConnection({ iceServers: cfg.iceServers });
       rtcPcRef.current = pc;
       const remote = new MediaStream();
 
@@ -771,13 +822,13 @@ export function usePreviewStream({
         onFail(reason);
       };
 
-      // Connection-state watchdog: 5 s to reach "connected", else fall
-      // back to MSE.
+      // Connection-state watchdog: env-configurable timeout to reach
+      // "connected", else fall back to MSE.
       rtcConnectTimerRef.current = setTimeout(() => {
         if (pc.connectionState !== "connected") {
           giveUp(`rtc connect timeout (state=${pc.connectionState})`);
         }
-      }, RTC_CONNECT_TIMEOUT_MS);
+      }, cfg.connectTimeoutMs);
 
       pc.ontrack = (evt) => {
         for (const track of evt.streams[0]?.getTracks() ?? [evt.track]) {
@@ -926,16 +977,15 @@ export function usePreviewStream({
     setStatus("connecting");
 
     // Phase 4 (#130): try the WebRTC transport first. On any fatal
-    // failure connectRtc flips rtcFailureRef and synchronously calls
-    // back here, which re-enters connect() to take the MSE path. The
-    // sticky flag survives reconnects so the second attempt skips
-    // straight past this branch.
+    // failure connectRtc flips rtcFailureRef and calls back here,
+    // which re-enters connect() to take the MSE path. The sticky flag
+    // survives reconnects so the second attempt skips straight past
+    // this branch.
     if (!rtcFailureRef.current) {
-      connectRtc((reason) => {
+      void connectRtc((reason) => {
         setLastError(`RTC fallback: ${reason}`);
         setTransport("mse");
-        // Re-enter connect synchronously (microtask deferred to avoid
-        // a render cascade) so we hit the MSE path on the next tick.
+        // Re-enter connect via microtask to avoid a render cascade.
         queueMicrotask(() => {
           if (intentionalCloseRef.current) return;
           connectRef.current();

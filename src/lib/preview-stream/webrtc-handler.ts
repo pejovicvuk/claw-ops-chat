@@ -9,6 +9,7 @@ import {
   type RtcRole,
 } from "./webrtc-signaling";
 import { issueWsTicket } from "../ws-ticket-store";
+import { getIceServers } from "./webrtc-config";
 
 /**
  * Phase 4 (#130): WebSocket handler for `/ws/preview-rtc/...`. Pairs a
@@ -71,6 +72,10 @@ function buildControllerUrl(
   room: string,
   ticket: string,
 ): string {
+  // Thread iceServers through the URL so the incognito controller
+  // doesn't have to re-authenticate to fetch /api/preview/rtc-config.
+  // Source of truth lives in webrtc-config.ts (env-driven).
+  const iceServers = JSON.stringify(getIceServers());
   const params = new URLSearchParams({
     port: String(route.port),
     project: route.projectSlug,
@@ -81,6 +86,7 @@ function buildControllerUrl(
     // gives it one-shot WS auth — consumed when the controller's WS
     // connection upgrades; expires after 60 s otherwise.
     ticket,
+    iceServers,
   });
   return `http://127.0.0.1:${selfPort}/chat/preview-controller?${params.toString()}`;
 }

@@ -35,9 +35,30 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
 
-const ICE_SERVERS: RTCIceServer[] = [
+/**
+ * Fallback ICE servers used only if the URL-encoded config from the
+ * server is missing or malformed. The handler reads
+ * `webrtc-config.ts` and threads iceServers through `?iceServers=...`
+ * (URL-encoded JSON) so the incognito controller doesn't need to
+ * re-authenticate to fetch the config.
+ */
+const FALLBACK_ICE_SERVERS: RTCIceServer[] = [
   { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
 ];
+
+function parseIceServersFromUrl(params: URLSearchParams): RTCIceServer[] {
+  const raw = params.get("iceServers");
+  if (!raw) return FALLBACK_ICE_SERVERS;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      return FALLBACK_ICE_SERVERS;
+    }
+    return parsed as RTCIceServer[];
+  } catch {
+    return FALLBACK_ICE_SERVERS;
+  }
+}
 
 interface InputFrame {
   type: "mouse" | "wheel" | "key" | "touch" | "navigate" | "reload" | "resize" | "clipboard_paste";
@@ -148,7 +169,11 @@ export default function PreviewControllerPage(): ReactElement {
       }
 
       // Step 2: RTCPeerConnection + tracks + data channels.
-      pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+      // ICE servers were threaded into the URL by the server (which
+      // read webrtc-config.ts), so an operator can swap TURN providers
+      // by setting env vars without a redeploy.
+      const iceServers = parseIceServersFromUrl(params);
+      pc = new RTCPeerConnection({ iceServers });
       for (const track of mediaStream.getTracks()) {
         pc.addTrack(track, mediaStream);
       }

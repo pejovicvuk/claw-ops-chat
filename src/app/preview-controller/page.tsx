@@ -72,7 +72,12 @@ interface InputFrame {
     | "clipboard_paste"
     | "go_back"
     | "go_forward"
-    | "set_zoom";
+    | "set_zoom"
+    | "find_open"
+    | "find_query"
+    | "find_next"
+    | "find_prev"
+    | "find_close";
   [key: string]: unknown;
 }
 
@@ -264,6 +269,29 @@ export default function PreviewControllerPage(): ReactElement {
           // history.back()" otherwise.
           if (frame.type === "go_back") pendingNavType = "back";
           else if (frame.type === "go_forward") pendingNavType = "forward";
+          // Phase 5c (#133): find_* runs the in-page controller and
+          // emits find_state back over the same data channel. Handled
+          // here (not in dispatchInputToIframe) because we need
+          // sendCtrl in scope.
+          if (
+            frame.type === "find_open" ||
+            frame.type === "find_query" ||
+            frame.type === "find_next" ||
+            frame.type === "find_prev" ||
+            frame.type === "find_close"
+          ) {
+            const result = runFindOnIframe(iframeRef.current, frame);
+            sendCtrl({
+              type: "find_state",
+              query:
+                frame.type === "find_open" || frame.type === "find_query"
+                  ? String(frame.query ?? "").trim()
+                  : "",
+              count: result.count,
+              currentIndex: result.currentIndex,
+            });
+            return;
+          }
           dispatchInputToIframe(iframeRef.current, frame);
         } catch {
           /* drop malformed frames */
@@ -439,6 +467,183 @@ export default function PreviewControllerPage(): ReactElement {
  * reverse proxy to make `localhost:<port>` reachable from the same
  * origin as the controller page.
  */
+/**
+ * Phase 5c (#133): RTC parity for find. Injects the in-page find
+ * controller (idempotent — bails early on re-run) into the iframe
+ * window, then dispatches the requested method. Returns the same
+ * `{count, currentIndex}` shape the server-side path emits, so the
+ * viewer hook can apply identical logic regardless of transport.
+ */
+function runFindOnIframe(
+  iframe: HTMLIFrameElement | null,
+  frame: InputFrame,
+): { count: number; currentIndex: number } {
+  if (!iframe) return { count: 0, currentIndex: -1 };
+  const win = iframe.contentWindow as
+    | (Window & {
+        __clawFind?: {
+          open: (q: string) => { count: number; currentIndex: number };
+          next: () => { count: number; currentIndex: number };
+          prev: () => { count: number; currentIndex: number };
+          close: () => { count: number; currentIndex: number };
+        };
+        eval?: (src: string) => unknown;
+      })
+    | null;
+  if (!win) return { count: 0, currentIndex: -1 };
+  try {
+    if (!win.__clawFind && typeof win.eval === "function") {
+      // Same source as the server's `buildFindScript()` — duplicated
+      // here as a string constant so the controller bundle doesn't
+      // pull in the server module. Keep these two in sync.
+      win.eval(FIND_CONTROLLER_SOURCE);
+    }
+    const ctrl = win.__clawFind;
+    if (!ctrl) return { count: 0, currentIndex: -1 };
+    if (frame.type === "find_open" || frame.type === "find_query") {
+      return ctrl.open(String(frame.query ?? "").trim());
+    }
+    if (frame.type === "find_next") return ctrl.next();
+    if (frame.type === "find_prev") return ctrl.prev();
+    return ctrl.close();
+  } catch {
+    return { count: 0, currentIndex: -1 };
+  }
+}
+
+/**
+ * Phase 5c (#133): inline copy of the find-controller IIFE. MUST stay
+ * in sync with `src/lib/preview-stream/find-in-page.ts` — the
+ * controller bundle can't import that module (it's server-only) so we
+ * duplicate the source string. The IIFE is idempotent.
+ */
+const FIND_CONTROLLER_SOURCE = `
+(() => {
+  if (window.__clawFind) return;
+  const HIT_CLASS = "claw-find-hit";
+  const CURRENT_ATTR = "data-claw-find-current";
+  const STYLE_ID = "__claw-find-style";
+  const ensureStyle = () => {
+    if (document.getElementById(STYLE_ID)) return;
+    const s = document.createElement("style");
+    s.id = STYLE_ID;
+    s.textContent = "." + HIT_CLASS + " { background: #fef08a; color: inherit; padding: 0; }" +
+      " ." + HIT_CLASS + "[" + CURRENT_ATTR + "] { background: #fb923c; }";
+    document.head.appendChild(s);
+  };
+  const SKIP_TAGS = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "MARK"]);
+  const isVisible = (el) => {
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      const cs = cur.ownerDocument && cur.ownerDocument.defaultView
+        ? cur.ownerDocument.defaultView.getComputedStyle(cur) : null;
+      if (cs && (cs.display === "none" || cs.visibility === "hidden" || Number(cs.opacity || "1") === 0)) return false;
+      cur = cur.parentElement;
+    }
+    return true;
+  };
+  const collect = (root) => {
+    const out = [];
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        const p = n.parentElement;
+        if (!p) return NodeFilter.FILTER_REJECT;
+        if (SKIP_TAGS.has(p.tagName)) return NodeFilter.FILTER_REJECT;
+        if (p.closest && p.closest("[contenteditable='true'],[contenteditable='']")) return NodeFilter.FILTER_REJECT;
+        if (p.classList && p.classList.contains(HIT_CLASS)) return NodeFilter.FILTER_REJECT;
+        if (!isVisible(p)) return NodeFilter.FILTER_REJECT;
+        if (!n.nodeValue) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
+    let n = w.nextNode();
+    while (n) { out.push(n); n = w.nextNode(); }
+    return out;
+  };
+  let hits = [], currentIndex = -1, activeQuery = "";
+  const clearAll = () => {
+    for (const m of Array.from(document.querySelectorAll("mark." + HIT_CLASS))) {
+      const p = m.parentNode; if (!p) continue;
+      p.replaceChild(document.createTextNode(m.textContent || ""), m);
+    }
+    hits = []; currentIndex = -1; activeQuery = "";
+  };
+  const wrap = (q) => {
+    const lc = q.toLowerCase(), len = lc.length;
+    if (!len) return [];
+    const out = [];
+    for (const node of collect(document.body || document.documentElement)) {
+      const text = node.nodeValue || "";
+      const tlc = text.toLowerCase();
+      const ranges = [];
+      let from = 0;
+      while (from < text.length) {
+        const i = tlc.indexOf(lc, from);
+        if (i < 0) break;
+        ranges.push([i, i + len]); from = i + len;
+      }
+      if (!ranges.length) continue;
+      const parent = node.parentNode; if (!parent) continue;
+      let cursor = text.length;
+      const frag = document.createDocumentFragment();
+      const got = [];
+      for (let i = ranges.length - 1; i >= 0; i--) {
+        const [s, e] = ranges[i];
+        const after = text.slice(e, cursor);
+        if (after) frag.insertBefore(document.createTextNode(after), frag.firstChild);
+        const m = document.createElement("mark");
+        m.className = HIT_CLASS;
+        m.textContent = text.slice(s, e);
+        frag.insertBefore(m, frag.firstChild);
+        got.unshift(m);
+        cursor = s;
+      }
+      const head = text.slice(0, cursor);
+      if (head) frag.insertBefore(document.createTextNode(head), frag.firstChild);
+      parent.replaceChild(frag, node);
+      out.push(...got);
+    }
+    return out;
+  };
+  const setCur = (i) => {
+    for (const m of hits) m.removeAttribute(CURRENT_ATTR);
+    if (i >= 0 && i < hits.length) {
+      hits[i].setAttribute(CURRENT_ATTR, "1");
+      try { hits[i].scrollIntoView({ block: "center", inline: "nearest", behavior: "auto" }); } catch (_) {}
+      currentIndex = i;
+    } else { currentIndex = -1; }
+  };
+  window.__clawFind = {
+    open(query) {
+      ensureStyle();
+      const q = (query || "").toLowerCase();
+      if (q !== activeQuery) {
+        clearAll(); activeQuery = q;
+        hits = q ? wrap(query) : [];
+      }
+      setCur(hits.length > 0 ? 0 : -1);
+      return { count: hits.length, currentIndex };
+    },
+    next() {
+      if (!hits.length) return { count: 0, currentIndex: -1 };
+      setCur((currentIndex + 1) % hits.length);
+      return { count: hits.length, currentIndex };
+    },
+    prev() {
+      if (!hits.length) return { count: 0, currentIndex: -1 };
+      setCur((currentIndex - 1 + hits.length) % hits.length);
+      return { count: hits.length, currentIndex };
+    },
+    close() {
+      clearAll();
+      const s = document.getElementById(STYLE_ID);
+      if (s && s.parentNode) s.parentNode.removeChild(s);
+      return { count: 0, currentIndex: -1 };
+    },
+  };
+})();
+`;
+
 function dispatchInputToIframe(iframe: HTMLIFrameElement | null, frame: InputFrame): void {
   if (!iframe) return;
   const win = iframe.contentWindow;

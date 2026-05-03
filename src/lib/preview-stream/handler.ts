@@ -44,6 +44,7 @@ import {
   type WheelEvent,
 } from "./input-forward";
 import { HistoryStateDeduper, computeHistoryState, type NavigationHistory } from "./history-state";
+import { buildFindScript, normalizeQuery } from "./find-in-page";
 
 /**
  * WebSocket handler for `/ws/preview-stream/<projectSlug>/<itemSlug>/<port>`.
@@ -1083,6 +1084,67 @@ async function dispatchClientFrame(
           await rawSend("Emulation.setPageScaleFactor", { pageScaleFactor: factor });
         } catch {
           /* CDP errors non-fatal — zoom is best-effort */
+        }
+        return;
+      }
+      case "find_open":
+      case "find_query":
+      case "find_next":
+      case "find_prev":
+      case "find_close": {
+        // Phase 5c (#133): in-page find. The injected script is
+        // idempotent so we can call it on every find_* without paying
+        // the install cost twice — the IIFE early-returns if
+        // window.__clawFind already exists.
+        try {
+          await page.evaluate(buildFindScript());
+          const action = frame.type;
+          const rawQuery =
+            action === "find_open" || action === "find_query"
+              ? normalizeQuery(String((frame as { query?: unknown }).query ?? ""))
+              : "";
+          const result = (await page.evaluate(
+            ({ method, query }: { method: string; query: string }) => {
+              const ctrl = (
+                window as unknown as {
+                  __clawFind?: {
+                    open: (q: string) => { count: number; currentIndex: number };
+                    next: () => { count: number; currentIndex: number };
+                    prev: () => { count: number; currentIndex: number };
+                    close: () => { count: number; currentIndex: number };
+                  };
+                }
+              ).__clawFind;
+              if (!ctrl) return { count: 0, currentIndex: -1 };
+              if (method === "open" || method === "query") return ctrl.open(query);
+              if (method === "next") return ctrl.next();
+              if (method === "prev") return ctrl.prev();
+              return ctrl.close();
+            },
+            {
+              method:
+                action === "find_open"
+                  ? "open"
+                  : action === "find_query"
+                    ? "query"
+                    : action === "find_next"
+                      ? "next"
+                      : action === "find_prev"
+                        ? "prev"
+                        : "close",
+              query: rawQuery,
+            },
+          )) as { count: number; currentIndex: number };
+          sendJson({
+            type: "find_state",
+            query: rawQuery,
+            count: result.count,
+            currentIndex: result.currentIndex,
+          });
+        } catch {
+          /* find is best-effort — a transient evaluate failure shouldn't
+             kill the stream. The client still sees its own optimistic
+             findState until the next server frame. */
         }
         return;
       }

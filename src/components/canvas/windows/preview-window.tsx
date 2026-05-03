@@ -14,6 +14,7 @@ import {
   FiSquare,
   FiVolume2,
   FiVolumeX,
+  FiX,
 } from "react-icons/fi";
 import type { WindowDescriptor } from "../canvas-types";
 import { ItemContext } from "../item-context";
@@ -448,6 +449,21 @@ function PreviewWindowBody({
             </p>
           </div>
         )}
+        {/* Phase 5c (#133): floating find-in-page bar. Top-right
+            position matches the standard Chrome chrome. Stays above
+            drag overlays + start gates via z-20. Pointer events are
+            on (this is interactive UI, not a HUD). */}
+        {stream.findState.open && (
+          <FindBar
+            query={stream.findState.query}
+            count={stream.findState.count}
+            currentIndex={stream.findState.currentIndex}
+            onQuery={stream.findQuery}
+            onNext={stream.findNext}
+            onPrev={stream.findPrev}
+            onClose={stream.findClose}
+          />
+        )}
         {!isRunning && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas-bg/95 px-6 text-center">
             {status === "starting" ? (
@@ -540,5 +556,101 @@ function StatusDot({ status }: { status: "idle" | "starting" | "running" | "stop
       title={status}
       className={`inline-block h-2 w-2 rounded-full ${color} ${pulse ? "animate-pulse" : ""}`}
     />
+  );
+}
+
+/**
+ * Phase 5c (#133): floating find-in-page bar. Style matches the
+ * Chrome chrome — top-right, light surface, count chip, prev/next
+ * arrows, close button. The input is auto-focused on mount; Enter
+ * advances, Shift+Enter retreats, Esc closes.
+ */
+function FindBar({
+  query,
+  count,
+  currentIndex,
+  onQuery,
+  onNext,
+  onPrev,
+  onClose,
+}: {
+  query: string;
+  count: number;
+  currentIndex: number;
+  onQuery: (q: string) => void;
+  onNext: () => void;
+  onPrev: () => void;
+  onClose: () => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+  const noMatches = query.length > 0 && count === 0;
+  return (
+    <div
+      role="search"
+      aria-label="Find in page"
+      className="absolute right-2 top-2 z-20 flex h-8 items-center gap-1 rounded border border-canvas-border bg-canvas-surface px-1.5 shadow-md"
+      onMouseDown={(e) => e.stopPropagation()}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <input
+        ref={inputRef}
+        type="text"
+        value={query}
+        placeholder="Find"
+        onChange={(e) => onQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (e.shiftKey) onPrev();
+            else onNext();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            onClose();
+          }
+        }}
+        aria-label="Search query"
+        className={`h-6 w-40 rounded border bg-canvas-bg px-1.5 font-mono text-[12px] focus:outline-none ${
+          noMatches
+            ? "border-red-400 text-red-500 focus:border-red-500"
+            : "border-canvas-border text-canvas-fg focus:border-accent"
+        }`}
+      />
+      <span className="select-none px-1 font-mono text-[11px] text-canvas-muted" aria-live="polite">
+        {count === 0 ? "0/0" : `${currentIndex + 1}/${count}`}
+      </span>
+      <button
+        type="button"
+        onClick={onPrev}
+        disabled={count === 0}
+        title="Previous match (Shift+Enter)"
+        aria-label="Previous match"
+        className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+      >
+        <FiChevronUp size={12} />
+      </button>
+      <button
+        type="button"
+        onClick={onNext}
+        disabled={count === 0}
+        title="Next match (Enter)"
+        aria-label="Next match"
+        className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+      >
+        <FiChevronDown size={12} />
+      </button>
+      <button
+        type="button"
+        onClick={onClose}
+        title="Close (Esc)"
+        aria-label="Close find"
+        className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+      >
+        <FiX size={12} />
+      </button>
+    </div>
   );
 }

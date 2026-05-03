@@ -46,6 +46,7 @@ const retention_1 = require("./src/lib/audit/retention");
 const unfurl_cache_1 = require("./src/lib/proxy/unfurl-cache");
 const image_cache_1 = require("./src/lib/proxy/image-cache");
 const file_drop_1 = require("./src/lib/preview-stream/file-drop");
+const download_relay_1 = require("./src/lib/preview-stream/download-relay");
 const google_custom_config_1 = require("./src/lib/google-custom-config");
 const api_wrap_1 = require("./src/lib/audit/api-wrap");
 const http_forward_1 = require("./src/lib/preview-proxy/http-forward");
@@ -2210,6 +2211,24 @@ globalThis.__clawListSessionBranches = () => sessionManager.listBranchSnapshots(
     }
     catch (err) {
         console.warn(`!! Could not initialize file-drop sweeper: ${err.message}`);
+    }
+})();
+// Phase 3d (#129): preview download relay temp dir at
+// /root/.cache/preview-downloads/. Per-entry timers unlink files 5 min
+// after register / GET completion; this cron is the safety net for
+// orphans from crashed processes.
+(async () => {
+    try {
+        await (0, download_relay_1.sweepStaleDownloads)();
+        node_cron_1.default.schedule("*/5 * * * *", () => {
+            (0, download_relay_1.sweepStaleDownloads)().catch((err) => {
+                console.warn(`[preview] download sweeper failed: ${err.message}`);
+            });
+        }, { timezone: "UTC" });
+        console.log(`> Preview download sweeper scheduled (every 5 min, 5 min TTL)`);
+    }
+    catch (err) {
+        console.warn(`!! Could not initialize download sweeper: ${err.message}`);
     }
 })();
 app.prepare().then(() => {

@@ -184,6 +184,50 @@ interface FileDropErrorFrame {
   code: string;
   message: string;
 }
+// Phase 3d (#129): server → client download-relay frames.
+interface DownloadReadyFrame {
+  type: "download_ready";
+  id: string;
+  filename: string;
+  size: number;
+}
+interface DownloadRejectedFrame {
+  type: "download_rejected";
+  reason: "too_large" | "disk_pressure" | "too_many";
+  filename: string;
+}
+interface DownloadFailedFrame {
+  type: "download_failed";
+  id: string;
+  message: string;
+}
+
+// Phase 3d (#129): MUST stay in sync with the route at
+// src/app/api/preview-download/[id]/route.ts. Inlined as a string
+// constant rather than imported because that route is server-only
+// and pulls in node:fs.
+const PREVIEW_DOWNLOAD_PREFIX = "/api/preview-download/";
+
+/**
+ * Programmatically click a hidden `<a download>` to trigger the user's
+ * browser native download UI. Same-origin attachment + Content-Disposition
+ * means there's no autoplay-style restriction; the link works the same
+ * as if the user had clicked a real download link.
+ */
+function triggerNativeDownload(id: string, filename: string): void {
+  if (typeof document === "undefined") return;
+  const a = document.createElement("a");
+  a.href = `${BASE_PATH}${PREVIEW_DOWNLOAD_PREFIX}${encodeURIComponent(id)}`;
+  a.download = filename;
+  a.style.display = "none";
+  document.body.appendChild(a);
+  a.click();
+  // Remove on the next tick — leaving it in the DOM doesn't hurt but
+  // clutters the inspector.
+  setTimeout(() => {
+    if (a.parentNode) a.parentNode.removeChild(a);
+  }, 0);
+}
 
 export function usePreviewStream({
   projectSlug,
@@ -462,6 +506,9 @@ export function usePreviewStream({
           | UrlChangedFrame
           | ClipboardCopyFrame
           | FileDropAckFrame
+          | DownloadReadyFrame
+          | DownloadRejectedFrame
+          | DownloadFailedFrame
           | FileDropDoneFrame
           | FileDropErrorFrame;
         try {
@@ -500,6 +547,24 @@ export function usePreviewStream({
         } else if (parsed.type === "url_changed") {
           const u = parsed as UrlChangedFrame;
           setCurrentPath(u.path);
+        } else if (parsed.type === "download_ready") {
+          // Phase 3d (#129): the previewed page completed a download.
+          // Auto-trigger the user's native download UI via a hidden
+          // <a download>. The user already initiated this in the
+          // preview, so going straight to the OS save dialog matches
+          // the symmetry with Phase 3c's auto-upload-on-drop UX.
+          triggerNativeDownload(parsed.id, parsed.filename);
+          toast.success(`Downloaded: ${parsed.filename}`);
+        } else if (parsed.type === "download_rejected") {
+          const reasonLabel =
+            parsed.reason === "too_large"
+              ? "too large (max 500 MB)"
+              : parsed.reason === "disk_pressure"
+                ? "server out of disk space"
+                : "too many concurrent downloads";
+          toast.error(`Download rejected: ${parsed.filename} — ${reasonLabel}`);
+        } else if (parsed.type === "download_failed") {
+          toast.error(`Download failed: ${parsed.message ?? "unknown"}`);
         } else if (parsed.type === "file_drop_done") {
           // Phase 3c (#128): server confirms the upload landed in the
           // page. Show a brief success toast so the user knows the

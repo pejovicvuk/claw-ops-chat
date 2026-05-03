@@ -20,6 +20,7 @@ import { ItemContext } from "../item-context";
 import { useDevServer } from "@/lib/dev-server/use-dev-server";
 import { frameworkLabel } from "@/lib/dev-server/framework-label";
 import { usePreviewStream } from "@/lib/preview-stream/use-preview-stream";
+import { ZOOM_DEFAULT, clampZoom, formatZoomPercent } from "@/lib/preview-stream/zoom-steps";
 
 interface PreviewWindowProps {
   descriptor: WindowDescriptor;
@@ -31,6 +32,8 @@ interface PreviewWindowProps {
   onQualityChange: (quality: "performance" | "balanced" | "quality") => void;
   /** Phase 3a (#126): persist the user's mute preference. */
   onMutedChange: (muted: boolean) => void;
+  /** Phase 5b (#132): persist the user's zoom factor (1.0 = 100%). */
+  onZoomChange: (zoom: number) => void;
 }
 
 /**
@@ -58,19 +61,22 @@ export function PreviewWindow({
   onPathChange,
   onQualityChange,
   onMutedChange,
+  onZoomChange,
 }: PreviewWindowProps) {
   if (descriptor.state.kind !== "preview") return null;
-  const { port, path, quality, muted } = descriptor.state;
+  const { port, path, quality, muted, zoom } = descriptor.state;
   return (
     <PreviewWindowBody
       port={port}
       path={path ?? "/"}
       quality={quality ?? "balanced"}
       muted={muted ?? true}
+      zoom={clampZoom(zoom ?? ZOOM_DEFAULT)}
       onPortChange={onPortChange}
       onPathChange={onPathChange}
       onQualityChange={onQualityChange}
       onMutedChange={onMutedChange}
+      onZoomChange={onZoomChange}
     />
   );
 }
@@ -80,19 +86,23 @@ function PreviewWindowBody({
   path,
   quality,
   muted,
+  zoom,
   onPortChange,
   onPathChange,
   onQualityChange,
   onMutedChange,
+  onZoomChange,
 }: {
   port: number;
   path: string;
   quality: "performance" | "balanced" | "quality";
   muted: boolean;
+  zoom: number;
   onPortChange: (port: number) => void;
   onPathChange: (path: string) => void;
   onQualityChange: (quality: "performance" | "balanced" | "quality") => void;
   onMutedChange: (muted: boolean) => void;
+  onZoomChange: (zoom: number) => void;
 }) {
   const item = useContext(ItemContext);
   const projectSlug = item?.projectSlug ?? "";
@@ -116,6 +126,8 @@ function PreviewWindowBody({
     enabled: isRunning,
     quality,
     muted,
+    zoom,
+    onZoomChange,
   });
 
   const [draftPort, setDraftPort] = useState(String(port));
@@ -339,6 +351,22 @@ function PreviewWindowBody({
           <option value="balanced">Med</option>
           <option value="quality">High</option>
         </select>
+
+        {/* Phase 5b (#132): zoom indicator — clickable to reset to 100%.
+            Hidden at the default zoom to keep the toolbar quiet; only
+            appears once the user has zoomed in or out. */}
+        {zoom !== ZOOM_DEFAULT && (
+          <button
+            type="button"
+            onClick={() => onZoomChange(ZOOM_DEFAULT)}
+            disabled={!isRunning || stream.status !== "ready"}
+            title={`Zoom: ${formatZoomPercent(zoom)} — click to reset (Ctrl+0)`}
+            aria-label={`Zoom ${formatZoomPercent(zoom)}, click to reset`}
+            className="btn-press flex h-6 items-center rounded border border-canvas-border bg-canvas-bg px-1.5 font-mono text-[11px] text-canvas-fg hover:bg-canvas-surface-hover disabled:opacity-40"
+          >
+            {formatZoomPercent(zoom)}
+          </button>
+        )}
 
         {/* Mute toggle — only shown when the active stream actually
             carries audio (Phase 3a). Defaults to muted because the

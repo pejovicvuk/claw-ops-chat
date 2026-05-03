@@ -370,6 +370,14 @@ export function usePreviewStream({
   const rtcCtrlChannelRef = useRef<RTCDataChannel | null>(null);
   const rtcFileChannelRef = useRef<RTCDataChannel | null>(null);
   const rtcConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Phase 4 hardening: when the peer connection first goes
+  // `failed`/`disconnected` (laptop sleep, VPN toggle, transient
+  // packet loss), trigger one ICE restart before sticky-failing.
+  // restartIce() forces a fresh candidate gather + answer exchange,
+  // which recovers most network blips without the user ever noticing
+  // a fallback to MSE. Stays at the connection scope — survives
+  // across renegotiation, resets when the socket dies entirely.
+  const rtcIceRestartedRef = useRef(false);
 
   // MSE state. Lifecycle is per-WS-connection — `setupMse()` runs on
   // open, `teardownMse()` on close. The append queue drains via the
@@ -758,6 +766,7 @@ export function usePreviewStream({
         /* ignore */
       }
     }
+    rtcIceRestartedRef.current = false;
     setRemoteStream(null);
   }, []);
 
@@ -882,6 +891,10 @@ export function usePreviewStream({
             clearTimeout(rtcConnectTimerRef.current);
             rtcConnectTimerRef.current = null;
           }
+          // A successful connect/reconnect resets the restart budget
+          // — if the next blip happens after stable streaming we want
+          // to try restartIce() again before giving up.
+          rtcIceRestartedRef.current = false;
           setMode("video-rtc");
           setTransport("rtc");
           setStatus("ready");
@@ -895,11 +908,33 @@ export function usePreviewStream({
               /* autoplay block — silent retry on first click */
             });
           }
-        } else if (
-          pc.connectionState === "failed" ||
-          pc.connectionState === "disconnected" ||
-          pc.connectionState === "closed"
-        ) {
+        } else if (pc.connectionState === "failed" || pc.connectionState === "disconnected") {
+          if (rtcFailureRef.current) return;
+          // Phase 4 hardening: try one ICE restart before sticky-
+          // failing. Recovers laptop-sleep / VPN-toggle / transient
+          // packet-loss blips without dropping the user back to MSE.
+          if (!rtcIceRestartedRef.current && pc.signalingState === "stable") {
+            rtcIceRestartedRef.current = true;
+            // Re-arm the connect-timeout watchdog for the recovery
+            // window. cfg.connectTimeoutMs is in scope from the
+            // top of connectRtc.
+            if (rtcConnectTimerRef.current) {
+              clearTimeout(rtcConnectTimerRef.current);
+            }
+            rtcConnectTimerRef.current = setTimeout(() => {
+              if (pc.connectionState !== "connected") {
+                giveUp(`rtc connect timeout after restart (state=${pc.connectionState})`);
+              }
+            }, cfg.connectTimeoutMs);
+            try {
+              pc.restartIce();
+            } catch {
+              giveUp("rtc restartIce failed");
+            }
+            return;
+          }
+          giveUp(`rtc peer state=${pc.connectionState}`);
+        } else if (pc.connectionState === "closed") {
           if (!rtcFailureRef.current) {
             giveUp(`rtc peer state=${pc.connectionState}`);
           }

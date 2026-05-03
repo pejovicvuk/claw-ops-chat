@@ -22,6 +22,7 @@ import { SectionGrid } from "../primitives/section-grid";
 import { Sparkline } from "../primitives/sparkline";
 import { StatusBadge } from "../primitives/status-badge";
 import { DockerContainerDrawer } from "./docker-container-drawer";
+import { DockerPrunePanel } from "./docker-prune-panel";
 
 export function DockerSection() {
   const { refreshMs, paused, panel, setPanel } = useMonContext();
@@ -96,6 +97,9 @@ export function DockerSection() {
           </label>
         </div>
       </div>
+
+      {/* Disk cleanup (auto-prune + manual button) */}
+      <DockerPrunePanel />
 
       {/* Aggregates */}
       <SectionGrid minCardWidth={180}>

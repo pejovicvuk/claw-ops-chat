@@ -90,6 +90,13 @@ describe("handlePreviewRtc viewer flow", () => {
     expect(String(opts.targetUrl)).toContain(`http://127.0.0.1:3100`);
   });
 
+  it("includes a one-shot WS ticket in the controller URL so its incognito WS can authenticate", async () => {
+    const ws = fakeWs();
+    await handlePreviewRtc(ws as unknown as WebSocket, "user@x", route, ctx, "viewer");
+    const opts = acquirePageSpy.mock.calls[0][1];
+    expect(String(opts.targetUrl)).toMatch(/[?&]ticket=[0-9a-f-]{36}/);
+  });
+
   it("does NOT re-spawn when the controller has already attached", async () => {
     const viewer = fakeWs();
     const controller = fakeWs();

@@ -8,6 +8,7 @@ import {
   type SignalFrame,
   type RtcRole,
 } from "./webrtc-signaling";
+import { issueWsTicket } from "../ws-ticket-store";
 
 /**
  * Phase 4 (#130): WebSocket handler for `/ws/preview-rtc/...`. Pairs a
@@ -64,12 +65,22 @@ function buildKey(actorEmail: string, route: WebRtcRoute): string {
   return `${actorEmail}|${route.projectSlug}|${route.itemSlug}|${route.port}`;
 }
 
-function buildControllerUrl(selfPort: number, route: WebRtcRoute, room: string): string {
+function buildControllerUrl(
+  selfPort: number,
+  route: WebRtcRoute,
+  room: string,
+  ticket: string,
+): string {
   const params = new URLSearchParams({
     port: String(route.port),
     project: route.projectSlug,
     item: route.itemSlug,
     room,
+    // Phase 4 (#130) hardening: the controller page runs in an
+    // incognito Chromium context with no session cookie. The ticket
+    // gives it one-shot WS auth — consumed when the controller's WS
+    // connection upgrades; expires after 60 s otherwise.
+    ticket,
   });
   return `http://127.0.0.1:${selfPort}/chat/preview-controller?${params.toString()}`;
 }
@@ -182,10 +193,12 @@ export async function handlePreviewRtc(
   });
 
   // Viewer connects first; spin up the controller via Chromium so its
-  // page can connect back as `?role=controller`.
+  // page can connect back as `?role=controller`. Mint a fresh
+  // single-use WS ticket for the controller's incognito context.
   if (role === VIEWER_ROLE && !session.controller && !acquiredPages.has(key)) {
+    const controllerTicket = issueWsTicket(actorEmail);
     const acquirePromise = acquirePage(route.port, {
-      targetUrl: buildControllerUrl(ctx.selfPort, route, key),
+      targetUrl: buildControllerUrl(ctx.selfPort, route, key, controllerTicket),
     });
     acquiredPages.set(key, acquirePromise);
     acquirePromise.catch((err) => {

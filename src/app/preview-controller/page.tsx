@@ -77,11 +77,21 @@ export default function PreviewControllerPage(): ReactElement {
     let mediaStream: MediaStream | null = null;
     let cancelled = false;
 
+    // Phase 4 hardening: the controller runs in an incognito Chromium
+    // context with no session cookie. The handler hands us a one-shot
+    // ticket via the URL; pass it as `?ticket=` so the WS upgrade
+    // handler's `consumeWsTicket` accepts the connection.
+    const ticket = params.get("ticket") ?? "";
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const wsParams = new URLSearchParams({
+      role: "controller",
+      room,
+    });
+    if (ticket) wsParams.set("ticket", ticket);
     const wsUrl =
       `${proto}//${window.location.host}${BASE_PATH}/ws/preview-rtc/` +
       `${encodeURIComponent(project)}/${encodeURIComponent(item)}/${port}` +
-      `?role=controller&room=${encodeURIComponent(room)}`;
+      `?${wsParams.toString()}`;
 
     const sendSignal = (frame: Record<string, unknown>) => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;

@@ -11,6 +11,7 @@ import {
   FiAlertTriangle,
 } from "react-icons/fi";
 import { useClaudeChat } from "@/lib/use-claude-chat";
+import { formatStreamingHint } from "@/lib/format-streaming-hint";
 import type { ChatMessage } from "@/lib/types";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useVisualViewport } from "@/lib/use-visual-viewport";
@@ -288,6 +289,32 @@ export function ChatView({
     }
     prevStatusRef.current = status;
   }, [status]);
+  // Turn-elapsed tracking for the hover tooltip on the live activity
+  // indicator. We snapshot the wall clock when status enters
+  // thinking/tool_running from idle, and clear it when status returns to
+  // idle. The status oscillates between thinking ↔ tool_running within a
+  // single turn (Claude → tool → Claude → tool → …), so we deliberately
+  // do NOT reset the timer on those intermediate transitions — the user
+  // wants total time for "this turn", not the latest leg.
+  const [turnStartedAtMs, setTurnStartedAtMs] = useState<number | null>(null);
+  useEffect(() => {
+    const isActive = status === "thinking" || status === "tool_running";
+    if (isActive && turnStartedAtMs === null) {
+      setTurnStartedAtMs(Date.now());
+    } else if (!isActive && turnStartedAtMs !== null) {
+      setTurnStartedAtMs(null);
+    }
+  }, [status, turnStartedAtMs]);
+  // 1Hz tick while a turn is active so the elapsed string ticks up live
+  // when the user hovers the indicator. Runs only when needed — no
+  // background timer when Claude is idle.
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    if (turnStartedAtMs === null) return;
+    setNowMs(Date.now());
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [turnStartedAtMs]);
   const [infoMessages, setInfoMessages] = useState<
     Array<{ id: string; content: string; timestamp: number }>
   >([]);
@@ -857,12 +884,33 @@ export function ChatView({
                       );
                     })}
                     {(status === "thinking" || status === "tool_running") && (
-                      <div className="animate-msg-in flex items-center gap-2.5 px-5 py-2">
+                      <div className="animate-msg-in group relative flex w-fit items-center gap-2.5 px-5 py-2">
                         <span className="thinking-loader" aria-hidden="true" />
                         <span className="text-accent text-[11px]">
                           {status === "tool_running" && activeTool
                             ? `Running ${activeTool.name}...`
                             : `${thinkingVerb}...`}
+                        </span>
+                        {/*
+                         * Hover tooltip — terminal-style live counter.
+                         * Hidden by default, fades in on group-hover so it
+                         * never competes visually with the indicator
+                         * itself. `pointer-events-none` so it can't
+                         * accidentally swallow clicks on whatever's
+                         * underneath. Lives ABOVE the indicator
+                         * (`bottom-full`) so the cursor isn't blocked by
+                         * the tooltip while hovering the row.
+                         */}
+                        <span
+                          role="tooltip"
+                          aria-hidden="true"
+                          className="pointer-events-none absolute bottom-full left-5 z-10 mb-1 whitespace-nowrap rounded-md border border-canvas-border bg-canvas-surface px-2 py-1 font-mono text-[10px] text-canvas-fg opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100"
+                        >
+                          {formatStreamingHint({
+                            elapsedMs: turnStartedAtMs === null ? 0 : nowMs - turnStartedAtMs,
+                            outputTokens: contextUsage?.outputTokens,
+                            inputTokens: contextUsage?.inputTokens,
+                          })}
                         </span>
                       </div>
                     )}

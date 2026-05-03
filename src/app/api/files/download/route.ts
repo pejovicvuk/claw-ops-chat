@@ -3,18 +3,7 @@ import { basename } from "path";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { safePath, SafePathError } from "@/lib/safe-path";
 import { withAudit } from "@/lib/audit/api-wrap";
-
-/**
- * Encode a filename for Content-Disposition header per RFC 5987.
- * Uses both filename= (ASCII fallback) and filename*= (UTF-8 encoded).
- */
-function contentDisposition(name: string): string {
-  // Strip control characters and quotes for the ASCII fallback
-  const asciiSafe = name.replace(/[^\x20-\x7E]/g, "_").replace(/"/g, '\\"');
-  // RFC 5987 percent-encode for filename*
-  const encoded = encodeURIComponent(name).replace(/'/g, "%27");
-  return `attachment; filename="${asciiSafe}"; filename*=UTF-8''${encoded}`;
-}
+import { contentDisposition } from "@/lib/content-disposition";
 
 async function getHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();

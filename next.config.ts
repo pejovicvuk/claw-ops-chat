@@ -53,6 +53,60 @@ const nextConfig: NextConfig = {
     ],
   },
   headers: async () => [
+    // Phase 4 (#130) preview-controller override — runs INSIDE the
+    // headless Chromium tab; needs to call `getDisplayMedia` and open
+    // a P2P RTCPeerConnection to STUN servers, plus iframe the
+    // localhost dev server (via the same-origin /chat/preview proxy).
+    // Must come BEFORE both /preview/:port* and the catch-all.
+    {
+      source: "/preview-controller",
+      headers: [
+        {
+          key: "Cache-Control",
+          value: "no-store",
+        },
+        {
+          key: "Content-Security-Policy",
+          value: [
+            "default-src 'self'",
+            "script-src 'self' 'unsafe-inline'",
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+            // STUN endpoints need WebRTC's `connect-src`. STUN is UDP
+            // (not http(s)), but Chrome's CSP enforces the host check
+            // on the DNS lookup, hence the explicit allow-list.
+            `connect-src 'self' ws://${chatWsHost} wss://${chatWsHost} ${apiOrigin} stun:stun.l.google.com:19302 stun:stun1.l.google.com:19302`,
+            "img-src * data: blob:",
+            "media-src * data: blob:",
+            "font-src 'self' data: https://fonts.gstatic.com",
+            "worker-src 'self' blob:",
+            "object-src 'none'",
+            "frame-src 'self' http://localhost:* http://127.0.0.1:*",
+            "frame-ancestors 'self'",
+            "base-uri 'self'",
+            "form-action 'self'",
+          ]
+            .join("; ")
+            .concat(";"),
+        },
+        {
+          key: "Permissions-Policy",
+          value:
+            "display-capture=(self), clipboard-read=(self), clipboard-write=(self), autoplay=(self)",
+        },
+        {
+          key: "X-Content-Type-Options",
+          value: "nosniff",
+        },
+        {
+          key: "X-Frame-Options",
+          value: "SAMEORIGIN",
+        },
+        {
+          key: "Referrer-Policy",
+          value: "strict-origin-when-cross-origin",
+        },
+      ],
+    },
     // Preview iframe override — must come BEFORE the catch-all. The chat
     // app embeds dev servers running on localhost in iframes via the
     // /chat/preview/<port>/* reverse proxy. The catch-all sets

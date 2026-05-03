@@ -36,6 +36,32 @@ let browserPromise: Promise<Browser> | null = null;
 let pageCount = 0;
 let idleTimer: NodeJS.Timeout | null = null;
 
+// Phase 4 (#130): WebRTC controller page needs `getDisplayMedia` to
+// succeed in headless mode. The flags below are baked into every
+// launch (not gated on a `prelaunch` call) because the singleton pool
+// is shared between Phase 1-3 and Phase 4 previews — if a Phase-1
+// preview opens first and we'd skipped these flags, the next Phase-4
+// connection would fail forever with NotAllowedError. The flags are
+// inert for Phase 1-3 (those previews don't call getUserMedia /
+// getDisplayMedia at all), so always-on is safe.
+const WEBRTC_LAUNCH_ARGS = [
+  // Auto-grant any media-permission prompt with no UI. Required for
+  // headless because there is no user to click "share". Only the
+  // controller page calls getDisplayMedia; previewed apps that try to
+  // grab the camera still get a denial because no virtual device is
+  // attached.
+  "--use-fake-ui-for-media-stream",
+  // Pre-pick "Current Tab" for getDisplayMedia({preferCurrentTab:true}).
+  "--auto-select-desktop-capture-source=Current Tab",
+  // Enable the modern desktop-capture path. Inert when not used.
+  "--enable-features=DesktopCaptureMacV2",
+];
+
+// Test-compat shim — `extraLaunchArgs` is the legacy slot from the
+// initial Phase 4 commit. New code MUST use WEBRTC_LAUNCH_ARGS above.
+// `prelaunch()` is now a deprecated no-op kept for source compat.
+let extraLaunchArgs: string[] = [];
+
 async function launch(): Promise<Browser> {
   // Phase 3d (#129): consolidate downloads under our bind-mounted
   // cache dir so the HTTP route can find them with one safePath()
@@ -79,8 +105,27 @@ async function launch(): Promise<Browser> {
       // so this only affects what plays *into* the virtual_sink — not
       // what plays out to the user without their consent.
       "--autoplay-policy=no-user-gesture-required",
+      // Phase 4 (#130): always-on WebRTC media flags so the controller
+      // page can call getDisplayMedia regardless of whether this
+      // browser was launched for a Phase-1 or Phase-4 preview first.
+      ...WEBRTC_LAUNCH_ARGS,
+      // Legacy: extraLaunchArgs from the deprecated `prelaunch()`
+      // shim. Prefer WEBRTC_LAUNCH_ARGS above for new flags.
+      ...extraLaunchArgs,
     ],
   });
+}
+
+/**
+ * @deprecated Phase 4 (#130) hardening: WebRTC media flags are now
+ * baked into every launch via `WEBRTC_LAUNCH_ARGS` above, so callers
+ * no longer need to pre-seed flags. Retained as a noop shim so the
+ * existing `server.ts` boot call doesn't break; will be removed in a
+ * future commit.
+ */
+export function prelaunch(args: string[]): void {
+  if (browserPromise) return;
+  extraLaunchArgs = [...args];
 }
 
 async function getBrowser(): Promise<Browser> {
@@ -122,6 +167,17 @@ export interface AcquireOpts {
    * since acquirePage retries are cheap.
    */
   beforeNavigate?: (page: Page, context: BrowserContext) => Promise<void>;
+  /**
+   * Phase 4 (#130): override the default navigation target. When
+   * absent, the page navigates to `http://127.0.0.1:<port>/` (Phase
+   * 1–3 behavior). The WebRTC handler passes the chat server's own
+   * `/chat/preview-controller?port=<n>&...` URL so the controller
+   * page boots inside Chromium instead of the previewed dev server.
+   *
+   * The `port` arg is still consumed for the self-loop guard / pool
+   * accounting even when this override is set.
+   */
+  targetUrl?: string;
 }
 
 /**
@@ -129,10 +185,7 @@ export interface AcquireOpts {
  * to `http://127.0.0.1:<port>`. Throws if the upstream is unreachable
  * — caller should map that to a `502`-ish WS error frame.
  */
-export async function acquirePage(
-  port: number,
-  opts: AcquireOpts = {},
-): Promise<AcquiredPage> {
+export async function acquirePage(port: number, opts: AcquireOpts = {}): Promise<AcquiredPage> {
   const browser = await getBrowser();
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },
@@ -183,8 +236,12 @@ export async function acquirePage(
     }
   }
 
+  // Phase 4 (#130): WebRTC handler passes a `targetUrl` to load the
+  // controller page instead of the dev server directly. Phase 1–3
+  // call sites pass no override and keep the localhost default.
+  const navigationTarget = opts.targetUrl ?? `http://127.0.0.1:${port}/`;
   try {
-    await page.goto(`http://127.0.0.1:${port}/`, {
+    await page.goto(navigationTarget, {
       waitUntil: "domcontentloaded",
       timeout: 10_000,
     });
@@ -250,4 +307,19 @@ export async function close(): Promise<void> {
 /** Test-only: snapshot of internal state. */
 export function _stats(): { pageCount: number; browserOpen: boolean } {
   return { pageCount, browserOpen: browserPromise !== null };
+}
+
+/**
+ * Test-only: tear down all singleton state without going through
+ * Chromium. The vitest suite uses this between cases to start each
+ * test from a known-fresh `prelaunch()` window.
+ */
+export function _resetForTests(): void {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+  browserPromise = null;
+  pageCount = 0;
+  extraLaunchArgs = [];
 }

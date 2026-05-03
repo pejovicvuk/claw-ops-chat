@@ -239,6 +239,77 @@ capped per route (unfurl 2 MB, image 10 MB).
 
 ---
 
+## Preview streaming (dev server in canvas)
+
+Live screencast of a user's local dev server inside a canvas window.
+The chat server spins up a headless Chromium tab, points it at
+`localhost:<port>`, and pipes the rendered output to the user's
+browser. Three transports stack from lowest-latency to most-compatible:
+
+| Transport     | Wire      | Latency | Phase |
+| ------------- | --------- | ------- | ----- |
+| **WebRTC**    | SRTP P2P  | <100 ms | 4     |
+| H.264 / MSE   | WebSocket | ~300 ms | 2     |
+| JPEG / canvas | WebSocket | ~500 ms | 1     |
+
+`use-preview-stream.ts` tries WebRTC first; on any failure (5 s
+connect timeout, peer-connection failed, controller capture_failed,
+or `RTCPeerConnection` unavailable) it flips a sticky failure flag
+and falls through to the H.264/MSE path, then JPEG/canvas as a final
+fallback. Sticky flags survive reconnects so flaky links don't keep
+retrying the higher-level transport.
+
+**Source:** `src/lib/preview-stream/`
+
+### WebRTC (Phase 4 — #130)
+
+Architecture: chat server is signaling-only; media flows P2P via STUN.
+
+```
+Headless Chromium (controller page) ⇄ WebRTC P2P ⇄ User's browser
+                ↘                  ↗
+                   chat server (SDP/ICE relay)
+```
+
+- `src/app/preview-controller/page.tsx` — controller page that runs
+  inside the headless tab. Iframes `/chat/preview/<port>/*` (existing
+  same-origin proxy), calls `getDisplayMedia({preferCurrentTab: true})`,
+  opens an `RTCPeerConnection` with a `ctrl` and `file` data channel.
+- `src/lib/preview-stream/webrtc-signaling.ts` — pure pairing logic.
+  30 s pair timeout, slot-collision rejection, frame relay.
+- `src/lib/preview-stream/webrtc-handler.ts` — WS handler at
+  `/ws/preview-rtc/<project>/<item>/<port>`. Pairs viewer + controller
+  on the same `${actorEmail}|${project}|${item}|${port}` key.
+- `src/lib/preview-stream/chromium-pool.ts` — `prelaunch()` seeds the
+  flags needed for headless `getDisplayMedia` (`--use-fake-ui-for-media-stream`,
+  `--auto-select-desktop-capture-source=Current Tab`, etc.). One-shot,
+  must run before the first `acquirePage`.
+- STUN servers: `stun.l.google.com:19302` (no TURN; defer to a future
+  phase when a user behind asymmetric NAT actually needs it).
+
+**Input + control routing:** when WebRTC is connected, mouse / key /
+wheel / touch / paste / clipboard-copy / file-drop chunks go through
+the data channels for sub-frame click latency. When MSE is active,
+they go over the WebSocket. The hook's `sendJson` helper picks
+transparently — call sites stay identical.
+
+**CSP:** `next.config.ts` has a per-route override for
+`/preview-controller` adding `frame-src http://localhost:* http://127.0.0.1:*`,
+STUN endpoints in `connect-src`, and `Permissions-Policy: display-capture=(self)`.
+
+### H.264 / MSE + JPEG (Phases 1–3)
+
+Server side: `chromium-pool.ts` (singleton browser, lazy launch),
+`cdp-screencast.ts` (CDP `Page.startScreencast`), `h264-encoder.ts`
+(ffmpeg → fragmented MP4), `audio-capture.ts` (Phase 3a Opus mux),
+`clipboard-bridge.ts` (Phase 3b two-way sync), `file-drop.ts` (Phase
+3c chunked uploads), `download-relay.ts` (Phase 3d).
+
+Client side: `use-preview-stream.ts` capability-detects MSE; on
+`SourceBuffer.error` or `appendBuffer` failure, sticky-flips to JPEG.
+
+---
+
 ## Git
 
 Repository operations exposed to the UI. **Read-only** — writes happen via

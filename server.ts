@@ -64,6 +64,7 @@ import {
 } from "./src/lib/preview-proxy/http-forward";
 import { forwardWs } from "./src/lib/preview-proxy/ws-forward";
 import { handlePreviewStream } from "./src/lib/preview-stream/handler";
+import { handlePreviewRtc } from "./src/lib/preview-stream/webrtc-handler";
 import { close as closeChromiumPool } from "./src/lib/preview-stream/chromium-pool";
 import { killAll as killAllDevServers } from "./src/lib/dev-server/manager";
 import { bootstrapMonitoring } from "./src/lib/monitoring/bootstrap";
@@ -2687,8 +2688,24 @@ app.prepare().then(() => {
       /^(?:\/chat)?\/ws\/preview-stream\/([a-z0-9][a-z0-9-]{0,63})\/([a-z0-9][a-z0-9-]{0,63})\/(\d+)$/,
     );
     const isPreviewStreamWs = !!previewStreamMatch;
+    // Phase 4 (#130): /ws/preview-rtc/<projectSlug>/<itemSlug>/<port>
+    // pairs the user's browser (?role=viewer) with the headless
+    // Chromium controller page (?role=controller) and relays SDP/ICE.
+    // Same path shape as preview-stream so the auth/origin/self-loop
+    // checks below stay branchless.
+    const previewRtcMatch = pathname?.match(
+      /^(?:\/chat)?\/ws\/preview-rtc\/([a-z0-9][a-z0-9-]{0,63})\/([a-z0-9][a-z0-9-]{0,63})\/(\d+)$/,
+    );
+    const isPreviewRtcWs = !!previewRtcMatch;
 
-    if (!isChatWs && !isTerminalWs && !isMonitoringWs && !isNotificationsWs && !isPreviewStreamWs) {
+    if (
+      !isChatWs &&
+      !isTerminalWs &&
+      !isMonitoringWs &&
+      !isNotificationsWs &&
+      !isPreviewStreamWs &&
+      !isPreviewRtcWs
+    ) {
       // Pass to Next.js for HMR and other internal WebSockets
       nextUpgradeHandler(req, socket, head);
       return;
@@ -2722,7 +2739,9 @@ app.prepare().then(() => {
           ? "/ws/notifications"
           : isPreviewStreamWs
             ? "/ws/preview-stream"
-            : "/ws/chat";
+            : isPreviewRtcWs
+              ? "/ws/preview-rtc"
+              : "/ws/chat";
     const sessionPayload = extractSessionFromCookieHeader(req.headers.cookie);
     let actorEmail: string;
     if (sessionPayload) {
@@ -2787,6 +2806,41 @@ app.prepare().then(() => {
         ws.on("error", () => notificationClients.delete(ws));
       });
       logWsUpgrade({ route: wsRoute, statusCode: 101, actor: actorEmail }).catch(() => {});
+      return;
+    }
+
+    if (isPreviewRtcWs && previewRtcMatch) {
+      const projectSlug = previewRtcMatch[1];
+      const itemSlug = previewRtcMatch[2];
+      const previewPort = Number(previewRtcMatch[3]);
+      // Same self-loop guard as the preview-stream branch above.
+      if (
+        !Number.isInteger(previewPort) ||
+        previewPort < 1024 ||
+        previewPort > 65535 ||
+        previewPort === port
+      ) {
+        socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+        socket.destroy();
+        return;
+      }
+      const rawRole = qs.role;
+      const roleParam = typeof rawRole === "string" ? rawRole : undefined;
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        void handlePreviewRtc(
+          ws,
+          actorEmail,
+          { projectSlug, itemSlug, port: previewPort },
+          { selfPort: port },
+          roleParam,
+        );
+      });
+      logWsUpgrade({
+        route: wsRoute,
+        statusCode: 101,
+        actor: actorEmail,
+        target: `${projectSlug}/${itemSlug}:${previewPort}:${roleParam ?? "viewer"}`,
+      }).catch(() => {});
       return;
     }
 
@@ -2857,6 +2911,12 @@ app.prepare().then(() => {
       target: sessionId,
     }).catch(() => {});
   });
+
+  // Phase 4 hardening: WebRTC media flags are now always-on in
+  // chromium-pool.launch(); no boot-time prelaunch call needed.
+  // `--allow-running-insecure-content` was dropped — the controller
+  // iframes the dev server via the same-origin /chat/preview/<port>
+  // proxy, so mixed-content blocking never triggers.
 
   server.listen(port, () => {
     console.log(`> Claw Chat ready on http://localhost:${port}`);

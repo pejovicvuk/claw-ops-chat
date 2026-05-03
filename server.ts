@@ -54,6 +54,7 @@ import { purgeOldAuditFiles } from "./src/lib/audit/retention";
 import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
 import { purgeOldImages } from "./src/lib/proxy/image-cache";
 import { sweepStaleDrops } from "./src/lib/preview-stream/file-drop";
+import { sweepStaleDownloads } from "./src/lib/preview-stream/download-relay";
 import { migrateGoogleMcpTier } from "./src/lib/google-custom-config";
 import { logWsUpgrade } from "./src/lib/audit/api-wrap";
 import {
@@ -2591,6 +2592,28 @@ setChatSendHandle({
     console.log(`> Preview file-drop sweeper scheduled (every 5 min, 60 s TTL)`);
   } catch (err) {
     console.warn(`!! Could not initialize file-drop sweeper: ${(err as Error).message}`);
+  }
+})();
+
+// Phase 3d (#129): preview download relay temp dir at
+// /root/.cache/preview-downloads/. Per-entry timers unlink files 5 min
+// after register / GET completion; this cron is the safety net for
+// orphans from crashed processes.
+(async () => {
+  try {
+    await sweepStaleDownloads();
+    cron.schedule(
+      "*/5 * * * *",
+      () => {
+        sweepStaleDownloads().catch((err) => {
+          console.warn(`[preview] download sweeper failed: ${(err as Error).message}`);
+        });
+      },
+      { timezone: "UTC" },
+    );
+    console.log(`> Preview download sweeper scheduled (every 5 min, 5 min TTL)`);
+  } catch (err) {
+    console.warn(`!! Could not initialize download sweeper: ${(err as Error).message}`);
   }
 })();
 

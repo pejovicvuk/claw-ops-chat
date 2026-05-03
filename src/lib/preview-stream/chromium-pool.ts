@@ -36,6 +36,13 @@ let browserPromise: Promise<Browser> | null = null;
 let pageCount = 0;
 let idleTimer: NodeJS.Timeout | null = null;
 
+// Phase 4 (#130): extra Chromium launch flags seeded by `prelaunch()`
+// at server boot. These need to be present on the FIRST launch — once
+// the singleton browser is up, additional flags can't be applied
+// without restarting it. Used to enable `getDisplayMedia` in headless
+// mode for the WebRTC controller page.
+let extraLaunchArgs: string[] = [];
+
 async function launch(): Promise<Browser> {
   // Phase 3d (#129): consolidate downloads under our bind-mounted
   // cache dir so the HTTP route can find them with one safePath()
@@ -79,8 +86,30 @@ async function launch(): Promise<Browser> {
       // so this only affects what plays *into* the virtual_sink — not
       // what plays out to the user without their consent.
       "--autoplay-policy=no-user-gesture-required",
+      // Phase 4 (#130): merged in any extra args seeded by `prelaunch()`
+      // before the first acquirePage. Only honored on first launch —
+      // subsequent calls reuse the existing singleton.
+      ...extraLaunchArgs,
     ],
   });
+}
+
+/**
+ * Phase 4 (#130): seed extra Chromium launch flags that need to be
+ * present on the FIRST launch. Called once from `server.ts` startup
+ * before any `acquirePage`. Calling it after the browser is already
+ * running is a noop — the flags can't be applied retroactively.
+ *
+ * Used to enable `getDisplayMedia({preferCurrentTab: true})` in
+ * headless Chromium for the WebRTC controller page. The required
+ * flag set is undocumented Chrome internals and may drift between
+ * versions; if `getDisplayMedia` returns zero tracks the controller
+ * emits `capture_failed` over signaling and the client falls back
+ * to the MSE pipeline (#130 acceptance criterion 5).
+ */
+export function prelaunch(args: string[]): void {
+  if (browserPromise) return; // already launched — noop
+  extraLaunchArgs = [...args];
 }
 
 async function getBrowser(): Promise<Browser> {
@@ -122,6 +151,17 @@ export interface AcquireOpts {
    * since acquirePage retries are cheap.
    */
   beforeNavigate?: (page: Page, context: BrowserContext) => Promise<void>;
+  /**
+   * Phase 4 (#130): override the default navigation target. When
+   * absent, the page navigates to `http://127.0.0.1:<port>/` (Phase
+   * 1–3 behavior). The WebRTC handler passes the chat server's own
+   * `/chat/preview-controller?port=<n>&...` URL so the controller
+   * page boots inside Chromium instead of the previewed dev server.
+   *
+   * The `port` arg is still consumed for the self-loop guard / pool
+   * accounting even when this override is set.
+   */
+  targetUrl?: string;
 }
 
 /**
@@ -183,8 +223,12 @@ export async function acquirePage(
     }
   }
 
+  // Phase 4 (#130): WebRTC handler passes a `targetUrl` to load the
+  // controller page instead of the dev server directly. Phase 1–3
+  // call sites pass no override and keep the localhost default.
+  const navigationTarget = opts.targetUrl ?? `http://127.0.0.1:${port}/`;
   try {
-    await page.goto(`http://127.0.0.1:${port}/`, {
+    await page.goto(navigationTarget, {
       waitUntil: "domcontentloaded",
       timeout: 10_000,
     });
@@ -250,4 +294,19 @@ export async function close(): Promise<void> {
 /** Test-only: snapshot of internal state. */
 export function _stats(): { pageCount: number; browserOpen: boolean } {
   return { pageCount, browserOpen: browserPromise !== null };
+}
+
+/**
+ * Test-only: tear down all singleton state without going through
+ * Chromium. The vitest suite uses this between cases to start each
+ * test from a known-fresh `prelaunch()` window.
+ */
+export function _resetForTests(): void {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
+  browserPromise = null;
+  pageCount = 0;
+  extraLaunchArgs = [];
 }

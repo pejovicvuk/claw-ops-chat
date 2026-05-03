@@ -17,9 +17,9 @@ import { existsSync } from "fs";
 import { mkdir, readFile, rename, writeFile } from "fs/promises";
 import { dirname } from "path";
 
-import { getAuditWriter } from "@/lib/audit/writer";
-import { getMetricsCollector } from "@/lib/monitoring/singleton";
-import { getDockerodeClient } from "@/lib/monitoring/collectors/docker";
+import { getAuditWriter } from "../audit/writer";
+import { getDockerodeClient } from "./collectors/docker";
+import { getMetricsCollector } from "./singleton";
 
 const STORE_PATH = "/root/.monitoring/docker-prune.json";
 const DEFAULT_INTERVAL_DAYS = 7;
@@ -142,7 +142,7 @@ export async function runDockerPrune(actor: string): Promise<DockerPruneResult> 
   if (!collector || !dockerState) {
     throw new Error("Docker not configured");
   }
-  const cli = (await getDockerodeClient(dockerState)) as DockerodePruneApi | null;
+  const cli = (await getDockerodeClient(dockerState)) as unknown as DockerodePruneApi | null;
   if (!cli) {
     throw new Error("Docker unavailable");
   }

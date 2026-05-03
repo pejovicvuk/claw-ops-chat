@@ -84,6 +84,27 @@ interface FetchedRtcConfig {
   connectTimeoutMs: number;
 }
 
+/**
+ * Phase 4 hardening: fire-and-forget metric beacon. The server tracks
+ * `fallback_to_mse` and `ice_restart` for ops visibility; both happen
+ * in the browser only, so the hook posts to /api/preview/metrics-report
+ * when they occur. Failures are swallowed — observability MUST NOT
+ * affect the user's preview path.
+ */
+function reportMetric(event: "fallback_to_mse" | "ice_restart"): void {
+  try {
+    void fetch(`${BASE_PATH}/api/preview/metrics-report`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch {
+    /* ignore */
+  }
+}
+
 async function fetchRtcConfig(): Promise<FetchedRtcConfig> {
   try {
     const res = await fetch(`${BASE_PATH}/api/preview/rtc-config`, {
@@ -827,6 +848,9 @@ export function usePreviewStream({
 
       const giveUp = (reason: string) => {
         rtcFailureRef.current = true;
+        // Tell the server we're switching to MSE so the operations
+        // dashboard reflects the effective transport mix.
+        reportMetric("fallback_to_mse");
         teardownRtc();
         onFail(reason);
       };
@@ -915,6 +939,7 @@ export function usePreviewStream({
           // packet-loss blips without dropping the user back to MSE.
           if (!rtcIceRestartedRef.current && pc.signalingState === "stable") {
             rtcIceRestartedRef.current = true;
+            reportMetric("ice_restart");
             // Re-arm the connect-timeout watchdog for the recovery
             // window. cfg.connectTimeoutMs is in scope from the
             // top of connectRtc.

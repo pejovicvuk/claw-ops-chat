@@ -10,6 +10,7 @@ import {
 } from "./webrtc-signaling";
 import { issueWsTicket } from "../ws-ticket-store";
 import { getIceServers } from "./webrtc-config";
+import { bump } from "./webrtc-metrics";
 
 /**
  * Phase 4 (#130): WebSocket handler for `/ws/preview-rtc/...`. Pairs a
@@ -203,23 +204,31 @@ export async function handlePreviewRtc(
     !roomsByActor.get(actorEmail)?.has(key) &&
     actorRoomCount(actorEmail) >= MAX_CONCURRENT_RTC_ROOMS_PER_ACTOR
   ) {
+    bump("rate_limited");
     safeClose(ws, 1008, "rate_limited");
     return;
   }
 
   const session = getOrCreateSession(key, () => {
+    bump("pair_timeout");
     teardownSession(key, "pair_timeout", actorEmail);
   });
 
   const attachResult = attachPeer(session, ws, role);
   if (!attachResult.ok) {
     // 1008 = policy violation; tells the client this slot is occupied.
+    bump("slot_taken");
     safeClose(ws, 1008, attachResult.reason ?? "rejected");
     return;
   }
 
   registerPeer(key, ws);
   if (role === VIEWER_ROLE) trackActorRoom(actorEmail, key);
+
+  // Pairing complete = both slots filled exactly once.
+  if (session.controller && session.viewer) {
+    bump("paired");
+  }
 
   ws.on("message", (data) => {
     const text = typeof data === "string" ? data : data.toString();
@@ -237,6 +246,9 @@ export async function handlePreviewRtc(
     }
     if (frame.type === "role") return; // already learned from URL
     relay(session, role, frame);
+    if (frame.type === "capture_failed") {
+      bump("capture_failed");
+    }
     if (frame.type === "bye") {
       teardownSession(key, "bye", actorEmail);
     }
@@ -266,6 +278,7 @@ export async function handlePreviewRtc(
     });
     acquiredPages.set(key, acquirePromise);
     acquirePromise.catch((err) => {
+      bump("controller_spawn_failed");
       acquiredPages.delete(key);
       const message = err instanceof Error ? err.message : "controller_spawn_failed";
       // Push capture_failed onto the viewer slot so the client falls

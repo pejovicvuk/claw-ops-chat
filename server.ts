@@ -53,6 +53,7 @@ import { ensureAuditTree } from "./src/lib/audit/paths";
 import { purgeOldAuditFiles } from "./src/lib/audit/retention";
 import { purgeOldUnfurls } from "./src/lib/proxy/unfurl-cache";
 import { purgeOldImages } from "./src/lib/proxy/image-cache";
+import { maybeRunScheduledPrune } from "./src/lib/monitoring/docker-prune";
 import { sweepStaleDrops } from "./src/lib/preview-stream/file-drop";
 import { sweepStaleDownloads } from "./src/lib/preview-stream/download-relay";
 import { migrateGoogleMcpTier } from "./src/lib/google-custom-config";
@@ -2615,6 +2616,29 @@ setChatSendHandle({
     console.log(`> Preview download sweeper scheduled (every 5 min, 5 min TTL)`);
   } catch (err) {
     console.warn(`!! Could not initialize download sweeper: ${(err as Error).message}`);
+  }
+})();
+
+// Docker prune scheduler. Tick hourly so a freshly-deployed server starts
+// pruning within the hour; `maybeRunScheduledPrune` itself checks the
+// configured interval (default 7 days) before doing any work, so this is
+// effectively no-op most ticks. Runs the first check at boot to sweep
+// anything overdue while the container was down.
+(async () => {
+  try {
+    await maybeRunScheduledPrune();
+    cron.schedule(
+      "0 * * * *",
+      () => {
+        maybeRunScheduledPrune().catch((err) => {
+          console.warn(`[docker-prune] scheduled run failed: ${(err as Error).message}`);
+        });
+      },
+      { timezone: "UTC" },
+    );
+    console.log(`> Docker prune scheduler ready (hourly check, default 7-day interval)`);
+  } catch (err) {
+    console.warn(`!! Could not initialize docker prune scheduler: ${(err as Error).message}`);
   }
 })();
 

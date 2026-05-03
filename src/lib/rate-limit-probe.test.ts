@@ -66,7 +66,11 @@ describe("probeRateLimits", () => {
     expect(headers.authorization).toBe("Bearer from-env");
   });
 
-  it("writes ONLY the five_hour window — seven_day stays pristine for SDK events", async () => {
+  it("legacy bare-unified headers still write five_hour only (no fabricated seven_day)", async () => {
+    // Older Anthropic responses (and some endpoints) only emit the bare
+    // `unified-status` / `unified-reset` pair, which represents a single
+    // window we can't identify. We fall back to writing five_hour and
+    // leave seven_day for the SDK's `rate_limit_event` stream.
     await writeCreds("t");
     mockFetch({
       status: 200,
@@ -80,9 +84,105 @@ describe("probeRateLimits", () => {
     const cache = await loadRateLimits();
     expect(cache.windows.five_hour?.status).toBe("allowed_warning");
     expect(cache.windows.five_hour?.resetsAt).toBe(Date.parse("2100-01-01T00:00:00Z"));
-    // seven_day MUST NOT be fabricated from the probe — the response
-    // header only represents one window and we don't know which.
     expect(cache.windows.seven_day).toBeUndefined();
+  });
+
+  it("per-window headers populate five_hour and seven_day with utilization", async () => {
+    // The fix for "HUD stuck at 95%": Anthropic returns per-window
+    // headers (5h-*, 7d-*) that include utilization. The probe must
+    // read these so the cached percentage tracks reality even when
+    // the user isn't actively chatting (chat turns are the only other
+    // utilization source via SDK rate_limit_event).
+    await writeCreds("t");
+    mockFetch({
+      status: 200,
+      headers: {
+        "anthropic-ratelimit-unified-5h-status": "allowed",
+        "anthropic-ratelimit-unified-5h-reset": "1777824600",
+        "anthropic-ratelimit-unified-5h-utilization": "0.18",
+        "anthropic-ratelimit-unified-7d-status": "allowed",
+        "anthropic-ratelimit-unified-7d-reset": "1777834800",
+        "anthropic-ratelimit-unified-7d-utilization": "0.41",
+      },
+    });
+    const result = await probeRateLimits();
+    expect(result.applied).toBe(2);
+    const cache = await loadRateLimits();
+    expect(cache.windows.five_hour?.status).toBe("allowed");
+    expect(cache.windows.five_hour?.utilization).toBeCloseTo(0.18);
+    expect(cache.windows.five_hour?.resetsAt).toBe(1_777_824_600_000);
+    expect(cache.windows.seven_day?.status).toBe("allowed");
+    expect(cache.windows.seven_day?.utilization).toBeCloseTo(0.41);
+    expect(cache.windows.seven_day?.resetsAt).toBe(1_777_834_800_000);
+  });
+
+  it("per-window utilization OVERWRITES a stale value cached from an earlier event", async () => {
+    // Regression guard for the user-visible "stuck at 95%" bug.
+    // Without this, the merge in applyRateLimitEvent would preserve
+    // the old utilization indefinitely.
+    await writeCreds("t");
+    const { applyRateLimitEvent } = await import("./account-rate-limits");
+    await applyRateLimitEvent({
+      rateLimitType: "five_hour",
+      status: "allowed",
+      utilization: 0.95,
+      resetsAt: Date.parse("2100-01-01T00:00:00Z"),
+    });
+    mockFetch({
+      status: 200,
+      headers: {
+        "anthropic-ratelimit-unified-5h-status": "allowed",
+        "anthropic-ratelimit-unified-5h-reset": "2100-02-01T00:00:00Z",
+        "anthropic-ratelimit-unified-5h-utilization": "0.18",
+      },
+    });
+    await probeRateLimits();
+    const cache = await loadRateLimits();
+    expect(cache.windows.five_hour?.utilization).toBeCloseTo(0.18);
+  });
+
+  it("includes the overage window as its own entry and stamps isUsingOverage on main windows", async () => {
+    await writeCreds("t");
+    mockFetch({
+      status: 200,
+      headers: {
+        "anthropic-ratelimit-unified-5h-status": "allowed",
+        "anthropic-ratelimit-unified-5h-reset": "2100-01-01T00:00:00Z",
+        "anthropic-ratelimit-unified-5h-utilization": "0.50",
+        "anthropic-ratelimit-unified-7d-status": "allowed",
+        "anthropic-ratelimit-unified-7d-reset": "2100-01-08T00:00:00Z",
+        "anthropic-ratelimit-unified-7d-utilization": "0.30",
+        "anthropic-ratelimit-unified-overage-status": "allowed",
+        "anthropic-ratelimit-unified-overage-reset": "2100-01-01T00:00:00Z",
+        "anthropic-ratelimit-unified-overage-utilization": "0.10",
+      },
+    });
+    const result = await probeRateLimits();
+    expect(result.applied).toBe(3);
+    const cache = await loadRateLimits();
+    expect(cache.windows.overage?.utilization).toBeCloseTo(0.1);
+    expect(cache.windows.five_hour?.isUsingOverage).toBe(true);
+    expect(cache.windows.seven_day?.isUsingOverage).toBe(true);
+    // Overage window itself doesn't carry the derived flag.
+    expect(cache.windows.overage?.isUsingOverage).toBeUndefined();
+  });
+
+  it("isUsingOverage is false when the overage window is allowed and at 0%", async () => {
+    await writeCreds("t");
+    mockFetch({
+      status: 200,
+      headers: {
+        "anthropic-ratelimit-unified-5h-status": "allowed",
+        "anthropic-ratelimit-unified-5h-reset": "2100-01-01T00:00:00Z",
+        "anthropic-ratelimit-unified-5h-utilization": "0.50",
+        "anthropic-ratelimit-unified-overage-status": "allowed",
+        "anthropic-ratelimit-unified-overage-reset": "2100-01-01T00:00:00Z",
+        "anthropic-ratelimit-unified-overage-utilization": "0.0",
+      },
+    });
+    await probeRateLimits();
+    const cache = await loadRateLimits();
+    expect(cache.windows.five_hour?.isUsingOverage).toBe(false);
   });
 
   it("preserves utilization that a prior SDK event wrote under five_hour", async () => {

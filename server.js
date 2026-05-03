@@ -45,6 +45,7 @@ const paths_2 = require("./src/lib/audit/paths");
 const retention_1 = require("./src/lib/audit/retention");
 const unfurl_cache_1 = require("./src/lib/proxy/unfurl-cache");
 const image_cache_1 = require("./src/lib/proxy/image-cache");
+const docker_prune_1 = require("./src/lib/monitoring/docker-prune");
 const file_drop_1 = require("./src/lib/preview-stream/file-drop");
 const download_relay_1 = require("./src/lib/preview-stream/download-relay");
 const google_custom_config_1 = require("./src/lib/google-custom-config");
@@ -2230,6 +2231,25 @@ globalThis.__clawListSessionBranches = () => sessionManager.listBranchSnapshots(
     }
     catch (err) {
         console.warn(`!! Could not initialize download sweeper: ${err.message}`);
+    }
+})();
+// Docker prune scheduler. Tick hourly so a freshly-deployed server starts
+// pruning within the hour; `maybeRunScheduledPrune` itself checks the
+// configured interval (default 7 days) before doing any work, so this is
+// effectively no-op most ticks. Runs the first check at boot to sweep
+// anything overdue while the container was down.
+(async () => {
+    try {
+        await (0, docker_prune_1.maybeRunScheduledPrune)();
+        node_cron_1.default.schedule("0 * * * *", () => {
+            (0, docker_prune_1.maybeRunScheduledPrune)().catch((err) => {
+                console.warn(`[docker-prune] scheduled run failed: ${err.message}`);
+            });
+        }, { timezone: "UTC" });
+        console.log(`> Docker prune scheduler ready (hourly check, default 7-day interval)`);
+    }
+    catch (err) {
+        console.warn(`!! Could not initialize docker prune scheduler: ${err.message}`);
     }
 })();
 app.prepare().then(() => {

@@ -65,10 +65,7 @@ import {
 import { forwardWs } from "./src/lib/preview-proxy/ws-forward";
 import { handlePreviewStream } from "./src/lib/preview-stream/handler";
 import { handlePreviewRtc } from "./src/lib/preview-stream/webrtc-handler";
-import {
-  close as closeChromiumPool,
-  prelaunch as prelaunchChromiumPool,
-} from "./src/lib/preview-stream/chromium-pool";
+import { close as closeChromiumPool } from "./src/lib/preview-stream/chromium-pool";
 import { killAll as killAllDevServers } from "./src/lib/dev-server/manager";
 import { bootstrapMonitoring } from "./src/lib/monitoring/bootstrap";
 import { getMonitoringBroadcaster } from "./src/lib/monitoring/ws-broadcast";
@@ -2915,16 +2912,11 @@ app.prepare().then(() => {
     }).catch(() => {});
   });
 
-  // Phase 4 (#130): seed extra Chromium flags BEFORE the first
-  // `acquirePage` so the WebRTC controller page can call
-  // `getDisplayMedia` without a media-permission prompt. Once the
-  // singleton browser has launched these flags can't be applied.
-  prelaunchChromiumPool([
-    "--use-fake-ui-for-media-stream",
-    "--auto-select-desktop-capture-source=Current Tab",
-    "--enable-features=DesktopCaptureMacV2",
-    "--allow-running-insecure-content",
-  ]);
+  // Phase 4 hardening: WebRTC media flags are now always-on in
+  // chromium-pool.launch(); no boot-time prelaunch call needed.
+  // `--allow-running-insecure-content` was dropped — the controller
+  // iframes the dev server via the same-origin /chat/preview/<port>
+  // proxy, so mixed-content blocking never triggers.
 
   server.listen(port, () => {
     console.log(`> Claw Chat ready on http://localhost:${port}`);

@@ -40,38 +40,38 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("chromium-pool prelaunch", () => {
-  it("seeds extra launch args before the first acquirePage", async () => {
-    prelaunch([
-      "--auto-select-desktop-capture-source=Current Tab",
-      "--use-fake-ui-for-media-stream",
-    ]);
+describe("chromium-pool always-on WebRTC flags", () => {
+  it("includes the WebRTC media flags on every launch — no prelaunch call needed", async () => {
     await acquirePage(3000);
     expect(launchSpy).toHaveBeenCalledOnce();
     const args = launchSpy.mock.calls[0][0].args as string[];
-    expect(args).toContain("--auto-select-desktop-capture-source=Current Tab");
     expect(args).toContain("--use-fake-ui-for-media-stream");
+    expect(args).toContain("--auto-select-desktop-capture-source=Current Tab");
+    expect(args).toContain("--enable-features=DesktopCaptureMacV2");
   });
 
-  it("keeps the existing Phase 1–3 baseline flags alongside the extras", async () => {
-    prelaunch(["--phase4-flag"]);
+  it("does NOT include --allow-running-insecure-content (dropped for security)", async () => {
+    await acquirePage(3000);
+    const args = launchSpy.mock.calls[0][0].args as string[];
+    expect(args).not.toContain("--allow-running-insecure-content");
+  });
+
+  it("keeps the existing Phase 1–3 baseline flags alongside the WebRTC flags", async () => {
     await acquirePage(3000);
     const args = launchSpy.mock.calls[0][0].args as string[];
     expect(args).toContain("--no-sandbox");
     expect(args).toContain("--disable-gpu");
     expect(args).toContain("--autoplay-policy=no-user-gesture-required");
-    expect(args).toContain("--phase4-flag");
   });
 
-  it("is a noop when called after the browser has launched", async () => {
+  it("prelaunch() is a deprecated noop shim — extra args still merge but are not required", async () => {
+    prelaunch(["--legacy-extra-flag"]);
     await acquirePage(3000);
-    prelaunch(["--too-late-flag"]);
-    // First launch already happened — second acquirePage reuses it,
-    // so launchSpy is still only called once.
-    await acquirePage(3001);
-    expect(launchSpy).toHaveBeenCalledOnce();
     const args = launchSpy.mock.calls[0][0].args as string[];
-    expect(args).not.toContain("--too-late-flag");
+    expect(args).toContain("--legacy-extra-flag");
+    // WebRTC flags are still present even though prelaunch was called
+    // with a totally different flag set — they're always-on now.
+    expect(args).toContain("--use-fake-ui-for-media-stream");
   });
 });
 

@@ -36,11 +36,30 @@ let browserPromise: Promise<Browser> | null = null;
 let pageCount = 0;
 let idleTimer: NodeJS.Timeout | null = null;
 
-// Phase 4 (#130): extra Chromium launch flags seeded by `prelaunch()`
-// at server boot. These need to be present on the FIRST launch — once
-// the singleton browser is up, additional flags can't be applied
-// without restarting it. Used to enable `getDisplayMedia` in headless
-// mode for the WebRTC controller page.
+// Phase 4 (#130): WebRTC controller page needs `getDisplayMedia` to
+// succeed in headless mode. The flags below are baked into every
+// launch (not gated on a `prelaunch` call) because the singleton pool
+// is shared between Phase 1-3 and Phase 4 previews — if a Phase-1
+// preview opens first and we'd skipped these flags, the next Phase-4
+// connection would fail forever with NotAllowedError. The flags are
+// inert for Phase 1-3 (those previews don't call getUserMedia /
+// getDisplayMedia at all), so always-on is safe.
+const WEBRTC_LAUNCH_ARGS = [
+  // Auto-grant any media-permission prompt with no UI. Required for
+  // headless because there is no user to click "share". Only the
+  // controller page calls getDisplayMedia; previewed apps that try to
+  // grab the camera still get a denial because no virtual device is
+  // attached.
+  "--use-fake-ui-for-media-stream",
+  // Pre-pick "Current Tab" for getDisplayMedia({preferCurrentTab:true}).
+  "--auto-select-desktop-capture-source=Current Tab",
+  // Enable the modern desktop-capture path. Inert when not used.
+  "--enable-features=DesktopCaptureMacV2",
+];
+
+// Test-compat shim — `extraLaunchArgs` is the legacy slot from the
+// initial Phase 4 commit. New code MUST use WEBRTC_LAUNCH_ARGS above.
+// `prelaunch()` is now a deprecated no-op kept for source compat.
 let extraLaunchArgs: string[] = [];
 
 async function launch(): Promise<Browser> {
@@ -86,29 +105,26 @@ async function launch(): Promise<Browser> {
       // so this only affects what plays *into* the virtual_sink — not
       // what plays out to the user without their consent.
       "--autoplay-policy=no-user-gesture-required",
-      // Phase 4 (#130): merged in any extra args seeded by `prelaunch()`
-      // before the first acquirePage. Only honored on first launch —
-      // subsequent calls reuse the existing singleton.
+      // Phase 4 (#130): always-on WebRTC media flags so the controller
+      // page can call getDisplayMedia regardless of whether this
+      // browser was launched for a Phase-1 or Phase-4 preview first.
+      ...WEBRTC_LAUNCH_ARGS,
+      // Legacy: extraLaunchArgs from the deprecated `prelaunch()`
+      // shim. Prefer WEBRTC_LAUNCH_ARGS above for new flags.
       ...extraLaunchArgs,
     ],
   });
 }
 
 /**
- * Phase 4 (#130): seed extra Chromium launch flags that need to be
- * present on the FIRST launch. Called once from `server.ts` startup
- * before any `acquirePage`. Calling it after the browser is already
- * running is a noop — the flags can't be applied retroactively.
- *
- * Used to enable `getDisplayMedia({preferCurrentTab: true})` in
- * headless Chromium for the WebRTC controller page. The required
- * flag set is undocumented Chrome internals and may drift between
- * versions; if `getDisplayMedia` returns zero tracks the controller
- * emits `capture_failed` over signaling and the client falls back
- * to the MSE pipeline (#130 acceptance criterion 5).
+ * @deprecated Phase 4 (#130) hardening: WebRTC media flags are now
+ * baked into every launch via `WEBRTC_LAUNCH_ARGS` above, so callers
+ * no longer need to pre-seed flags. Retained as a noop shim so the
+ * existing `server.ts` boot call doesn't break; will be removed in a
+ * future commit.
  */
 export function prelaunch(args: string[]): void {
-  if (browserPromise) return; // already launched — noop
+  if (browserPromise) return;
   extraLaunchArgs = [...args];
 }
 

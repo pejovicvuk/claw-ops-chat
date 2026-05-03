@@ -126,9 +126,7 @@ describe("relay", () => {
   it("silently drops frames when the partner slot is empty", () => {
     const session = getOrCreateSession("k", () => {});
     attachPeer(session, fakeWs() as unknown as WebSocket, "viewer");
-    expect(() =>
-      relay(session, "viewer", { type: "sdp", sdp: { kind: "offer" } }),
-    ).not.toThrow();
+    expect(() => relay(session, "viewer", { type: "sdp", sdp: { kind: "offer" } })).not.toThrow();
   });
 
   it("silently drops frames when the partner WS is closed", () => {

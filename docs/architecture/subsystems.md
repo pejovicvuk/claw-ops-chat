@@ -246,11 +246,11 @@ The chat server spins up a headless Chromium tab, points it at
 `localhost:<port>`, and pipes the rendered output to the user's
 browser. Three transports stack from lowest-latency to most-compatible:
 
-| Transport     | Wire        | Latency  | Phase |
-| ------------- | ----------- | -------- | ----- |
-| **WebRTC**    | SRTP P2P    | <100 ms  | 4     |
-| H.264 / MSE   | WebSocket   | ~300 ms  | 2     |
-| JPEG / canvas | WebSocket   | ~500 ms  | 1     |
+| Transport     | Wire      | Latency | Phase |
+| ------------- | --------- | ------- | ----- |
+| **WebRTC**    | SRTP P2P  | <100 ms | 4     |
+| H.264 / MSE   | WebSocket | ~300 ms | 2     |
+| JPEG / canvas | WebSocket | ~500 ms | 1     |
 
 `use-preview-stream.ts` tries WebRTC first; on any failure (5 s
 connect timeout, peer-connection failed, controller capture_failed,

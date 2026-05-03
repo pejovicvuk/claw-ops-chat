@@ -169,10 +169,7 @@ export interface AcquireOpts {
  * to `http://127.0.0.1:<port>`. Throws if the upstream is unreachable
  * — caller should map that to a `502`-ish WS error frame.
  */
-export async function acquirePage(
-  port: number,
-  opts: AcquireOpts = {},
-): Promise<AcquiredPage> {
+export async function acquirePage(port: number, opts: AcquireOpts = {}): Promise<AcquiredPage> {
   const browser = await getBrowser();
   const context = await browser.newContext({
     viewport: { width: 1440, height: 900 },

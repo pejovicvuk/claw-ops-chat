@@ -93,11 +93,7 @@ export function getOrCreateSession(
  * if the requested slot already has an open peer. Once both slots are
  * filled the pairing timer is cleared.
  */
-export function attachPeer(
-  session: RtcSession,
-  ws: WebSocket,
-  role: RtcRole,
-): AttachResult {
+export function attachPeer(session: RtcSession, ws: WebSocket, role: RtcRole): AttachResult {
   if (role === "controller") {
     if (session.controller) return { ok: false, reason: "slot_taken" };
     session.controller = { ws, role, createdAt: Date.now() };
@@ -117,11 +113,7 @@ export function attachPeer(
  * frame if the partner slot is empty (still pairing) or the partner
  * WS is no longer open. Frames are JSON-stringified before send.
  */
-export function relay(
-  session: RtcSession,
-  from: RtcRole,
-  frame: SignalFrame,
-): void {
+export function relay(session: RtcSession, from: RtcRole, frame: SignalFrame): void {
   const partner = from === "controller" ? session.viewer : session.controller;
   if (!partner) return;
   const ws = partner.ws;

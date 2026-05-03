@@ -15,11 +15,7 @@ vi.mock("../chromium-pool", () => ({
   },
 }));
 
-import {
-  _resetForTests,
-  _stats,
-  handlePreviewRtc,
-} from "../webrtc-handler";
+import { _resetForTests, _stats, handlePreviewRtc } from "../webrtc-handler";
 import { _resetAll as resetSignaling } from "../webrtc-signaling";
 
 interface FakeWs {
@@ -90,9 +86,7 @@ describe("handlePreviewRtc viewer flow", () => {
     expect(acquirePageSpy).toHaveBeenCalledOnce();
     const [port, opts] = acquirePageSpy.mock.calls[0];
     expect(port).toBe(4321);
-    expect(String(opts.targetUrl)).toMatch(
-      /\/chat\/preview-controller\?.*port=4321/,
-    );
+    expect(String(opts.targetUrl)).toMatch(/\/chat\/preview-controller\?.*port=4321/);
     expect(String(opts.targetUrl)).toContain(`http://127.0.0.1:3100`);
   });
 
@@ -100,13 +94,7 @@ describe("handlePreviewRtc viewer flow", () => {
     const viewer = fakeWs();
     const controller = fakeWs();
     await handlePreviewRtc(viewer as unknown as WebSocket, "u", route, ctx, "viewer");
-    await handlePreviewRtc(
-      controller as unknown as WebSocket,
-      "u",
-      route,
-      ctx,
-      "controller",
-    );
+    await handlePreviewRtc(controller as unknown as WebSocket, "u", route, ctx, "controller");
     expect(acquirePageSpy).toHaveBeenCalledOnce();
   });
 });
@@ -116,39 +104,20 @@ describe("handlePreviewRtc relay", () => {
     const viewer = fakeWs();
     const controller = fakeWs();
     await handlePreviewRtc(viewer as unknown as WebSocket, "u", route, ctx, "viewer");
-    await handlePreviewRtc(
-      controller as unknown as WebSocket,
-      "u",
-      route,
-      ctx,
-      "controller",
-    );
+    await handlePreviewRtc(controller as unknown as WebSocket, "u", route, ctx, "controller");
 
     viewer.emit("message", JSON.stringify({ type: "sdp", sdp: { kind: "answer" } }));
-    expect(controller.sent.at(-1)).toBe(
-      JSON.stringify({ type: "sdp", sdp: { kind: "answer" } }),
-    );
+    expect(controller.sent.at(-1)).toBe(JSON.stringify({ type: "sdp", sdp: { kind: "answer" } }));
 
-    controller.emit(
-      "message",
-      JSON.stringify({ type: "ice", candidate: { mid: "0" } }),
-    );
-    expect(viewer.sent.at(-1)).toBe(
-      JSON.stringify({ type: "ice", candidate: { mid: "0" } }),
-    );
+    controller.emit("message", JSON.stringify({ type: "ice", candidate: { mid: "0" } }));
+    expect(viewer.sent.at(-1)).toBe(JSON.stringify({ type: "ice", candidate: { mid: "0" } }));
   });
 
   it("ignores unknown frame types", async () => {
     const viewer = fakeWs();
     const controller = fakeWs();
     await handlePreviewRtc(viewer as unknown as WebSocket, "u", route, ctx, "viewer");
-    await handlePreviewRtc(
-      controller as unknown as WebSocket,
-      "u",
-      route,
-      ctx,
-      "controller",
-    );
+    await handlePreviewRtc(controller as unknown as WebSocket, "u", route, ctx, "controller");
 
     viewer.emit("message", JSON.stringify({ type: "evil-payload", junk: 1 }));
     expect(controller.sent).toEqual([]);
@@ -158,13 +127,7 @@ describe("handlePreviewRtc relay", () => {
     const viewer = fakeWs();
     const controller = fakeWs();
     await handlePreviewRtc(viewer as unknown as WebSocket, "u", route, ctx, "viewer");
-    await handlePreviewRtc(
-      controller as unknown as WebSocket,
-      "u",
-      route,
-      ctx,
-      "controller",
-    );
+    await handlePreviewRtc(controller as unknown as WebSocket, "u", route, ctx, "controller");
 
     viewer.emit("message", "{not json");
     expect(controller.sent).toEqual([]);
@@ -196,13 +159,7 @@ describe("handlePreviewRtc teardown", () => {
     const viewer = fakeWs();
     const controller = fakeWs();
     await handlePreviewRtc(viewer as unknown as WebSocket, "u", route, ctx, "viewer");
-    await handlePreviewRtc(
-      controller as unknown as WebSocket,
-      "u",
-      route,
-      ctx,
-      "controller",
-    );
+    await handlePreviewRtc(controller as unknown as WebSocket, "u", route, ctx, "controller");
 
     viewer.emit("close");
     expect(controller.sent.some((s) => s.includes('"bye"'))).toBe(true);

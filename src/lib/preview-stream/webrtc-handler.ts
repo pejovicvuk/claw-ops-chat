@@ -64,11 +64,7 @@ function buildKey(actorEmail: string, route: WebRtcRoute): string {
   return `${actorEmail}|${route.projectSlug}|${route.itemSlug}|${route.port}`;
 }
 
-function buildControllerUrl(
-  selfPort: number,
-  route: WebRtcRoute,
-  room: string,
-): string {
+function buildControllerUrl(selfPort: number, route: WebRtcRoute, room: string): string {
   const params = new URLSearchParams({
     port: String(route.port),
     project: route.projectSlug,
@@ -194,8 +190,7 @@ export async function handlePreviewRtc(
     acquiredPages.set(key, acquirePromise);
     acquirePromise.catch((err) => {
       acquiredPages.delete(key);
-      const message =
-        err instanceof Error ? err.message : "controller_spawn_failed";
+      const message = err instanceof Error ? err.message : "controller_spawn_failed";
       // Push capture_failed onto the viewer slot so the client falls
       // back to MSE without waiting for the 30 s pair timeout.
       relay(session, "controller", { type: "capture_failed", reason: message });

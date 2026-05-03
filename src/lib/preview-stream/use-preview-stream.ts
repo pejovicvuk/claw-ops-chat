@@ -441,7 +441,8 @@ export function usePreviewStream({
       // source of truth — we never advertise a codec the browser
       // can't decode.
       const support = detectMseSupport();
-      const codecStr = support === "video+audio" ? chosenMseCodec("video+audio") : chosenMseCodec("video");
+      const codecStr =
+        support === "video+audio" ? chosenMseCodec("video+audio") : chosenMseCodec("video");
       let sb: SourceBuffer;
       try {
         sb = ms.addSourceBuffer(codecStr);
@@ -791,9 +792,7 @@ export function usePreviewStream({
       pc.onicecandidate = (evt) => {
         if (evt.candidate && sigWs.readyState === WebSocket.OPEN) {
           try {
-            sigWs.send(
-              JSON.stringify({ type: "ice", candidate: evt.candidate.toJSON() }),
-            );
+            sigWs.send(JSON.stringify({ type: "ice", candidate: evt.candidate.toJSON() }));
           } catch {
             /* ignore */
           }
@@ -813,9 +812,7 @@ export function usePreviewStream({
               else if (f.type === "clipboard_copy") {
                 const validated = validateClipboardPayload(f.text);
                 if (validated.ok && validated.text && navigator.clipboard) {
-                  void navigator.clipboard
-                    .writeText(validated.text)
-                    .catch(() => {});
+                  void navigator.clipboard.writeText(validated.text).catch(() => {});
                 }
               }
             } catch {
@@ -1272,9 +1269,7 @@ export function usePreviewStream({
       const files = e.dataTransfer?.files;
       if (!files || files.length === 0) return;
       if (files.length > 1) {
-        toast.info(
-          `Multi-file drop not supported in v1 — uploaded ${files[0].name}`,
-        );
+        toast.info(`Multi-file drop not supported in v1 — uploaded ${files[0].name}`);
       }
       const file = files[0];
       if (file.size > MAX_DROP_BYTES) {
@@ -1304,7 +1299,9 @@ export function usePreviewStream({
         return;
       }
       const dropId =
-        typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+        typeof crypto !== "undefined" && crypto.randomUUID
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random()}`;
       sendJson({
         type: "file_drop_start",
         dropId,
@@ -1384,9 +1381,7 @@ export function usePreviewStream({
           while (bufferedSrc.bufferedAmount > 4 * 1024 * 1024) {
             await new Promise((r) => setTimeout(r, 50));
             if (
-              useDataChannel
-                ? fileChannel.readyState !== "open"
-                : ws.readyState !== WebSocket.OPEN
+              useDataChannel ? fileChannel.readyState !== "open" : ws.readyState !== WebSocket.OPEN
             )
               return;
           }

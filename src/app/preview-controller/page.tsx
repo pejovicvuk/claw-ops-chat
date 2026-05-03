@@ -40,15 +40,7 @@ const ICE_SERVERS: RTCIceServer[] = [
 ];
 
 interface InputFrame {
-  type:
-    | "mouse"
-    | "wheel"
-    | "key"
-    | "touch"
-    | "navigate"
-    | "reload"
-    | "resize"
-    | "clipboard_paste";
+  type: "mouse" | "wheel" | "key" | "touch" | "navigate" | "reload" | "resize" | "clipboard_paste";
   [key: string]: unknown;
 }
 
@@ -216,7 +208,11 @@ export default function PreviewControllerPage(): ReactElement {
       };
       ws.onmessage = async (evt) => {
         if (typeof evt.data !== "string") return;
-        let frame: { type: string; sdp?: RTCSessionDescriptionInit; candidate?: RTCIceCandidateInit };
+        let frame: {
+          type: string;
+          sdp?: RTCSessionDescriptionInit;
+          candidate?: RTCIceCandidateInit;
+        };
         try {
           frame = JSON.parse(evt.data);
         } catch {
@@ -277,9 +273,11 @@ export default function PreviewControllerPage(): ReactElement {
       <iframe
         ref={iframeRef}
         title="preview-target"
-        src={`${BASE_PATH}/preview/${new URLSearchParams(
-          typeof window === "undefined" ? "" : window.location.search,
-        ).get("port") ?? ""}/`}
+        src={`${BASE_PATH}/preview/${
+          new URLSearchParams(typeof window === "undefined" ? "" : window.location.search).get(
+            "port",
+          ) ?? ""
+        }/`}
         allow="clipboard-read; clipboard-write; autoplay; display-capture"
         style={{
           position: "absolute",
@@ -318,10 +316,7 @@ export default function PreviewControllerPage(): ReactElement {
  * reverse proxy to make `localhost:<port>` reachable from the same
  * origin as the controller page.
  */
-function dispatchInputToIframe(
-  iframe: HTMLIFrameElement | null,
-  frame: InputFrame,
-): void {
+function dispatchInputToIframe(iframe: HTMLIFrameElement | null, frame: InputFrame): void {
   if (!iframe) return;
   const win = iframe.contentWindow;
   const doc = iframe.contentDocument;
@@ -397,8 +392,7 @@ function dispatchMouse(doc: Document, win: Window, frame: InputFrame): void {
   const buttons = Number(frame.buttons ?? 0);
   const detail = Number(frame.clickCount ?? 1);
   const target = doc.elementFromPoint(x, y) ?? doc.body;
-  const type =
-    action === "down" ? "mousedown" : action === "up" ? "mouseup" : "mousemove";
+  const type = action === "down" ? "mousedown" : action === "up" ? "mouseup" : "mousemove";
   const evt = new MouseEvent(type, {
     bubbles: true,
     cancelable: true,
@@ -475,10 +469,7 @@ function dispatchKey(doc: Document, _win: Window, frame: InputFrame): void {
       target instanceof HTMLTextAreaElement ||
       target.isContentEditable)
   ) {
-    if (
-      target instanceof HTMLInputElement ||
-      target instanceof HTMLTextAreaElement
-    ) {
+    if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
       const start = target.selectionStart ?? target.value.length;
       const end = target.selectionEnd ?? start;
       target.value = target.value.slice(0, start) + text + target.value.slice(end);
@@ -499,8 +490,7 @@ function dispatchTouch(doc: Document, win: Window, frame: InputFrame): void {
     : [];
   if (points.length === 0) return;
   const action = String(frame.action ?? "start");
-  const type =
-    action === "start" ? "mousedown" : action === "end" ? "mouseup" : "mousemove";
+  const type = action === "start" ? "mousedown" : action === "end" ? "mouseup" : "mousemove";
   const p = points[0];
   const target = doc.elementFromPoint(p.x, p.y) ?? doc.body;
   const evt = new MouseEvent(type, {
@@ -515,20 +505,13 @@ function dispatchTouch(doc: Document, win: Window, frame: InputFrame): void {
   target.dispatchEvent(evt);
 }
 
-async function dispatchPaste(
-  doc: Document,
-  _win: Window,
-  text: string,
-): Promise<void> {
+async function dispatchPaste(doc: Document, _win: Window, text: string): Promise<void> {
   if (!text) return;
   const target = doc.activeElement ?? doc.body;
   // Simulate insertion. ClipboardEvent is non-trivial to construct with
   // synthetic clipboardData across browsers; a direct value mutation +
   // 'input' event covers form fields and contenteditable.
-  if (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement
-  ) {
+  if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) {
     const start = target.selectionStart ?? target.value.length;
     const end = target.selectionEnd ?? start;
     target.value = target.value.slice(0, start) + text + target.value.slice(end);
@@ -598,10 +581,7 @@ function handleFileBinaryFromViewer(buf: ArrayBuffer): void {
   state.chunks.push(view.subarray(2 + idLen));
 }
 
-async function dispatchFileDrop(
-  iframe: HTMLIFrameElement,
-  state: DropState,
-): Promise<void> {
+async function dispatchFileDrop(iframe: HTMLIFrameElement, state: DropState): Promise<void> {
   const win = iframe.contentWindow;
   const doc = iframe.contentDocument;
   if (!win || !doc) return;

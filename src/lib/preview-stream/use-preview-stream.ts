@@ -244,6 +244,27 @@ export interface UsePreviewStreamResult {
   goForward: () => void;
   /** Phase 5b (#132): set the previewed page's zoom factor. */
   setZoom: (factor: number) => void;
+  /**
+   * Phase 5c (#133): in-page find state. `open` is local UI state;
+   * `query` / `count` / `currentIndex` come from server `find_state`
+   * frames. Driven by the methods below.
+   */
+  findState: {
+    open: boolean;
+    query: string;
+    count: number;
+    currentIndex: number;
+  };
+  /** Phase 5c (#133): open the find bar (Ctrl+F). */
+  findOpen: () => void;
+  /** Phase 5c (#133): close the find bar and clear highlights. */
+  findClose: () => void;
+  /** Phase 5c (#133): set the search query — re-runs the highlighter. */
+  findQuery: (q: string) => void;
+  /** Phase 5c (#133): cycle to the next match. */
+  findNext: () => void;
+  /** Phase 5c (#133): cycle to the previous match. */
+  findPrev: () => void;
 }
 
 /**
@@ -301,6 +322,12 @@ interface HistoryStateFrame {
   type: "history_state";
   canGoBack: boolean;
   canGoForward: boolean;
+}
+interface FindStateFrame {
+  type: "find_state";
+  query: string;
+  count: number;
+  currentIndex: number;
 }
 interface ClipboardCopyFrame {
   type: "clipboard_copy";
@@ -391,6 +418,16 @@ export function usePreviewStream({
   // ⏪ / ⏩ buttons. Default false until the first frame arrives.
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
+  // Phase 5c (#133): in-page find state. `open` is local UI state —
+  // the server doesn't track whether the bar is visible. `query` /
+  // `count` / `currentIndex` come from `find_state` frames after each
+  // server-side `__clawFind` call.
+  const [findState, setFindState] = useState<{
+    open: boolean;
+    query: string;
+    count: number;
+    currentIndex: number;
+  }>({ open: false, query: "", count: 0, currentIndex: -1 });
   const [dragOver, setDragOver] = useState(false);
   // Sticky failure flag: once H.264 has failed at runtime, all
   // subsequent connects (including reconnect-with-backoff) skip the
@@ -463,6 +500,10 @@ export function usePreviewStream({
   useEffect(() => {
     onZoomChangeRef.current = onZoomChange;
   }, [onZoomChange]);
+  // Phase 5c (#133): ref-based findOpen so the keydown listener can
+  // call into the latest closure without rebinding on every state
+  // change. Same pattern as zoomRef / onZoomChangeRef above.
+  const findOpenRef = useRef<() => void>(() => {});
 
   // MSE state. Lifecycle is per-WS-connection — `setupMse()` runs on
   // open, `teardownMse()` on close. The append queue drains via the
@@ -711,6 +752,7 @@ export function usePreviewStream({
           | StatusFrame
           | UrlChangedFrame
           | HistoryStateFrame
+          | FindStateFrame
           | ClipboardCopyFrame
           | FileDropAckFrame
           | DownloadReadyFrame
@@ -758,6 +800,17 @@ export function usePreviewStream({
           const h = parsed as HistoryStateFrame;
           setCanGoBack(Boolean(h.canGoBack));
           setCanGoForward(Boolean(h.canGoForward));
+        } else if (parsed.type === "find_state") {
+          // Phase 5c (#133): authoritative find result from the
+          // server's __clawFind controller. Preserves whatever local
+          // `open` state the client already has.
+          const f = parsed as FindStateFrame;
+          setFindState((prev) => ({
+            open: prev.open,
+            query: String(f.query ?? ""),
+            count: Number(f.count) || 0,
+            currentIndex: Number.isFinite(f.currentIndex) ? Number(f.currentIndex) : -1,
+          }));
         } else if (parsed.type === "url_changed") {
           const u = parsed as UrlChangedFrame;
           setCurrentPath(u.path);
@@ -970,6 +1023,14 @@ export function usePreviewStream({
                 // history_state when the iframe navigates.
                 setCanGoBack(Boolean(f.canGoBack));
                 setCanGoForward(Boolean(f.canGoForward));
+              } else if (f.type === "find_state") {
+                // Phase 5c (#133): RTC parity for find.
+                setFindState((prev) => ({
+                  open: prev.open,
+                  query: String(f.query ?? ""),
+                  count: Number(f.count) || 0,
+                  currentIndex: Number.isFinite(f.currentIndex) ? Number(f.currentIndex) : -1,
+                }));
               } else if (f.type === "clipboard_copy") {
                 const validated = validateClipboardPayload(f.text);
                 if (validated.ok && validated.text && navigator.clipboard) {
@@ -1172,6 +1233,9 @@ export function usePreviewStream({
       // clean disabled state until the new server emits a frame.
       setCanGoBack(false);
       setCanGoForward(false);
+      // Phase 5c (#133): close the find bar — its highlights live
+      // server-side and are gone after disconnect.
+      setFindState({ open: false, query: "", count: 0, currentIndex: -1 });
       teardownMse();
       scheduleReconnect();
     };
@@ -1317,6 +1381,14 @@ export function usePreviewStream({
       // to receive a synthetic Ctrl+= keystroke. Reads through refs
       // so the listener doesn't have to rebind on every zoom step.
       const zoomMod = e.ctrlKey || e.metaKey;
+      // Phase 5c (#133): Ctrl/Cmd+F opens the find bar. Intercept
+      // BEFORE forwarding to the page so the previewed app's own
+      // Ctrl+F handler (rare but possible) doesn't see it.
+      if (zoomMod && !e.altKey && !e.shiftKey && (e.key === "f" || e.key === "F")) {
+        e.preventDefault();
+        findOpenRef.current();
+        return;
+      }
       if (zoomMod && !e.altKey && !e.shiftKey) {
         const current = zoomRef.current;
         const cb = onZoomChangeRef.current;
@@ -1693,6 +1765,42 @@ export function usePreviewStream({
     sendJson({ type: "go_forward" });
   }, [sendJson]);
 
+  // Phase 5c (#133): in-page find. The hook owns the open/close
+  // state; query / count / currentIndex come from server `find_state`
+  // frames. `findOpen` / `findClose` flip the bar locally AND send
+  // the corresponding WS message so the server installs / tears down
+  // the highlight script.
+  const findOpen = useCallback(() => {
+    setFindState((prev) => (prev.open ? prev : { ...prev, open: true, query: "" }));
+    sendJson({ type: "find_open" });
+  }, [sendJson]);
+
+  const findClose = useCallback(() => {
+    setFindState({ open: false, query: "", count: 0, currentIndex: -1 });
+    sendJson({ type: "find_close" });
+  }, [sendJson]);
+
+  const findQuery = useCallback(
+    (q: string) => {
+      setFindState((prev) => ({ ...prev, query: q }));
+      sendJson({ type: "find_query", query: q });
+    },
+    [sendJson],
+  );
+
+  const findNext = useCallback(() => {
+    sendJson({ type: "find_next" });
+  }, [sendJson]);
+
+  const findPrev = useCallback(() => {
+    sendJson({ type: "find_prev" });
+  }, [sendJson]);
+
+  // Keep the keydown-intercept ref pointed at the latest findOpen.
+  useEffect(() => {
+    findOpenRef.current = findOpen;
+  }, [findOpen]);
+
   // Phase 5b (#132): persist + send. The consumer keeps `zoom` in
   // WindowState so it survives chat-tab reloads; the effect below
   // mirrors the muted/quality re-apply pattern by sending `set_zoom`
@@ -1748,5 +1856,11 @@ export function usePreviewStream({
     goBack,
     goForward,
     setZoom,
+    findState,
+    findOpen,
+    findClose,
+    findQuery,
+    findNext,
+    findPrev,
   };
 }

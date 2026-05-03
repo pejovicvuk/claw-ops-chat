@@ -2494,16 +2494,11 @@ app.prepare().then(() => {
             target: sessionId,
         }).catch(() => { });
     });
-    // Phase 4 (#130): seed extra Chromium flags BEFORE the first
-    // `acquirePage` so the WebRTC controller page can call
-    // `getDisplayMedia` without a media-permission prompt. Once the
-    // singleton browser has launched these flags can't be applied.
-    (0, chromium_pool_1.prelaunch)([
-        "--use-fake-ui-for-media-stream",
-        "--auto-select-desktop-capture-source=Current Tab",
-        "--enable-features=DesktopCaptureMacV2",
-        "--allow-running-insecure-content",
-    ]);
+    // Phase 4 hardening: WebRTC media flags are now always-on in
+    // chromium-pool.launch(); no boot-time prelaunch call needed.
+    // `--allow-running-insecure-content` was dropped — the controller
+    // iframes the dev server via the same-origin /chat/preview/<port>
+    // proxy, so mixed-content blocking never triggers.
     server.listen(port, () => {
         console.log(`> Claw Chat ready on http://localhost:${port}`);
         console.log(`> WebSocket endpoint: ws://localhost:${port}/ws/chat`);

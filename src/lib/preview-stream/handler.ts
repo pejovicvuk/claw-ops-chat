@@ -22,7 +22,15 @@ import {
   validateUuid,
   type DropEntry,
 } from "./file-drop";
-import { readFile } from "node:fs/promises";
+import {
+  MAX_CONCURRENT_PER_WS as MAX_DOWNLOADS_PER_WS,
+  MAX_DOWNLOAD_BYTES,
+  MAX_TOTAL_DOWNLOAD_BYTES,
+  cancelDownload,
+  currentTotalDownloadBytes,
+  registerDownload,
+} from "./download-relay";
+import { readFile, stat as fsStat, unlink as fsUnlink } from "node:fs/promises";
 import {
   forwardKey,
   forwardMouse,
@@ -181,6 +189,10 @@ export async function handlePreviewStream(
   // Phase 3c (#128): in-flight file-drop state. Keyed by dropId.
   // Survives until the per-drop ttl timer fires OR the WS closes.
   const drops: Map<string, DropEntry> = new Map();
+  // Phase 3d (#129): per-WS ownership of in-flight download ids. The
+  // global registry in download-relay.ts holds the entries; this Set
+  // exists so tearDown can cancel just our downloads (not other WS's).
+  const ownedDownloadIds: Set<string> = new Set();
 
   const sendJson = (payload: Record<string, unknown>) => {
     if (closed || ws.readyState !== ws.OPEN) return;
@@ -229,6 +241,18 @@ export async function handlePreviewStream(
         /* ignore */
       }
     }
+    // Phase 3d: cancel our owned downloads. Each call cancel()s the
+    // underlying Playwright Download (if still in flight) + unlinks
+    // the temp file. The user can no longer GET the file post-WS-close,
+    // so keeping it on disk would just leak.
+    for (const downloadId of Array.from(ownedDownloadIds)) {
+      try {
+        await cancelDownload(downloadId);
+      } catch {
+        /* ignore */
+      }
+    }
+    ownedDownloadIds.clear();
     if (acquired) {
       try {
         await acquired.release();
@@ -298,6 +322,128 @@ export async function handlePreviewStream(
   }
 
   const { page } = acquired;
+
+  // Phase 3d (#129): file download relay. When the previewed page
+  // triggers a download (<a download>, Content-Disposition: attachment,
+  // page.evaluate("a.click()"), etc.), Playwright fires "download"
+  // AFTER the bytes are saved to DOWNLOAD_DIR. We stat the result,
+  // run the per-file + total-dir + concurrent caps, then register in
+  // the global download registry and emit a download_ready JSON. The
+  // client (commit D) auto-creates a hidden <a download> pointing at
+  // /api/preview-download/<id> (commit C) and clicks it.
+  page.on("download", (download) => {
+    void (async () => {
+      if (closed) {
+        try {
+          await download.cancel();
+        } catch {
+          /* already done */
+        }
+        return;
+      }
+      const suggestedFilename = download.suggestedFilename();
+      // Per-WS concurrent cap. A bulk-export page could trigger
+      // dozens; cap protects disk + the global registry.
+      if (ownedDownloadIds.size >= MAX_DOWNLOADS_PER_WS) {
+        sendJson({
+          type: "download_rejected",
+          reason: "too_many",
+          filename: suggestedFilename,
+        });
+        try {
+          await download.cancel();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      // Total-dir cap — walk DOWNLOAD_DIR before we accept the new
+      // file. Slightly racy under concurrent downloads but the worst
+      // case is a small overage that the next reject corrects.
+      const currentTotal = await currentTotalDownloadBytes();
+      if (currentTotal >= MAX_TOTAL_DOWNLOAD_BYTES) {
+        sendJson({
+          type: "download_rejected",
+          reason: "disk_pressure",
+          filename: suggestedFilename,
+        });
+        try {
+          await download.cancel();
+        } catch {
+          /* ignore */
+        }
+        return;
+      }
+      let path: string | null = null;
+      try {
+        // download.path() resolves once Chromium has fully written
+        // the file to disk (under DOWNLOAD_DIR via context option).
+        path = await download.path();
+      } catch (err) {
+        sendJson({
+          type: "download_failed",
+          id: "unknown",
+          message: err instanceof Error ? err.message : "download.path failed",
+        });
+        return;
+      }
+      if (!path) {
+        sendJson({
+          type: "download_failed",
+          id: "unknown",
+          message: "download.path() returned null",
+        });
+        return;
+      }
+      let size = 0;
+      try {
+        const s = await fsStat(path);
+        size = s.size;
+      } catch {
+        sendJson({
+          type: "download_failed",
+          id: "unknown",
+          message: "could not stat downloaded file",
+        });
+        return;
+      }
+      // Per-file cap — enforced after the fact since Content-Length
+      // isn't always present on the download trigger. Oversized files
+      // are unlinked and reported.
+      if (size > MAX_DOWNLOAD_BYTES) {
+        try {
+          await fsUnlink(path);
+        } catch {
+          /* ignore */
+        }
+        try {
+          await download.delete();
+        } catch {
+          /* ignore */
+        }
+        sendJson({
+          type: "download_rejected",
+          reason: "too_large",
+          filename: suggestedFilename,
+        });
+        return;
+      }
+      const entry = registerDownload({
+        path,
+        suggestedFilename,
+        size,
+        actorEmail,
+        handle: download,
+      });
+      ownedDownloadIds.add(entry.id);
+      sendJson({
+        type: "download_ready",
+        id: entry.id,
+        filename: suggestedFilename,
+        size,
+      });
+    })();
+  });
 
   // Detect upstream errors that didn't throw at acquirePage time
   // (Chromium might have navigated to chrome-error://). The simplest

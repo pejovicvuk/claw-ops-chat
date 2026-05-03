@@ -1,4 +1,6 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
+import { mkdir } from "node:fs/promises";
+import { DOWNLOAD_DIR } from "./download-relay";
 
 /**
  * Singleton pool around a single headless Chromium instance shared by
@@ -35,9 +37,19 @@ let pageCount = 0;
 let idleTimer: NodeJS.Timeout | null = null;
 
 async function launch(): Promise<Browser> {
+  // Phase 3d (#129): consolidate downloads under our bind-mounted
+  // cache dir so the HTTP route can find them with one safePath()
+  // boundary. Without this, Playwright spreads artifacts across
+  // randomized os.tmpdir() folders that aren't reachable from the
+  // route. downloadsPath lives on LAUNCH options (not context).
+  await mkdir(DOWNLOAD_DIR, { recursive: true }).catch(() => {
+    /* dir may already exist; failure here is non-fatal — the WS
+       handler surfaces download issues as toast errors */
+  });
   return chromium.launch({
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
     headless: true,
+    downloadsPath: DOWNLOAD_DIR,
     args: [
       // Container is the security boundary — no setuid sandbox in
       // Alpine, so disable Chromium's namespacing too.
@@ -134,6 +146,12 @@ export async function acquirePage(
     // Wide enough that the previewed page can render its desktop
     // breakpoints; the actual canvas size is set by setViewportSize
     // when the canvas mounts.
+
+    // Phase 3d: accept downloads (Playwright default-true but
+    // explicit for self-documentation). The actual save dir is on
+    // LAUNCH options (downloadsPath above) — context-level option
+    // doesn't exist for that.
+    acceptDownloads: true,
   });
   const page = await context.newPage();
   pageCount++;

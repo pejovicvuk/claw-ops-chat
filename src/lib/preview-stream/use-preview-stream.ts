@@ -9,7 +9,19 @@ import { toast } from "@/lib/use-toast";
 // rather than imported because file-drop.ts pulls in node:fs and
 // safe-path.ts which can't run in a browser bundle.
 const MAX_DROP_BYTES = 50 * 1024 * 1024;
-const DROP_CHUNK_SIZE = 64 * 1024;
+/**
+ * Chunk size when sending over the WebSocket transport. WS frame
+ * limits are generous (most browsers accept multi-MB frames), so
+ * 64 KB amortizes per-frame overhead.
+ */
+const DROP_CHUNK_SIZE_WS = 64 * 1024;
+/**
+ * Phase 4 hardening: chunk size when sending over the WebRTC data
+ * channel. SCTP message limits vary between browsers — Chrome/Edge
+ * accept >256 KB, but Firefox caps at 16 KB before the data channel
+ * silently truncates. 16 KB is the cross-browser-safe ceiling.
+ */
+const DROP_CHUNK_SIZE_DC = 16 * 1024;
 const FILE_DROP_TAG_CHUNK = 0x10;
 
 /**
@@ -1430,6 +1442,9 @@ export function usePreviewStream({
       // the data channel is closed (e.g. mid-WebRTC failure).
       const fileChannel = rtcFileChannelRef.current;
       const useDataChannel = fileChannel && fileChannel.readyState === "open";
+      // Cross-browser-safe chunk size: 16 KB on the data channel
+      // (Firefox SCTP limit), 64 KB on the WebSocket (no SCTP cap).
+      const chunkSize = useDataChannel ? DROP_CHUNK_SIZE_DC : DROP_CHUNK_SIZE_WS;
       const sendChunk = (chunk: Uint8Array): boolean => {
         const framed = new Uint8Array(headerLen + chunk.length);
         framed[0] = FILE_DROP_TAG_CHUNK;
@@ -1466,8 +1481,8 @@ export function usePreviewStream({
               })()
             : value;
           leftover = null;
-          while (pos + DROP_CHUNK_SIZE <= bytes.length) {
-            const slice = bytes.subarray(pos, pos + DROP_CHUNK_SIZE);
+          while (pos + chunkSize <= bytes.length) {
+            const slice = bytes.subarray(pos, pos + chunkSize);
             // Pace against bufferedAmount on whichever transport is
             // active. RTCDataChannel exposes the same `bufferedAmount`
             // surface as WebSocket so the watermark math is identical.
@@ -1482,7 +1497,7 @@ export function usePreviewStream({
                 return;
             }
             if (!sendChunk(slice)) return;
-            pos += DROP_CHUNK_SIZE;
+            pos += chunkSize;
           }
           if (pos < bytes.length) leftover = bytes.subarray(pos);
         }

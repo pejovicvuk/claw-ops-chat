@@ -50,7 +50,24 @@ export type PreviewStreamStatus = "idle" | "connecting" | "ready" | "error" | "c
 
 export type QualityPreset = "performance" | "balanced" | "quality";
 
-export type PreviewStreamMode = "video" | "canvas";
+/**
+ * `"video-rtc"` — Phase 4 (#130) WebRTC transport. The remote
+ *   MediaStream attaches to the same `<video>` element used by MSE,
+ *   so the consumer surface is `videoRef` for both modes.
+ * `"video"` — Phase 2 H.264/MSE fallback.
+ * `"canvas"` — Phase 1 JPEG fallback.
+ */
+export type PreviewStreamMode = "video-rtc" | "video" | "canvas";
+
+/** Phase 4 (#130): public STUN servers. No TURN — defer to a future phase. */
+const RTC_ICE_SERVERS: RTCIceServer[] = [
+  { urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] },
+];
+
+/** Phase 4 (#130): how long we wait for `RTCPeerConnection.connectionState`
+ *  to reach `connected` before flipping sticky-RTC-failure and falling
+ *  through to MSE. */
+const RTC_CONNECT_TIMEOUT_MS = 5_000;
 
 export interface UsePreviewStreamArgs {
   projectSlug: string;
@@ -111,6 +128,16 @@ export interface UsePreviewStreamResult {
    * same-origin (localhost:port) — external URLs are rejected.
    */
   navigate: (path: string) => void;
+  /**
+   * Phase 4 (#130): when in `video-rtc` mode, the remote MediaStream
+   * received from the WebRTC peer connection. The consumer attaches
+   * it to the `<video>` element via
+   * `videoRef.current.srcObject = remoteStream`. `null` until tracks
+   * arrive (or always when not in RTC mode).
+   */
+  remoteStream: MediaStream | null;
+  /** Phase 4 (#130): which transport is currently active. */
+  transport: "rtc" | "mse";
 }
 
 /**
@@ -251,9 +278,25 @@ export function usePreviewStream({
   // capability-detected codec and force ?codec=jpeg. Survives across
   // reconnects so a flaky stream doesn't keep retrying H.264 forever.
   const codecFailureRef = useRef(false);
-  const [mode, setMode] = useState<PreviewStreamMode>(() =>
-    detectMseSupport() === "none" ? "canvas" : "video",
-  );
+  // Phase 4 (#130): same pattern as codecFailureRef — once WebRTC has
+  // failed at runtime (timeout, peer-connection failed, or
+  // capture_failed from the controller), all subsequent connects skip
+  // straight to the MSE/JPEG path. Capability gate also flips this
+  // when the browser doesn't expose RTCPeerConnection.
+  const rtcFailureRef = useRef(false);
+  const [mode, setMode] = useState<PreviewStreamMode>(() => {
+    if (typeof window === "undefined" || typeof RTCPeerConnection === "undefined") {
+      return detectMseSupport() === "none" ? "canvas" : "video";
+    }
+    return "video-rtc";
+  });
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [transport, setTransport] = useState<"rtc" | "mse">(() => {
+    if (typeof window === "undefined" || typeof RTCPeerConnection === "undefined") {
+      return "mse";
+    }
+    return "rtc";
+  });
 
   // Apply the `muted` prop to the video element whenever it changes.
   // Browsers honour `<video muted>` for autoplay; flipping muted to
@@ -272,6 +315,16 @@ export function usePreviewStream({
   /** Pending JPEG paint — coalesce successive frames so we draw at most once per RAF. */
   const pendingFrameRef = useRef<Uint8Array | null>(null);
   const rafScheduledRef = useRef(false);
+
+  // Phase 4 (#130): WebRTC transport state. Lifecycle parallels the
+  // existing wsRef + reconnectTimerRef pair. Tear-down flips
+  // rtcFailureRef and the existing reconnect machinery picks up the
+  // MSE path on the next attempt.
+  const rtcPcRef = useRef<RTCPeerConnection | null>(null);
+  const rtcSignalingWsRef = useRef<WebSocket | null>(null);
+  const rtcCtrlChannelRef = useRef<RTCDataChannel | null>(null);
+  const rtcFileChannelRef = useRef<RTCDataChannel | null>(null);
+  const rtcConnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // MSE state. Lifecycle is per-WS-connection — `setupMse()` runs on
   // open, `teardownMse()` on close. The append queue drains via the
@@ -460,6 +513,20 @@ export function usePreviewStream({
   );
 
   const sendJson = useCallback((payload: Record<string, unknown>) => {
+    // Phase 4 (#130): when a data channel is open, route input/control
+    // through it for true P2P low-latency delivery (sub-frame click
+    // response). Otherwise fall back to the WS — same payload shape, so
+    // this is transparent to call sites. The file-drop chunked sender
+    // has its own data-channel awareness below.
+    const dc = rtcCtrlChannelRef.current;
+    if (dc && dc.readyState === "open") {
+      try {
+        dc.send(JSON.stringify(payload));
+        return;
+      } catch {
+        /* channel closing — fall through to WS */
+      }
+    }
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     try {
@@ -617,10 +684,233 @@ export function usePreviewStream({
     [drawNextFrame, handleH264Frame, mode, onCodecFailure, setupMse, teardownMse],
   );
 
+  // Phase 4 (#130): tear down the WebRTC peer connection + signaling
+  // WS. Idempotent. Called when the hook unmounts, when WebRTC fails
+  // and we fall through to MSE, or when the user reloads.
+  const teardownRtc = useCallback(() => {
+    if (rtcConnectTimerRef.current) {
+      clearTimeout(rtcConnectTimerRef.current);
+      rtcConnectTimerRef.current = null;
+    }
+    const pc = rtcPcRef.current;
+    rtcPcRef.current = null;
+    if (pc) {
+      try {
+        pc.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    rtcCtrlChannelRef.current = null;
+    rtcFileChannelRef.current = null;
+    const sigWs = rtcSignalingWsRef.current;
+    rtcSignalingWsRef.current = null;
+    if (sigWs && sigWs.readyState <= WebSocket.OPEN) {
+      try {
+        sigWs.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    setRemoteStream(null);
+  }, []);
+
   // Ref-based break of the connect ↔ scheduleReconnect circular
   // dependency. scheduleReconnect captures the ref; connect updates
   // it via the effect below. Same pattern as use-claude-chat.ts.
   const connectRef = useRef<() => void>(() => {});
+
+  /**
+   * Phase 4 (#130): try to bring up the WebRTC transport.
+   *
+   *   1. open signaling WS at /ws/preview-rtc/...?role=viewer
+   *   2. send {type:"role", role:"viewer"}
+   *   3. create RTCPeerConnection; receive ondatachannel for ctrl/file
+   *   4. on controller's offer → setRemoteDescription, createAnswer
+   *   5. relay ICE candidates both ways
+   *   6. ontrack → assemble remote MediaStream and attach to videoRef
+   *   7. when connectionState === "connected" → flip mode to
+   *      "video-rtc" and clear the 5 s connect timer
+   *
+   * On any fatal step (capture_failed from controller, peer connection
+   * failed/disconnected, or 5 s timeout) flip rtcFailureRef and call
+   * `onFail()` so the caller falls through to MSE. The sticky flag
+   * survives reconnects so a flaky link doesn't keep retrying RTC.
+   */
+  const connectRtc = useCallback(
+    (onFail: (reason: string) => void): void => {
+      if (typeof RTCPeerConnection === "undefined") {
+        rtcFailureRef.current = true;
+        onFail("RTCPeerConnection unavailable");
+        return;
+      }
+      teardownRtc();
+      const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl =
+        `${proto}//${window.location.host}${BASE_PATH}/ws/preview-rtc/` +
+        `${encodeURIComponent(projectSlug)}/${encodeURIComponent(itemSlug)}/${port}` +
+        `?role=viewer`;
+      let sigWs: WebSocket;
+      try {
+        sigWs = new WebSocket(wsUrl);
+      } catch (err) {
+        rtcFailureRef.current = true;
+        onFail(err instanceof Error ? err.message : "rtc ws open failed");
+        return;
+      }
+      rtcSignalingWsRef.current = sigWs;
+
+      const pc = new RTCPeerConnection({ iceServers: RTC_ICE_SERVERS });
+      rtcPcRef.current = pc;
+      const remote = new MediaStream();
+
+      const giveUp = (reason: string) => {
+        rtcFailureRef.current = true;
+        teardownRtc();
+        onFail(reason);
+      };
+
+      // Connection-state watchdog: 5 s to reach "connected", else fall
+      // back to MSE.
+      rtcConnectTimerRef.current = setTimeout(() => {
+        if (pc.connectionState !== "connected") {
+          giveUp(`rtc connect timeout (state=${pc.connectionState})`);
+        }
+      }, RTC_CONNECT_TIMEOUT_MS);
+
+      pc.ontrack = (evt) => {
+        for (const track of evt.streams[0]?.getTracks() ?? [evt.track]) {
+          if (!remote.getTracks().includes(track)) remote.addTrack(track);
+        }
+        setRemoteStream(remote);
+        // The server muxes a separate audio track when audio capture
+        // succeeds — surface that to the consumer's mute toggle.
+        setAudioAvailable(remote.getAudioTracks().length > 0);
+      };
+
+      pc.onicecandidate = (evt) => {
+        if (evt.candidate && sigWs.readyState === WebSocket.OPEN) {
+          try {
+            sigWs.send(
+              JSON.stringify({ type: "ice", candidate: evt.candidate.toJSON() }),
+            );
+          } catch {
+            /* ignore */
+          }
+        }
+      };
+
+      pc.ondatachannel = (evt) => {
+        const ch = evt.channel;
+        if (ch.label === "ctrl") {
+          rtcCtrlChannelRef.current = ch;
+          ch.binaryType = "arraybuffer";
+          ch.onmessage = (msg) => {
+            if (typeof msg.data !== "string") return;
+            try {
+              const f = JSON.parse(msg.data);
+              if (f.type === "url_changed") setCurrentPath(String(f.path ?? ""));
+              else if (f.type === "clipboard_copy") {
+                const validated = validateClipboardPayload(f.text);
+                if (validated.ok && validated.text && navigator.clipboard) {
+                  void navigator.clipboard
+                    .writeText(validated.text)
+                    .catch(() => {});
+                }
+              }
+            } catch {
+              /* drop malformed */
+            }
+          };
+        } else if (ch.label === "file") {
+          rtcFileChannelRef.current = ch;
+          ch.binaryType = "arraybuffer";
+        }
+      };
+
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === "connected") {
+          if (rtcConnectTimerRef.current) {
+            clearTimeout(rtcConnectTimerRef.current);
+            rtcConnectTimerRef.current = null;
+          }
+          setMode("video-rtc");
+          setTransport("rtc");
+          setStatus("ready");
+          setLastError(null);
+          // Wire the remote stream to the video element.
+          const v = videoRef.current;
+          if (v) {
+            v.srcObject = remote;
+            v.muted = muted ?? true;
+            void v.play().catch(() => {
+              /* autoplay block — silent retry on first click */
+            });
+          }
+        } else if (
+          pc.connectionState === "failed" ||
+          pc.connectionState === "disconnected" ||
+          pc.connectionState === "closed"
+        ) {
+          if (!rtcFailureRef.current) {
+            giveUp(`rtc peer state=${pc.connectionState}`);
+          }
+        }
+      };
+
+      sigWs.onopen = () => {
+        try {
+          sigWs.send(JSON.stringify({ type: "role", role: "viewer" }));
+        } catch {
+          /* ignore */
+        }
+      };
+      sigWs.onmessage = async (evt) => {
+        if (typeof evt.data !== "string") return;
+        let frame: {
+          type: string;
+          sdp?: RTCSessionDescriptionInit;
+          candidate?: RTCIceCandidateInit;
+          reason?: string;
+        };
+        try {
+          frame = JSON.parse(evt.data);
+        } catch {
+          return;
+        }
+        if (frame.type === "sdp" && frame.sdp) {
+          try {
+            await pc.setRemoteDescription(frame.sdp);
+            // Controller is the offerer — viewer answers.
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            sigWs.send(JSON.stringify({ type: "sdp", sdp: pc.localDescription }));
+          } catch (err) {
+            giveUp(`sdp answer: ${err instanceof Error ? err.message : "failed"}`);
+          }
+        } else if (frame.type === "ice" && frame.candidate) {
+          try {
+            await pc.addIceCandidate(frame.candidate);
+          } catch {
+            /* late candidates may fail benignly */
+          }
+        } else if (frame.type === "capture_failed") {
+          giveUp(`controller capture failed: ${frame.reason ?? "unknown"}`);
+        } else if (frame.type === "bye") {
+          giveUp("controller disconnected");
+        }
+      };
+      sigWs.onerror = () => {
+        giveUp("rtc signaling ws error");
+      };
+      sigWs.onclose = () => {
+        if (pc.connectionState !== "connected" && !rtcFailureRef.current) {
+          giveUp("rtc signaling ws closed before pairing");
+        }
+      };
+    },
+    [projectSlug, itemSlug, port, teardownRtc, videoRef, muted],
+  );
 
   const scheduleReconnect = useCallback(() => {
     if (intentionalCloseRef.current) return;
@@ -637,12 +927,33 @@ export function usePreviewStream({
     if (intentionalCloseRef.current) return;
     if (!enabled) return;
     setStatus("connecting");
+
+    // Phase 4 (#130): try the WebRTC transport first. On any fatal
+    // failure connectRtc flips rtcFailureRef and synchronously calls
+    // back here, which re-enters connect() to take the MSE path. The
+    // sticky flag survives reconnects so the second attempt skips
+    // straight past this branch.
+    if (!rtcFailureRef.current) {
+      connectRtc((reason) => {
+        setLastError(`RTC fallback: ${reason}`);
+        setTransport("mse");
+        // Re-enter connect synchronously (microtask deferred to avoid
+        // a render cascade) so we hit the MSE path on the next tick.
+        queueMicrotask(() => {
+          if (intentionalCloseRef.current) return;
+          connectRef.current();
+        });
+      });
+      return;
+    }
+
     // Decide codec for this connection. Sticky failure flag forces
     // JPEG for the rest of the session. Otherwise: H.264 (with or
     // without Opus audio) if the browser supports it, JPEG otherwise.
     const support = codecFailureRef.current ? "none" : detectMseSupport();
     const codec: "h264" | "jpeg" = support === "none" ? "jpeg" : "h264";
     setMode(codec === "h264" ? "video" : "canvas");
+    setTransport("mse");
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams();
     if (quality) params.set("quality", quality);
@@ -676,7 +987,17 @@ export function usePreviewStream({
       teardownMse();
       scheduleReconnect();
     };
-  }, [projectSlug, itemSlug, port, onMessage, scheduleReconnect, enabled, quality, teardownMse]);
+  }, [
+    projectSlug,
+    itemSlug,
+    port,
+    onMessage,
+    scheduleReconnect,
+    enabled,
+    quality,
+    teardownMse,
+    connectRtc,
+  ]);
 
   // Keep the connectRef current so scheduleReconnect always invokes
   // the freshest closure (with up-to-date enabled / port / etc.).
@@ -711,15 +1032,19 @@ export function usePreviewStream({
           /* ignore */
         }
       }
+      teardownRtc();
     };
-  }, [enabled, connect]);
+  }, [enabled, connect, teardownRtc]);
 
   // Mouse / key / wheel input forwarding. Bound to whichever DOM
   // element is currently rendered (canvas in JPEG mode, video in
   // H.264 mode), not the window, so events outside the preview area
   // don't leak into Chromium. Re-binds when `mode` changes.
   useEffect(() => {
-    const el: HTMLElement | null = mode === "video" ? videoRef.current : canvasRef.current;
+    // Phase 4 (#130): both "video" (MSE) and "video-rtc" (WebRTC) modes
+    // render to the same <video> element — only the upstream pipe differs.
+    const el: HTMLElement | null =
+      mode === "video" || mode === "video-rtc" ? videoRef.current : canvasRef.current;
     if (!el || !enabled) return;
 
     const toCanvas = (e: { clientX: number; clientY: number }) => {
@@ -993,13 +1318,26 @@ export function usePreviewStream({
       const dropIdBytes = new TextEncoder().encode(dropId);
       // Tag (1) + dropIdLen (1) + dropId (N) + chunk bytes
       const headerLen = 2 + dropIdBytes.length;
+      // Phase 4 (#130): when the data channel is open, route binary
+      // chunks through it for P2P delivery. Falls back to the WS when
+      // the data channel is closed (e.g. mid-WebRTC failure).
+      const fileChannel = rtcFileChannelRef.current;
+      const useDataChannel = fileChannel && fileChannel.readyState === "open";
       const sendChunk = (chunk: Uint8Array): boolean => {
-        if (ws.readyState !== WebSocket.OPEN) return false;
         const framed = new Uint8Array(headerLen + chunk.length);
         framed[0] = FILE_DROP_TAG_CHUNK;
         framed[1] = dropIdBytes.length;
         framed.set(dropIdBytes, 2);
         framed.set(chunk, headerLen);
+        if (useDataChannel && fileChannel.readyState === "open") {
+          try {
+            fileChannel.send(framed);
+            return true;
+          } catch {
+            return false;
+          }
+        }
+        if (ws.readyState !== WebSocket.OPEN) return false;
         ws.send(framed);
         return true;
       };
@@ -1023,11 +1361,18 @@ export function usePreviewStream({
           leftover = null;
           while (pos + DROP_CHUNK_SIZE <= bytes.length) {
             const slice = bytes.subarray(pos, pos + DROP_CHUNK_SIZE);
-            // Pace against bufferedAmount; matches Phase 2's soft
-            // watermark so we share one bandwidth budget.
-            while (ws.bufferedAmount > 4 * 1024 * 1024) {
+            // Pace against bufferedAmount on whichever transport is
+            // active. RTCDataChannel exposes the same `bufferedAmount`
+            // surface as WebSocket so the watermark math is identical.
+            const bufferedSrc = useDataChannel ? fileChannel : ws;
+            while (bufferedSrc.bufferedAmount > 4 * 1024 * 1024) {
               await new Promise((r) => setTimeout(r, 50));
-              if (ws.readyState !== WebSocket.OPEN) return;
+              if (
+                useDataChannel
+                  ? fileChannel.readyState !== "open"
+                  : ws.readyState !== WebSocket.OPEN
+              )
+                return;
             }
             if (!sendChunk(slice)) return;
             pos += DROP_CHUNK_SIZE;
@@ -1035,9 +1380,15 @@ export function usePreviewStream({
           if (pos < bytes.length) leftover = bytes.subarray(pos);
         }
         if (leftover && leftover.length > 0) {
-          while (ws.bufferedAmount > 4 * 1024 * 1024) {
+          const bufferedSrc = useDataChannel ? fileChannel : ws;
+          while (bufferedSrc.bufferedAmount > 4 * 1024 * 1024) {
             await new Promise((r) => setTimeout(r, 50));
-            if (ws.readyState !== WebSocket.OPEN) return;
+            if (
+              useDataChannel
+                ? fileChannel.readyState !== "open"
+                : ws.readyState !== WebSocket.OPEN
+            )
+              return;
           }
           sendChunk(leftover);
         }
@@ -1096,7 +1447,10 @@ export function usePreviewStream({
   // Resize forwarding — when the display element's size changes,
   // send the new pixel dims so Chromium's emulated viewport matches.
   useEffect(() => {
-    const el: HTMLElement | null = mode === "video" ? videoRef.current : canvasRef.current;
+    // Phase 4 (#130): both "video" (MSE) and "video-rtc" (WebRTC) modes
+    // render to the same <video> element — only the upstream pipe differs.
+    const el: HTMLElement | null =
+      mode === "video" || mode === "video-rtc" ? videoRef.current : canvasRef.current;
     if (!el || !enabled) return;
     const ro = new ResizeObserver(() => {
       const rect = el.getBoundingClientRect();
@@ -1135,5 +1489,7 @@ export function usePreviewStream({
     dragOver,
     reload,
     navigate,
+    remoteStream,
+    transport,
   };
 }

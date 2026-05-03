@@ -357,9 +357,12 @@ function PreviewWindowBody({
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {/* H.264 / MSE path or JPEG / canvas path — `stream.mode` is
-            driven by capability detection + sticky runtime fallback. */}
-        {stream.mode === "video" ? (
+        {/* Phase 4 (#130): WebRTC remote stream uses the same <video>
+            element as the H.264 / MSE path — only the upstream pipe
+            differs. JPEG fallback still renders to <canvas>.
+            `stream.mode` is driven by capability detection + sticky
+            runtime fallback. */}
+        {stream.mode === "video-rtc" || stream.mode === "video" ? (
           <video
             ref={videoRef}
             className="h-full w-full cursor-default bg-white outline-none touch-none select-none"

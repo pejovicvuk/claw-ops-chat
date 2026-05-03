@@ -3,6 +3,8 @@
 import { useContext, useEffect, useRef, useState } from "react";
 import {
   FiAlertTriangle,
+  FiArrowLeft,
+  FiArrowRight,
   FiChevronDown,
   FiChevronUp,
   FiExternalLink,
@@ -265,6 +267,30 @@ function PreviewWindowBody({
             {portError}
           </span>
         )}
+
+        {/* Phase 5a (#131): back/forward navigation. Disabled when the
+            previewed page has no history in that direction (driven by
+            CDP `Page.getNavigationHistory` on every framenavigated). */}
+        <button
+          type="button"
+          onClick={() => stream.goBack()}
+          disabled={!isRunning || stream.status !== "ready" || !stream.canGoBack}
+          title="Go back"
+          aria-label="Go back"
+          className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+        >
+          <FiArrowLeft size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => stream.goForward()}
+          disabled={!isRunning || stream.status !== "ready" || !stream.canGoForward}
+          title="Go forward"
+          aria-label="Go forward"
+          className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
+        >
+          <FiArrowRight size={12} />
+        </button>
 
         {/* Path input — type a route (e.g. /about, /users/42) and press
             Enter or blur to navigate. Auto-syncs from the page's actual

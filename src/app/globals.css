@@ -674,3 +674,61 @@ html:not(.dark) {
 .animate-spin-once {
   animation: spinOnce 450ms cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* ── GitHub-style alerts (`> [!NOTE]` / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]) ──
+ *
+ * Emitted by `remark-github-blockquote-alert` as
+ *   <div class="markdown-alert markdown-alert-{type}">
+ *     <p class="markdown-alert-title"><svg.../> Note</p>
+ *     <p>body…</p>
+ *   </div>
+ *
+ * Colours reuse the existing monitoring palette tokens so light/dark mode
+ * stay aligned with the rest of the app instead of importing the plugin's
+ * own GitHub colour variables.
+ */
+.markdown-alert {
+  border-left: 3px solid var(--alert-accent);
+  border-radius: 6px;
+  background-color: color-mix(in srgb, var(--alert-accent) 8%, transparent);
+  padding: 0.6rem 0.9rem;
+  margin: 0.75rem 0;
+}
+.markdown-alert > :first-child {
+  margin-top: 0;
+}
+.markdown-alert > :last-child {
+  margin-bottom: 0;
+}
+.markdown-alert-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--alert-accent);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 0.35rem;
+}
+.markdown-alert-title svg {
+  width: 14px;
+  height: 14px;
+  fill: currentColor;
+  flex-shrink: 0;
+}
+.markdown-alert-note {
+  --alert-accent: var(--mon-info);
+}
+.markdown-alert-tip {
+  --alert-accent: var(--mon-healthy);
+}
+.markdown-alert-important {
+  --alert-accent: #8957e5;
+}
+.markdown-alert-warning {
+  --alert-accent: var(--mon-warning);
+}
+.markdown-alert-caution {
+  --alert-accent: var(--mon-critical);
+}

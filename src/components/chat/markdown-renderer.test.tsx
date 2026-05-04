@@ -1,7 +1,12 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { cleanup, render, screen } from "@testing-library/react";
 import MarkdownRenderer from "./markdown-renderer";
+
+// React Testing Library doesn't auto-cleanup with our Vitest config (we don't
+// load `@testing-library/react/vitest`), so each `render()` would otherwise
+// accumulate DOM between tests and break `screen.getByTestId` queries.
+afterEach(cleanup);
 
 // Stub the heavy / network-aware preview components so the renderer's
 // own behavior is what we test. SyntaxCode lazily loads shiki; the
@@ -129,7 +134,9 @@ describe("MarkdownRenderer document variant", () => {
     expect(screen.queryByTestId("chat-link")).toBeNull();
     const link = screen.getByText("Anthropic") as HTMLAnchorElement;
     expect(link.tagName).toBe("A");
-    expect(link.getAttribute("href")).toBe("https://anthropic.com");
+    // rehype-harden normalises absolute URLs through `new URL()`, which
+    // appends a trailing slash to bare-host URLs. Assert host+path only.
+    expect(link.getAttribute("href")).toMatch(/^https:\/\/anthropic\.com\/?$/);
     expect(link.getAttribute("target")).toBe("_blank");
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
   });
@@ -153,7 +160,8 @@ describe("MarkdownRenderer chat variant (default)", () => {
   it("wraps inline links in LinkPreview", () => {
     render(<MarkdownRenderer text="see [docs](https://example.com)" />);
     const wrapped = screen.getByTestId("chat-link");
-    expect(wrapped.getAttribute("href")).toBe("https://example.com");
+    // rehype-harden normalises bare-host URLs to include a trailing slash.
+    expect(wrapped.getAttribute("href")).toMatch(/^https:\/\/example\.com\/?$/);
   });
 
   it("turns a lone file path on its own line into a FileCard", () => {
@@ -167,5 +175,126 @@ describe("MarkdownRenderer chat variant (default)", () => {
     const h1 = container.querySelector("h1");
     expect(h1).not.toBeNull();
     expect(h1?.getAttribute("id")).toBeNull();
+  });
+});
+
+/* ── Indented-code-block bug regression (CommonMark §4.4) ────────────────
+ *
+ * When the assistant emits an ASCII diagram with a 4-space indent and
+ * continues the prose at the same indent, default CommonMark coalesces
+ * everything (diagram + headings + bullets + bold) into a single <pre>
+ * block. `remarkDisableIndentedCode` (chat variant only) prevents this. */
+describe("MarkdownRenderer chat variant — indented-code-block fix", () => {
+  it("recovers headings, bullets, and bold from diagram-followed-by-indented-prose", () => {
+    const md = [
+      "Architecture:",
+      "",
+      "    ┌─────────┐",
+      "    │  thing  │",
+      "    └─────────┘",
+      "",
+      "    ### Option C",
+      "",
+      "    - **bold item**",
+      "    - second item",
+      "",
+      "    Trailing prose paragraph.",
+    ].join("\n");
+
+    const { container } = render(<MarkdownRenderer text={md} />);
+
+    // The bug rendered the entire post-diagram content as one <pre>; the
+    // fix recovers the heading, list, and bold inline element.
+    const h3 = container.querySelector("h3");
+    expect(h3).not.toBeNull();
+    expect(h3?.textContent).toContain("Option C");
+
+    const items = container.querySelectorAll("li");
+    expect(items.length).toBeGreaterThanOrEqual(2);
+
+    const strong = container.querySelector("strong");
+    expect(strong).not.toBeNull();
+    expect(strong?.textContent).toBe("bold item");
+  });
+
+  it("still keeps fenced code blocks working (only indented blocks are disabled)", () => {
+    const md = "```ts\nconst x = 1;\n```";
+    render(<MarkdownRenderer text={md} />);
+    const code = screen.getByTestId("code-block");
+    expect(code.getAttribute("data-lang")).toBe("ts");
+    expect(code.textContent).toBe("const x = 1;");
+  });
+
+  it("preserves indented code blocks in the document variant (CommonMark-faithful)", () => {
+    // Document variant intentionally keeps CommonMark §4.4 because authored
+    // .md files (READMEs, reports) sometimes use indented code blocks.
+    // The renderer's `pre` override unwraps the <pre> tag, but the inner
+    // <code> survives and contains both indented lines joined together.
+    const md = "Prose:\n\n    code-line-1\n    code-line-2\n";
+    const { container } = render(<MarkdownRenderer text={md} variant="document" />);
+    const codes = container.querySelectorAll("code");
+    const block = Array.from(codes).find((c) => c.textContent?.includes("code-line-1"));
+    expect(block).toBeTruthy();
+    expect(block?.textContent).toContain("code-line-2");
+  });
+});
+
+/* ── GitHub-style alerts (`> [!NOTE]` / [!TIP] / etc.) ────────────────── */
+describe("MarkdownRenderer — GitHub alerts", () => {
+  it.each([
+    ["NOTE", "markdown-alert-note"],
+    ["TIP", "markdown-alert-tip"],
+    ["IMPORTANT", "markdown-alert-important"],
+    ["WARNING", "markdown-alert-warning"],
+    ["CAUTION", "markdown-alert-caution"],
+  ])("renders [!%s] as a .%s callout", (kind, expectedClass) => {
+    const md = `> [!${kind}]\n> Heads up about something`;
+    const { container } = render(<MarkdownRenderer text={md} />);
+    const alert = container.querySelector(`.${expectedClass}`);
+    expect(alert).not.toBeNull();
+    expect(alert?.textContent).toContain("Heads up");
+  });
+
+  it("renders alerts in document variant too", () => {
+    const md = "> [!WARNING]\n> Production deploy.";
+    const { container } = render(<MarkdownRenderer text={md} variant="document" />);
+    expect(container.querySelector(".markdown-alert-warning")).not.toBeNull();
+  });
+});
+
+/* ── HTML sanitisation (rehype-sanitize) ──────────────────────────────── */
+describe("MarkdownRenderer — sanitisation", () => {
+  it("strips <script> elements from inline HTML", () => {
+    const md = "before <script>window.x = 1;</script> after";
+    const { container } = render(<MarkdownRenderer text={md} />);
+    expect(container.querySelector("script")).toBeNull();
+  });
+
+  it("drops on* event-handler attributes from raw HTML", () => {
+    const md = `<a href="https://example.com" onclick="alert(1)">click</a>`;
+    const { container } = render(<MarkdownRenderer text={md} />);
+    // react-markdown escapes raw inline HTML into text by default; even if
+    // a future change enabled rehype-raw, sanitize would strip onclick.
+    const allText = container.textContent ?? "";
+    expect(allText).not.toContain("onclick=");
+  });
+});
+
+/* ── remend self-healing for streaming markdown ────────────────────────── */
+describe("MarkdownRenderer — remend self-healing", () => {
+  it("closes unterminated bold so it renders as <strong> mid-stream", () => {
+    // Default react-markdown would render this as literal "**hello".
+    // remend completes the trailing `**` so the parser sees real bold.
+    const { container } = render(<MarkdownRenderer text="prefix **hello" />);
+    const strong = container.querySelector("strong");
+    expect(strong).not.toBeNull();
+    expect(strong?.textContent).toBe("hello");
+  });
+
+  it("closes unterminated inline code so it renders as <code>", () => {
+    const { container } = render(<MarkdownRenderer text="run `npm test" />);
+    const code = container.querySelector("code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe("npm test");
   });
 });

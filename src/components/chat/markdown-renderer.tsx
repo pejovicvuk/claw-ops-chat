@@ -1,16 +1,92 @@
 "use client";
 
 import Markdown, { type Components } from "react-markdown";
+import { harden } from "rehype-harden";
+import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import type { Schema } from "hast-util-sanitize";
 import rehypeSlug from "rehype-slug";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
+import remarkAlert from "remark-github-blockquote-alert";
+import remend, { type RemendOptions } from "remend";
+import type { PluggableList } from "unified";
+import { Children, isValidElement, useMemo, type ReactElement, type ReactNode } from "react";
 import { detectFilePaths, isLonePathLine } from "@/lib/detect-file-paths";
+import { remarkDisableIndentedCode } from "@/lib/markdown/remark-disable-indented-code";
 import { FileCard, ResolvedFileCard } from "./previews/file-card";
 import { FilePathPill, ResolvedPathPill } from "./previews/file-path-pill";
 import { ImagePreview } from "./previews/image-preview";
 import { LinkPreview } from "./previews/link-preview";
 import { SyntaxCode } from "./previews/syntax-code";
+
+/**
+ * Sanitisation schema extending GitHub's defaults to permit:
+ *   - the `markdown-alert*` classes emitted by `remark-github-blockquote-alert`
+ *   - the inline SVG icons that plugin renders alongside each alert title
+ *   - `rel` / `target` on anchors (added by `rehype-harden` for safety)
+ *
+ * `defaultSchema` already covers GFM constructs (tables, task lists,
+ * footnotes). We extend rather than replace to keep that coverage.
+ *
+ * Note: `hast-util-sanitize` matches `className` against each space-separated
+ * token individually, so the regex needs to match a *single* class name —
+ * not the joined string.
+ */
+const ALERT_CLASS_PATTERN = /^markdown-alert(?:-(?:note|tip|important|warning|caution|title))?$/;
+
+const sanitizeSchema: Schema = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "svg", "path"],
+  attributes: {
+    ...defaultSchema.attributes,
+    a: [...(defaultSchema.attributes?.a ?? []), "rel", "target"],
+    div: [...(defaultSchema.attributes?.div ?? []), ["className", ALERT_CLASS_PATTERN]],
+    p: [...(defaultSchema.attributes?.p ?? []), ["className", ALERT_CLASS_PATTERN]],
+    svg: ["className", "viewBox", "width", "height", "ariaHidden", "fill"],
+    path: ["d", "fillRule", "clipRule"],
+  },
+};
+
+/**
+ * `remend` runs as a string preprocessor before parsing. It self-heals
+ * incomplete markdown that arrives mid-stream (unterminated bold, unclosed
+ * inline code, dangling links). KaTeX completion is left off because we
+ * don't render math today and `$` is too easily confused with currency.
+ */
+const REMEND_OPTIONS: RemendOptions = {
+  inlineKatex: false,
+  katex: false,
+};
+
+// `rehype-harden` is configured permissively here: we trust the markdown
+// source (Claude SDK output and authored .md files), so harden's role is
+// defence-in-depth — block obviously-dangerous protocols (`javascript:`,
+// `vbscript:`) and add safe `rel` attributes to outbound links — without
+// stripping legitimate URLs.
+const HARDEN_OPTIONS = {
+  allowedLinkPrefixes: ["*"],
+  allowedImagePrefixes: ["*"],
+  allowedProtocols: ["*"],
+  allowDataImages: true,
+} as const;
+
+const REHYPE_PLUGINS_CHAT: PluggableList = [
+  [harden, HARDEN_OPTIONS],
+  [rehypeSanitize, sanitizeSchema],
+];
+const REHYPE_PLUGINS_DOCUMENT: PluggableList = [
+  [harden, HARDEN_OPTIONS],
+  [rehypeSanitize, sanitizeSchema],
+  rehypeSlug,
+];
+
+const REMARK_PLUGINS_CHAT: PluggableList = [
+  remarkGfm,
+  remarkBreaks,
+  remarkAlert,
+  remarkDisableIndentedCode,
+];
+const REMARK_PLUGINS_DOCUMENT: PluggableList = [remarkGfm, remarkBreaks, remarkAlert];
 
 /**
  * Walks text children, splitting strings on detectFilePaths segments and
@@ -324,8 +400,6 @@ const documentComponents: Components = {
   td: ({ children }) => <td className="px-3 py-2 align-top">{children}</td>,
 };
 
-const documentRehypePlugins = [rehypeSlug];
-
 export type MarkdownVariant = "chat" | "document";
 
 interface MarkdownRendererProps {
@@ -342,22 +416,30 @@ interface MarkdownRendererProps {
 }
 
 export default function MarkdownRenderer({ text, variant = "chat" }: MarkdownRendererProps) {
+  // Self-heal incomplete inline constructs (bold/italic/inline code/links)
+  // that arrive mid-stream. Pure function of `text`; safe to memoise.
+  const healed = useMemo(() => remend(text, REMEND_OPTIONS), [text]);
+
   if (variant === "document") {
     return (
       <div className="text-[15px] leading-7 text-canvas-fg">
         <Markdown
-          remarkPlugins={[remarkGfm, remarkBreaks]}
-          rehypePlugins={documentRehypePlugins}
+          remarkPlugins={REMARK_PLUGINS_DOCUMENT}
+          rehypePlugins={REHYPE_PLUGINS_DOCUMENT}
           components={documentComponents}
         >
-          {text}
+          {healed}
         </Markdown>
       </div>
     );
   }
   return (
-    <Markdown remarkPlugins={[remarkGfm, remarkBreaks]} components={chatComponents}>
-      {text}
+    <Markdown
+      remarkPlugins={REMARK_PLUGINS_CHAT}
+      rehypePlugins={REHYPE_PLUGINS_CHAT}
+      components={chatComponents}
+    >
+      {healed}
     </Markdown>
   );
 }

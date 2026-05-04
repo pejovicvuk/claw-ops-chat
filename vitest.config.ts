@@ -28,5 +28,9 @@ export default defineConfig({
     // instead of production's permissive root default. See
     // vitest.setup.ts for the why.
     setupFiles: ["./vitest.setup.ts"],
+    // Build outputs sometimes contain stale copies of *.test.ts(x) that
+    // Vitest will try to execute and fail to resolve dev-only React
+    // bundles in. Exclude them alongside the defaults.
+    exclude: ["**/node_modules/**", "**/dist/**", "**/.next/**", "**/build/**"],
   },
 });

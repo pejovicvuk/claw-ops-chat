@@ -353,6 +353,34 @@ Top-level: `bootstrap`, `singleton`, `collector`, `apm-middleware`, `env`,
 `pick-renderer.ts` — pick the right preview renderer (PDF/image/code/binary)
 based on MIME and size.
 
+### `src/lib/preview-stream/`
+
+Headless-Chromium screencast pipeline for the canvas "preview window"
+feature. Three-transport stack (WebRTC > H.264/MSE > JPEG/canvas) plus
+clipboard / file-drop / download bridges. See
+[preview-stream.md](./preview-stream.md) for the full walkthrough.
+
+- `handler.ts` — WS handler at `/ws/preview-stream/<slug>/<item>/<port>`
+- `chromium-pool.ts` — singleton headless Chromium with 5-min idle shutdown
+- `cdp-screencast.ts` — CDP `Page.startScreencast` wrapper
+- `h264-encoder.ts` — ffmpeg → fragmented-MP4 init/media segments
+- `audio-capture.ts` — Phase 3a: parec → Opus mux into the H.264 stream
+- `png-decoder.ts` — inline PNG → RGB24 for ffmpeg stdin
+- `input-forward.ts` — mouse / wheel / key / touch / resize → CDP `Input.*`
+- `clipboard-bridge.ts` — Phase 3b: two-way clipboard sync
+- `file-drop.ts` — Phase 3c: chunked uploads injected via Playwright binding
+- `download-relay.ts` — Phase 3d: `<a download>` → `/api/preview-download/<id>`
+- `history-state.ts` — Phase 5a: emits `history_state` on framenavigated
+- `find-in-page.ts` — Phase 5c: injects `__clawFind` controller
+- `zoom-steps.ts` — Phase 5b: client-side zoom clamp helper
+- `webrtc-handler.ts` — Phase 4 (#130): `/ws/preview-rtc` viewer + controller pairing
+- `webrtc-signaling.ts` — pure pairing logic + slot-collision rules
+- `webrtc-config.ts` — STUN/TURN config, env-driven
+- `webrtc-metrics.ts` — in-memory counters for `/api/preview/metrics`
+- `health.ts` + `health.test.ts` — Phase 6a (#134): registry + cap + heartbeat + audit
+- `use-preview-stream.ts` — client React hook: WS open, MSE buffer, fallback
+- `__tests__/` — additional integration tests
+
 ## `public/` — PWA assets
 
 | Path                          | Purpose                                     |

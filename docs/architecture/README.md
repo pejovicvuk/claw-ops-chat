@@ -7,34 +7,37 @@ For day-to-day commands and conventions, see the root [`CLAUDE.md`](../../CLAUDE
 
 ## What's in here
 
-| Doc                                  | Read it when…                                                                                     |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| [file-map.md](./file-map.md)         | You need to find a feature by name, or want a directory-by-directory inventory of the repo.       |
-| [api-routes.md](./api-routes.md)     | You're adding, modifying, or auditing an HTTP route. Has every `route.ts` grouped by feature.     |
-| [runtime.md](./runtime.md)           | You're touching `server.ts`, the chat WebSocket, the SessionManager, the SDK loop, or boot order. |
-| [subsystems.md](./subsystems.md)     | You're working on audit, push, monitoring, reports, projects, proxy, git, file system, or auth.   |
-| [integrations.md](./integrations.md) | You're connecting an external service: Spring backend, OAuth provider, MCP server, STT, Web Push. |
+| Doc                                      | Read it when…                                                                                     |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| [file-map.md](./file-map.md)             | You need to find a feature by name, or want a directory-by-directory inventory of the repo.       |
+| [api-routes.md](./api-routes.md)         | You're adding, modifying, or auditing an HTTP route. Has every `route.ts` grouped by feature.     |
+| [runtime.md](./runtime.md)               | You're touching `server.ts`, the chat WebSocket, the SessionManager, the SDK loop, or boot order. |
+| [subsystems.md](./subsystems.md)         | You're working on audit, push, monitoring, reports, projects, proxy, git, file system, or auth.   |
+| [preview-stream.md](./preview-stream.md) | You're touching the headless-Chromium preview pipeline (WebRTC / MSE / JPEG, audit, heartbeat).   |
+| [integrations.md](./integrations.md)     | You're connecting an external service: Spring backend, OAuth provider, MCP server, STT, Web Push. |
 
 ## Task-to-doc cheat sheet
 
-| Task                                                     | Start here                                                                                         |
-| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Add an API route                                         | [api-routes.md — adding a new route](./api-routes.md#adding-a-new-route--checklist)                |
-| Trace a chat message end-to-end                          | [runtime.md — chat WebSocket protocol](./runtime.md#chat-websocket-protocol)                       |
-| Investigate why an audit event is or isn't being written | [subsystems.md — audit](./subsystems.md#audit)                                                     |
-| Add or change a tool's preview rendering                 | [subsystems.md — proxy & previews](./subsystems.md#proxy--previews)                                |
-| Hook in a new MCP server                                 | [integrations.md — when adding a new integration](./integrations.md#when-adding-a-new-integration) |
-| Wire up a new OAuth provider                             | [integrations.md — OAuth providers](./integrations.md#oauth-providers)                             |
-| Schedule a recurring Claude job                          | [subsystems.md — reports](./subsystems.md#reports-scheduled-claude-jobs)                           |
-| Add a monitoring metric or alert rule                    | [subsystems.md — monitoring](./subsystems.md#monitoring)                                           |
-| Add a new automation action (force-gc, prune, …)         | `src/lib/monitoring/automation/actions/`                                                           |
-| Find where session state is persisted to disk            | [runtime.md — disk persistence](./runtime.md#disk-persistence)                                     |
-| Adjust SSRF or preview cache caps                        | [subsystems.md — proxy & previews](./subsystems.md#proxy--previews)                                |
-| Track down a permission gate decision                    | [runtime.md — permission gates](./runtime.md#permission-gates-canusetool)                          |
-| Understand the cron jobs the server starts at boot       | [runtime.md — cron jobs](./runtime.md#cron-jobs-registered-at-boot)                                |
-| Find a React hook                                        | [file-map.md — `src/lib/` top-level files](./file-map.md#top-level-files) (search `use-`)          |
-| Find a settings page                                     | [file-map.md — `settings/pages/`](./file-map.md#settings)                                          |
-| Add a new push notification trigger                      | [subsystems.md — push](./subsystems.md#push-notifications)                                         |
+| Task                                                     | Start here                                                                                                                                                     |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Add an API route                                         | [api-routes.md — adding a new route](./api-routes.md#adding-a-new-route--checklist)                                                                            |
+| Trace a chat message end-to-end                          | [runtime.md — chat WebSocket protocol](./runtime.md#chat-websocket-protocol)                                                                                   |
+| Investigate why an audit event is or isn't being written | [subsystems.md — audit](./subsystems.md#audit)                                                                                                                 |
+| Add or change a tool's preview rendering                 | [subsystems.md — proxy & previews](./subsystems.md#proxy--previews)                                                                                            |
+| Hook in a new MCP server                                 | [integrations.md — when adding a new integration](./integrations.md#when-adding-a-new-integration)                                                             |
+| Wire up a new OAuth provider                             | [integrations.md — OAuth providers](./integrations.md#oauth-providers)                                                                                         |
+| Schedule a recurring Claude job                          | [subsystems.md — reports](./subsystems.md#reports-scheduled-claude-jobs)                                                                                       |
+| Add a monitoring metric or alert rule                    | [subsystems.md — monitoring](./subsystems.md#monitoring)                                                                                                       |
+| Add a new automation action (force-gc, prune, …)         | `src/lib/monitoring/automation/actions/`                                                                                                                       |
+| Find where session state is persisted to disk            | [runtime.md — disk persistence](./runtime.md#disk-persistence)                                                                                                 |
+| Adjust SSRF or preview cache caps                        | [subsystems.md — proxy & previews](./subsystems.md#proxy--previews)                                                                                            |
+| Track down a permission gate decision                    | [runtime.md — permission gates](./runtime.md#permission-gates-canusetool)                                                                                      |
+| Understand the cron jobs the server starts at boot       | [runtime.md — cron jobs](./runtime.md#cron-jobs-registered-at-boot)                                                                                            |
+| Find a React hook                                        | [file-map.md — `src/lib/` top-level files](./file-map.md#top-level-files) (search `use-`)                                                                      |
+| Find a settings page                                     | [file-map.md — `settings/pages/`](./file-map.md#settings)                                                                                                      |
+| Add a new push notification trigger                      | [subsystems.md — push](./subsystems.md#push-notifications)                                                                                                     |
+| Tune `PREVIEW_MAX_ACTIVE` / preview health               | [preview-stream.md — heartbeat](./preview-stream.md#heartbeat--auto-restart-phase-6a--134) and [operations/preview-tuning.md](../operations/preview-tuning.md) |
+| Run the preview load-test harness                        | [operations/preview-tuning.md — running the load test](../operations/preview-tuning.md#running-the-load-test)                                                  |
 
 ## Conventions
 

@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authFetch } from "@/lib/auth";
-import type { AuditEvent, AuditEventPage, AuditFilter, AuditStats } from "@/lib/audit/types";
+import type {
+  AuditCategory,
+  AuditEvent,
+  AuditEventPage,
+  AuditFilter,
+  AuditStats,
+} from "@/lib/audit/types";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -122,7 +128,7 @@ export function useAuditStats(): {
 
 /** POST-like helper for the "purge" action. Returns freed bytes + deleted file names. */
 export async function purgeAuditEvents(opts: {
-  category?: "api" | "cron" | "session" | "alert";
+  category?: AuditCategory;
   olderThan?: number;
 }): Promise<{ deleted: string[]; bytesFreed: number }> {
   const params = new URLSearchParams();

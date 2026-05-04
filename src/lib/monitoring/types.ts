@@ -18,7 +18,8 @@ export type MonSubsystemKey =
   | "cron"
   | "apm"
   | "logs"
-  | "alerts";
+  | "alerts"
+  | "previews";
 
 export interface MonCapabilities {
   /** /var/run/docker.sock is reachable. */
@@ -239,6 +240,49 @@ export interface WsSnapshot {
     msgsOutPerSec: number[];
   };
   sessions: WsSessionRow[];
+}
+
+/* --------------------------------- Previews --------------------------------- */
+
+export type PreviewCodecKind = "jpeg" | "h264" | "webrtc";
+
+export interface PreviewItemRow {
+  id: string;
+  projectSlug: string;
+  itemSlug: string;
+  port: number;
+  actorEmail: string;
+  codec: PreviewCodecKind;
+  openedAt: number;
+  lastHeartbeatAt: number | null;
+  consecutiveFailures: number;
+  framesSent: number;
+  bytesSent: number;
+  restartCount: number;
+}
+
+export interface PreviewsSnapshot {
+  /** Number of active preview-stream WS connections. */
+  active: number;
+  /** Configured cap (`PREVIEW_MAX_ACTIVE`). */
+  maxActive: number;
+  totalFramesSent: number;
+  totalBytesSent: number;
+  totalRestartCount: number;
+  chromium: {
+    /** OS pid of the shared headless Chromium browser process, or null
+     *  if the pool hasn't launched yet / has been idle-shutdown. */
+    pid: number | null;
+    /** Whole-Chromium CPU% (0–100*cores) — shared across previews. */
+    cpuPct: number | null;
+    /** Whole-Chromium RSS in bytes — shared across previews. */
+    memBytes: number | null;
+  };
+  series: {
+    /** Active count over the last 60 seconds. */
+    active: number[];
+  };
+  items: PreviewItemRow[];
 }
 
 /* --------------------------------- Cron --------------------------------- */

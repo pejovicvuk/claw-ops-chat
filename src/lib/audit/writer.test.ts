@@ -124,4 +124,34 @@ describe("AuditWriter", () => {
     expect(cronFiles.length).toBe(1);
     expect(sessionFiles.length).toBe(1);
   });
+
+  it("appends preview-stream events under preview/", async () => {
+    const writer = getAuditWriter();
+    await writer.preview({
+      type: "open",
+      severity: "info",
+      actor: "user@example.com",
+      subject: "demo/welcome:3000",
+      durationMs: null,
+      details: { codec: "h264" },
+      previewId: "abc-123",
+      projectSlug: "demo",
+      itemSlug: "welcome",
+      port: 3000,
+      codec: "h264",
+    });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const path = join(TEST_ROOT, "preview", `${today}.jsonl`);
+    expect(existsSync(path)).toBe(true);
+    const raw = await readFile(path, "utf-8");
+    const lines = raw.split("\n").filter((l) => l.length > 0);
+    expect(lines.length).toBe(1);
+    const parsed = JSON.parse(lines[0]);
+    expect(parsed.category).toBe("preview");
+    expect(parsed.type).toBe("open");
+    expect(parsed.previewId).toBe("abc-123");
+    expect(parsed.codec).toBe("h264");
+    expect(parsed.port).toBe(3000);
+  });
 });

@@ -13,6 +13,7 @@ export type MonTabKey =
   | "processes"
   | "docker"
   | "ws"
+  | "previews"
   | "audit"
   | "cron"
   | "apm"
@@ -53,6 +54,7 @@ const VALID_TABS: MonTabKey[] = [
   "processes",
   "docker",
   "ws",
+  "previews",
   "audit",
   "cron",
   "apm",

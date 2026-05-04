@@ -45,6 +45,12 @@ import {
 } from "./input-forward";
 import { HistoryStateDeduper, computeHistoryState, type NavigationHistory } from "./history-state";
 import { buildFindScript, normalizeQuery } from "./find-in-page";
+import {
+  startHealthMonitor,
+  tryRegisterPreview,
+  type HealthMonitorHandle,
+  type PreviewRegistration,
+} from "./health";
 
 /**
  * WebSocket handler for `/ws/preview-stream/<projectSlug>/<itemSlug>/<port>`.
@@ -195,6 +201,11 @@ export async function handlePreviewStream(
   // global registry in download-relay.ts holds the entries; this Set
   // exists so tearDown can cancel just our downloads (not other WS's).
   const ownedDownloadIds: Set<string> = new Set();
+  // Phase 6a (#134): preview registry + heartbeat monitor. Registration
+  // happens before acquirePage so the `PREVIEW_MAX_ACTIVE` cap
+  // short-circuits without spending Chromium resources.
+  let registration: PreviewRegistration | null = null;
+  let healthHandle: HealthMonitorHandle | null = null;
 
   const sendJson = (payload: Record<string, unknown>) => {
     if (closed || ws.readyState !== ws.OPEN) return;
@@ -208,6 +219,10 @@ export async function handlePreviewStream(
   const tearDown = async () => {
     if (closed) return;
     closed = true;
+    if (healthHandle) {
+      healthHandle.stop();
+      healthHandle = null;
+    }
     if (resizeTimer) {
       clearTimeout(resizeTimer);
       resizeTimer = null;
@@ -262,6 +277,10 @@ export async function handlePreviewStream(
         /* ignore */
       }
     }
+    if (registration) {
+      registration.unregister();
+      registration = null;
+    }
   };
 
   ws.on("close", () => {
@@ -270,6 +289,34 @@ export async function handlePreviewStream(
   ws.on("error", () => {
     void tearDown();
   });
+
+  // Resolve codec early so the registry has the right value AND so we
+  // can short-circuit cap-rejected connections before spending any
+  // Chromium time.
+  const codec: CodecChoice = route.codec ?? "jpeg";
+  registration = tryRegisterPreview({
+    projectSlug: route.projectSlug,
+    itemSlug: route.itemSlug,
+    port: route.port,
+    actorEmail,
+    codec,
+  });
+  if (!registration) {
+    sendJson({
+      type: "error",
+      code: "too_many_active",
+      status: 429,
+      message: "Too many active previews — close another window and try again.",
+    });
+    try {
+      // 1008 = policy violation; matches what webrtc-handler does when
+      // the per-actor room cap kicks in.
+      ws.close(1008, "too_many_active");
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
 
   try {
     acquired = await acquirePage(route.port, {
@@ -324,6 +371,33 @@ export async function handlePreviewStream(
   }
 
   const { page } = acquired;
+
+  // Phase 6a (#134): heartbeat the preview tab once per HEARTBEAT_INTERVAL_MS
+  // (5 s in `health.ts`). After 3 consecutive failures (~15 s) we treat
+  // the tab as stuck — fire `resource_kill` audit, notify the client,
+  // and close the WS so the client can reconnect with a fresh page.
+  // Closing the WS is enough: the existing reconnect logic on the
+  // client opens a new preview-stream which goes through `acquirePage`
+  // again, giving us a fresh BrowserContext/Page pair.
+  healthHandle = startHealthMonitor(registration, page, {
+    onStuck: async (reason) => {
+      if (closed) return;
+      registration?.recordResourceKill(reason);
+      sendJson({
+        type: "error",
+        code: "preview_stuck",
+        message: "Preview tab unresponsive — restarting",
+        reason,
+      });
+      try {
+        // 1011 = server error; signals "we killed your stream", which
+        // is exactly what we want the client reconnect logic to see.
+        ws.close(1011, "preview_stuck");
+      } catch {
+        /* already closing */
+      }
+    },
+  });
 
   // Phase 3d (#129): file download relay. When the previewed page
   // triggers a download (<a download>, Content-Disposition: attachment,
@@ -461,7 +535,6 @@ export async function handlePreviewStream(
   }
 
   const { everyNthFrame, jpegQuality, bitrateKbps } = resolveQuality(route.quality);
-  const codec: CodecChoice = route.codec ?? "jpeg";
   const initialViewport = page.viewportSize() ?? { width: 1280, height: 800 };
   const dsf = 2; // mirrors chromium-pool's deviceScaleFactor
 
@@ -477,6 +550,7 @@ export async function handlePreviewStream(
         : Buffer.from([tag]);
     try {
       ws.send(framed, { binary: true });
+      registration?.recordFrame(framed.length);
     } catch {
       /* socket closing */
     }
@@ -732,6 +806,7 @@ export async function handlePreviewStream(
         }
         try {
           ws.send(frame.data, { binary: true });
+          registration?.recordFrame(frame.data.length);
           void frame.ack();
         } catch {
           /* socket closing */
@@ -788,6 +863,12 @@ export async function handlePreviewStream(
       try {
         screencast = await bringUpH264();
         wireScreencastFrames(screencast);
+        // Phase 6a (#134): the H.264 pipeline restart is an in-place
+        // recovery — the WS stays open and the client transparently
+        // rebuilds its MediaSource. Audit it as a `reconnect` so
+        // operators can correlate hard-ceiling backpressure with
+        // streaming hiccups in the audit log.
+        registration?.recordReconnect(reason);
         sendJson({ type: "status", state: "ready" });
       } catch (err) {
         sendJson({

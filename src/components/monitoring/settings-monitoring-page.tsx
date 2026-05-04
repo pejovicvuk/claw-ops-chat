@@ -11,6 +11,7 @@ import { SystemSection } from "./sections/system-section";
 import { ProcessesSection } from "./sections/processes-section";
 import { DockerSection } from "./sections/docker-section";
 import { WsSection } from "./sections/ws-section";
+import { PreviewsSection } from "./sections/previews-section";
 import { AuditLiveSection } from "./sections/audit-live-section";
 import { CronSection } from "./sections/cron-section";
 import { ApmSection } from "./sections/apm-section";
@@ -54,6 +55,7 @@ function MonitoringPageInner() {
           {tab === "processes" && <ProcessesSection />}
           {tab === "docker" && <DockerSection />}
           {tab === "ws" && <WsSection />}
+          {tab === "previews" && <PreviewsSection />}
           {tab === "audit" && <AuditLiveSection />}
           {tab === "cron" && <CronSection />}
           {tab === "apm" && <ApmSection />}

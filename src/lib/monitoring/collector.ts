@@ -6,6 +6,7 @@ import { collectCron } from "./collectors/cron";
 import { collectWs } from "./collectors/ws";
 import { collectApm, type ApmCollector } from "./collectors/apm";
 import { collectLogs, type LogsCollector } from "./collectors/logs";
+import { collectPreviews } from "./collectors/previews";
 import { detectCapabilities } from "./env";
 import type {
   ApmSnapshot,
@@ -14,6 +15,7 @@ import type {
   HealthSnapshot,
   LogsSnapshot,
   MonCapabilities,
+  PreviewsSnapshot,
   ProcessesSnapshot,
   SystemSnapshot,
   WsSnapshot,
@@ -27,7 +29,8 @@ type SnapshotCacheKey =
   | "cron"
   | "ws"
   | "apm"
-  | "logs";
+  | "logs"
+  | "previews";
 
 interface CachedSnapshot<T> {
   value: T;
@@ -132,6 +135,11 @@ export class MetricsCollector {
         immediate: true,
         fn: () => this.runCollector("logs", () => collectLogs(this.logs)),
       },
+      {
+        key: "previews",
+        intervalMs: 5000,
+        fn: () => this.runCollector("previews", () => collectPreviews()),
+      },
     ];
 
     for (const t of ticks) {
@@ -199,6 +207,9 @@ export class MetricsCollector {
   getLogs(): LogsSnapshot | null {
     return this.read<LogsSnapshot>("logs");
   }
+  getPreviews(): PreviewsSnapshot | null {
+    return this.read<PreviewsSnapshot>("previews");
+  }
 
   /**
    * Long-term health series accessor. Returns up to 1h of `(t, v)` pairs
@@ -245,6 +256,9 @@ export class MetricsCollector {
         break;
       case "logs":
         await this.runCollector("logs", () => collectLogs(this.logs));
+        break;
+      case "previews":
+        await this.runCollector("previews", () => collectPreviews());
         break;
     }
   }

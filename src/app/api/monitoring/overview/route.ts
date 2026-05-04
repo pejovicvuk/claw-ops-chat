@@ -30,6 +30,7 @@ export async function GET(request: Request) {
   const apm = collector.getApm();
   const logs = collector.getLogs();
   const cron = collector.getCron();
+  const previews = collector.getPreviews();
 
   const subsystems: OverviewSubsystem[] = [];
   const keyMetrics: OverviewKeyMetric[] = [];
@@ -173,6 +174,28 @@ export async function GET(request: Request) {
     });
   } else {
     subsystems.push({ key: "logs", status: "unknown", summary: "Collecting…" });
+  }
+
+  // Previews (Phase 6a #134)
+  if (previews) {
+    const atCap = previews.maxActive > 0 && previews.active >= previews.maxActive;
+    const status: MonStatus = atCap
+      ? "warning"
+      : previews.totalRestartCount > 0
+        ? "warning"
+        : previews.active > 0
+          ? "healthy"
+          : "info";
+    const restartTail =
+      previews.totalRestartCount > 0 ? ` · ${previews.totalRestartCount} restart(s)` : "";
+    subsystems.push({
+      key: "previews",
+      status,
+      summary: `${previews.active}/${previews.maxActive} active${restartTail}`,
+      badge: previews.active > 0 ? `${previews.active}` : undefined,
+    });
+  } else {
+    subsystems.push({ key: "previews", status: "unknown", summary: "Collecting…" });
   }
 
   // Cron

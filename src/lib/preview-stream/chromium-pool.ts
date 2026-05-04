@@ -33,6 +33,7 @@ import { DOWNLOAD_DIR } from "./download-relay";
 const IDLE_SHUTDOWN_MS = 5 * 60 * 1000;
 
 let browserPromise: Promise<Browser> | null = null;
+let resolvedBrowser: Browser | null = null;
 let pageCount = 0;
 let idleTimer: NodeJS.Timeout | null = null;
 
@@ -135,11 +136,17 @@ async function getBrowser(): Promise<Browser> {
     idleTimer = null;
   }
   if (!browserPromise) {
-    browserPromise = launch().catch((err) => {
-      // Reset so the next call can retry.
-      browserPromise = null;
-      throw err;
-    });
+    browserPromise = launch()
+      .then((browser) => {
+        resolvedBrowser = browser;
+        return browser;
+      })
+      .catch((err) => {
+        // Reset so the next call can retry.
+        browserPromise = null;
+        resolvedBrowser = null;
+        throw err;
+      });
   }
   return browserPromise;
 }
@@ -275,6 +282,7 @@ async function shutdownIdle(): Promise<void> {
   if (!browserPromise) return;
   const b = await browserPromise.catch(() => null);
   browserPromise = null;
+  resolvedBrowser = null;
   if (!b) return;
   try {
     await b.close();
@@ -296,6 +304,7 @@ export async function close(): Promise<void> {
   if (!browserPromise) return;
   const b = await browserPromise.catch(() => null);
   browserPromise = null;
+  resolvedBrowser = null;
   if (!b) return;
   try {
     await b.close();
@@ -310,6 +319,37 @@ export function _stats(): { pageCount: number; browserOpen: boolean } {
 }
 
 /**
+ * Returns the OS pid of the running Chromium browser process, or null if
+ * the pool hasn't launched yet (or was just shut down). Used by the
+ * monitoring `previews` collector to feed `pidusage` for CPU/RAM stats.
+ *
+ * Read is best-effort — collectors run on a tight cadence and we'd
+ * rather skip a sample than block the tick on a launch-in-progress.
+ *
+ * The cast escapes Playwright's public `Browser` interface which doesn't
+ * expose `process()` (it lives on `BrowserServer` only) but the runtime
+ * implementation exposes it for non-`connect()`-spawned browsers, which
+ * is exactly what we get from `chromium.launch()`.
+ */
+export function getBrowserPid(): number | null {
+  if (!resolvedBrowser) return null;
+  const accessor = resolvedBrowser as unknown as {
+    process?: () => { pid?: number } | null | undefined;
+  };
+  if (typeof accessor.process !== "function") return null;
+  const proc = accessor.process();
+  return proc?.pid ?? null;
+}
+
+/**
+ * Live-page count exposed for monitoring. Mirrors the internal counter
+ * incremented on every `acquirePage` and decremented on `release`.
+ */
+export function getActivePageCount(): number {
+  return pageCount;
+}
+
+/**
  * Test-only: tear down all singleton state without going through
  * Chromium. The vitest suite uses this between cases to start each
  * test from a known-fresh `prelaunch()` window.
@@ -320,6 +360,7 @@ export function _resetForTests(): void {
     idleTimer = null;
   }
   browserPromise = null;
+  resolvedBrowser = null;
   pageCount = 0;
   extraLaunchArgs = [];
 }

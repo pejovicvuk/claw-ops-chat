@@ -467,6 +467,10 @@ export function usePreviewStream({
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const intentionalCloseRef = useRef(false);
+  // Phase 6a (#134): set when the server kills our stream because the
+  // tab is unresponsive. Cleared (with a "Reconnected" toast) on the
+  // next successful `ready` frame.
+  const pendingReconnectAfterKillRef = useRef(false);
   const lastMouseMoveAtRef = useRef(0);
   /** Pending JPEG paint — coalesce successive frames so we draw at most once per RAF. */
   const pendingFrameRef = useRef<Uint8Array | null>(null);
@@ -771,6 +775,10 @@ export function usePreviewStream({
           setDeviceHeight(r.deviceHeight);
           setStatus("ready");
           setLastError(null);
+          if (pendingReconnectAfterKillRef.current) {
+            pendingReconnectAfterKillRef.current = false;
+            toast.success("Reconnected");
+          }
           // Phase 3a: server tells us whether it muxed an audio track.
           // Drives the mute-toggle UI's visibility.
           setAudioAvailable(Boolean(r.audio));
@@ -792,6 +800,20 @@ export function usePreviewStream({
           // through to JPEG; the next reconnect will request it.
           if (e.code === "encoder_failed") {
             onCodecFailure(e.message ?? "encoder_failed");
+          } else if (e.code === "too_many_active") {
+            // Phase 6a (#134): server hit PREVIEW_MAX_ACTIVE. The WS
+            // closes immediately after this frame; the user must close
+            // another preview before opening this one. Don't auto-retry.
+            intentionalCloseRef.current = true;
+            toast.error(e.message ?? "Too many active previews");
+          } else if (e.code === "preview_stuck") {
+            // Phase 6a (#134): heartbeat detected an unresponsive tab
+            // and the server killed the stream. The auto-reconnect
+            // machinery will reopen with a fresh page; we set the flag
+            // here so the next successful `ready` shows a positive
+            // recovery toast instead of just silently reappearing.
+            pendingReconnectAfterKillRef.current = true;
+            toast.info("Preview stuck — reconnecting");
           }
         } else if (parsed.type === "history_state") {
           // Phase 5a (#131): server emits this from CDP
@@ -1061,6 +1083,10 @@ export function usePreviewStream({
           setTransport("rtc");
           setStatus("ready");
           setLastError(null);
+          if (pendingReconnectAfterKillRef.current) {
+            pendingReconnectAfterKillRef.current = false;
+            toast.success("Reconnected");
+          }
           // Wire the remote stream to the video element.
           const v = videoRef.current;
           if (v) {

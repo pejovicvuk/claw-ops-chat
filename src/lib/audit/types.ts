@@ -6,7 +6,7 @@
  * See src/lib/audit/paths.ts for the on-disk layout.
  */
 
-export type AuditCategory = "api" | "cron" | "session" | "alert";
+export type AuditCategory = "api" | "cron" | "session" | "alert" | "preview";
 
 export type AuditSeverity = "info" | "warn" | "error";
 
@@ -114,13 +114,46 @@ export type AlertAuditEvent = AuditBase & {
   observedValue?: number;
 };
 
-export type AuditEvent = ApiAuditEvent | CronAuditEvent | SessionAuditEvent | AlertAuditEvent;
+/**
+ * Preview-stream lifecycle events. Issue #134: cap concurrent previews,
+ * monitor each tab's heartbeat, audit-log open/close/reconnect/codec
+ * fallback/resource kill so the operator can see how the preview pool
+ * is behaving without grepping container logs.
+ */
+export type PreviewAuditEventType =
+  | "open"
+  | "close"
+  | "reconnect"
+  | "codec_fallback"
+  | "resource_kill";
+
+export type PreviewAuditEvent = AuditBase & {
+  category: "preview";
+  type: PreviewAuditEventType;
+  /** UUID assigned by the in-memory preview registry (`health.ts`). */
+  previewId: string;
+  projectSlug: string;
+  itemSlug: string;
+  port: number;
+  /** Wire codec the stream was using when the event fired. */
+  codec?: "jpeg" | "h264" | "webrtc";
+  /** Free-form short reason — e.g. "heartbeat_timeout", "hard_ceiling". */
+  reason?: string;
+};
+
+export type AuditEvent =
+  | ApiAuditEvent
+  | CronAuditEvent
+  | SessionAuditEvent
+  | AlertAuditEvent
+  | PreviewAuditEvent;
 
 /** Input to the writer — `v`, `category`, and `at` are filled in automatically. */
 export type ApiAuditEventInput = Omit<ApiAuditEvent, "v" | "category" | "at">;
 export type CronAuditEventInput = Omit<CronAuditEvent, "v" | "category" | "at">;
 export type SessionAuditEventInput = Omit<SessionAuditEvent, "v" | "category" | "at">;
 export type AlertAuditEventInput = Omit<AlertAuditEvent, "v" | "category" | "at">;
+export type PreviewAuditEventInput = Omit<PreviewAuditEvent, "v" | "category" | "at">;
 
 /* --------------------------------- Reader types --------------------------------- */
 

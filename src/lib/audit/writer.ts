@@ -12,6 +12,8 @@ import type {
   AuditEvent,
   CronAuditEvent,
   CronAuditEventInput,
+  PreviewAuditEvent,
+  PreviewAuditEventInput,
   SessionAuditEvent,
   SessionAuditEventInput,
 } from "./types";
@@ -72,6 +74,18 @@ class AuditWriter {
       ...event,
       v: 1,
       category: "alert",
+      at: Date.now(),
+      subject: scrubSubject(event.subject),
+      details: scrubDetails(event.details),
+    };
+    await this.writeEvent(full);
+  }
+
+  async preview(event: PreviewAuditEventInput): Promise<void> {
+    const full: PreviewAuditEvent = {
+      ...event,
+      v: 1,
+      category: "preview",
       at: Date.now(),
       subject: scrubSubject(event.subject),
       details: scrubDetails(event.details),

@@ -17,6 +17,7 @@ export const AUDIT_CATEGORIES: readonly AuditCategory[] = [
   "cron",
   "session",
   "alert",
+  "preview",
 ] as const;
 
 export const META_PATH = join(AUDIT_ROOT, ".meta.json");
@@ -49,6 +50,8 @@ This directory holds append-only audit events for:
 - \`api/\`     — state-changing API calls and auth events
 - \`cron/\`    — scheduled report job lifecycle and run events
 - \`session/\` — Claude chat session lifecycle and tool usage
+- \`alert/\`   — alert-rule changes and firing/resolving events
+- \`preview/\` — preview-stream open/close/reconnect/resource-kill events
 
 Files are rotated daily (\`YYYY-MM-DD.jsonl\`, UTC). Anything older than
 ${RETENTION_DAYS} days is auto-purged every 6 hours.

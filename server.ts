@@ -1045,6 +1045,7 @@ class SessionManager {
 
         this.broadcast(session, { type: "result", text: "Stopped by user", isError: false });
         this.setStatus(session, "idle");
+        session.messageQueue = [];
       }
       return;
     }
@@ -1162,6 +1163,7 @@ class SessionManager {
         hint: this.claudeAuthFailedHint,
       });
       session.isProcessing = false;
+      session.messageQueue = [];
       return;
     }
 

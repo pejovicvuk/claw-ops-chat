@@ -12,10 +12,9 @@ import { SettingsClaudePage } from "./pages/settings-claude-page";
 import { SettingsGooglePage } from "./pages/settings-google-page";
 import { SettingsMicrosoftPage } from "./pages/settings-microsoft-page";
 import { SettingsGithubPage } from "./pages/settings-github-page";
-import { SettingsBitbucketPage } from "./pages/settings-bitbucket-page";
+import { SettingsAtlassianPage } from "./pages/settings-atlassian-page";
 import { SettingsSlackPage } from "./pages/settings-slack-page";
 import { SettingsLinearPage } from "./pages/settings-linear-page";
-import { SettingsJiraPage } from "./pages/settings-jira-page";
 import { SettingsNotionPage } from "./pages/settings-notion-page";
 import { SettingsTrelloPage } from "./pages/settings-trello-page";
 import { SettingsTerminalPage } from "./pages/settings-terminal-page";
@@ -37,10 +36,9 @@ type PageKey =
   | "connections/google"
   | "connections/microsoft"
   | "connections/github"
-  | "connections/bitbucket"
+  | "connections/atlassian"
   | "connections/slack"
   | "connections/linear"
-  | "connections/jira"
   | "connections/notion"
   | "connections/trello"
   | "agent"
@@ -69,10 +67,9 @@ const PAGES: Record<PageKey, PageInfo> = {
   "connections/google": { title: "Google Workspace", parent: "connections" },
   "connections/microsoft": { title: "Microsoft 365", parent: "connections" },
   "connections/github": { title: "GitHub", parent: "connections" },
-  "connections/bitbucket": { title: "Bitbucket", parent: "connections" },
+  "connections/atlassian": { title: "Atlassian", parent: "connections" },
   "connections/slack": { title: "Slack", parent: "connections" },
   "connections/linear": { title: "Linear", parent: "connections" },
-  "connections/jira": { title: "Jira", parent: "connections" },
   "connections/notion": { title: "Notion", parent: "connections" },
   "connections/trello": { title: "Trello", parent: "connections" },
   agent: { title: "Agent", parent: "main" },
@@ -97,6 +94,10 @@ function parsePage(raw: string | null): PageKey | null {
   // Back-compat: the standalone audit page used to live at ?settings=audit.
   // It was folded into the Monitoring overlay; redirect old links there.
   if (raw === "audit") return "monitoring";
+  // Back-compat: Bitbucket and Jira sub-pages were unified into Atlassian.
+  if (raw === "connections/bitbucket" || raw === "connections/jira") {
+    return "connections/atlassian";
+  }
   if (raw in PAGES) return raw as PageKey;
   // Unknown page → fall back to main (rather than close).
   return "main";
@@ -201,10 +202,9 @@ export function SettingsOverlay() {
           {page === "connections/google" && <SettingsGooglePage />}
           {page === "connections/microsoft" && <SettingsMicrosoftPage />}
           {page === "connections/github" && <SettingsGithubPage />}
-          {page === "connections/bitbucket" && <SettingsBitbucketPage />}
+          {page === "connections/atlassian" && <SettingsAtlassianPage />}
           {page === "connections/slack" && <SettingsSlackPage />}
           {page === "connections/linear" && <SettingsLinearPage />}
-          {page === "connections/jira" && <SettingsJiraPage />}
           {page === "connections/notion" && <SettingsNotionPage />}
           {page === "connections/trello" && <SettingsTrelloPage />}
           {page === "agent" && <SettingsAgentPage />}

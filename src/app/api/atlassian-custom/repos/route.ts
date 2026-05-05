@@ -1,18 +1,20 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { withAudit } from "@/lib/audit/api-wrap";
-import { loadCredentials } from "@/lib/bitbucket-custom-config";
+import { loadCredentials } from "@/lib/atlassian-custom-config";
 import { normalizeBitbucketRepo } from "@/lib/repos/normalize";
 import type { RepoSummary } from "@/lib/repos-api";
 
 /**
- * GET /api/bitbucket-custom/repos
+ * GET /api/atlassian-custom/repos
  *
- * Lists repositories in the stored Bitbucket workspace. Workspace and
- * basic-auth credentials are loaded server-side; the API token never
- * crosses the wire to the client.
+ * Lists repositories in the stored Bitbucket workspace. Replaces the
+ * old /api/bitbucket-custom/repos with the unified credentials store.
+ * Workspace + basic-auth pair are loaded server-side; the API token
+ * never crosses the wire to the client.
  *
- * Returns up to 100 repos sorted by `updated_on` desc. Other workspaces
- * are out of scope for this picker — those land via URL paste.
+ * Sorts by `updated_on` desc, max 100. A 403 from Bitbucket is mapped
+ * to `{ missingScope: true }` so the UI can render a scope-fix CTA
+ * instead of a generic failure.
  */
 
 const PAGELEN = 100;
@@ -21,11 +23,15 @@ const FETCH_TIMEOUT_MS = 10_000;
 async function getHandler(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
   const creds = await loadCredentials();
-  if (!creds) {
+  if (!creds || !creds.bitbucket) {
     return Response.json({ error: "Bitbucket is not connected" }, { status: 412 });
   }
-  const auth = Buffer.from(`${creds.email}:${creds.apiToken}`, "utf-8").toString("base64");
-  const url = `https://api.bitbucket.org/2.0/repositories/${encodeURIComponent(creds.workspace)}?pagelen=${PAGELEN}&sort=-updated_on`;
+  const auth = Buffer.from(`${creds.email}:${creds.bitbucket.apiToken}`, "utf-8").toString(
+    "base64",
+  );
+  const url = `https://api.bitbucket.org/2.0/repositories/${encodeURIComponent(
+    creds.bitbucket.workspace,
+  )}?pagelen=${PAGELEN}&sort=-updated_on`;
   let upstream: Response;
   try {
     upstream = await fetch(url, {
@@ -46,6 +52,16 @@ async function getHandler(request: Request): Promise<Response> {
   if (upstream.status === 401) {
     return Response.json(
       { error: "Bitbucket rejected the stored credentials (401)." },
+      { status: 412 },
+    );
+  }
+  if (upstream.status === 403) {
+    return Response.json(
+      {
+        error:
+          "Bitbucket returned 403 — the stored token is missing scopes. Re-create it at id.atlassian.com with read:repository:bitbucket and read:workspace:bitbucket.",
+        missingScope: true,
+      },
       { status: 412 },
     );
   }
@@ -85,7 +101,7 @@ async function getHandler(request: Request): Promise<Response> {
 
 export const GET = withAudit(
   {
-    route: "/api/bitbucket-custom/repos",
+    route: "/api/atlassian-custom/repos",
     label: "List Bitbucket repos",
     auditSuccessGets: true,
   },

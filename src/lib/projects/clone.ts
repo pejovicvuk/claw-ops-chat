@@ -1,6 +1,6 @@
 import { execGit, GitExecError } from "../git/exec";
 import { loadCredentials as loadGithubCredentials } from "../github-custom-config";
-import { loadCredentials as loadBitbucketCredentials } from "../bitbucket-custom-config";
+import { loadCredentials as loadAtlassianCredentials } from "../atlassian-custom-config";
 import type { RepoKind } from "./validation";
 
 /**
@@ -52,11 +52,11 @@ export async function buildCloneEnv(kind: RepoKind): Promise<CloneEnv> {
       GIT_CONFIG_VALUE_0: "https://github.com/",
     };
   }
-  const creds = await loadBitbucketCredentials();
-  if (!creds) throw new CloneAuthMissingError("bitbucket");
+  const creds = await loadAtlassianCredentials();
+  if (!creds || !creds.bitbucket) throw new CloneAuthMissingError("bitbucket");
   return {
     GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: `url.https://x-bitbucket-api-token-auth:${creds.apiToken}@bitbucket.org/.insteadOf`,
+    GIT_CONFIG_KEY_0: `url.https://x-bitbucket-api-token-auth:${creds.bitbucket.apiToken}@bitbucket.org/.insteadOf`,
     GIT_CONFIG_VALUE_0: "https://bitbucket.org/",
   };
 }

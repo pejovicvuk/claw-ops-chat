@@ -19,7 +19,8 @@ const eslintConfig = defineConfig([
     "server.js",
     "bitbucket-mcp.js",
     "sdk-loader.js",
-    "src/lib/*.js",
+    "src/lib/**/*.js",
+    "src/app/**/*.js",
   ]),
   // server.ts uses require() for the SDK to work around tsx/esbuild import.meta.url issues.
   {

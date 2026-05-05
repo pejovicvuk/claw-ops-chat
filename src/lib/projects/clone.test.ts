@@ -4,18 +4,18 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 vi.mock("../github-custom-config", () => ({
   loadCredentials: vi.fn(),
 }));
-vi.mock("../bitbucket-custom-config", () => ({
+vi.mock("../atlassian-custom-config", () => ({
   loadCredentials: vi.fn(),
 }));
 
 const { loadCredentials: loadGithub } = await import("../github-custom-config");
-const { loadCredentials: loadBitbucket } = await import("../bitbucket-custom-config");
+const { loadCredentials: loadAtlassian } = await import("../atlassian-custom-config");
 const { buildCloneEnv, scrubCloneStderr, CloneAuthMissingError } = await import("./clone");
 
 describe("buildCloneEnv", () => {
   beforeEach(() => {
     vi.mocked(loadGithub).mockReset();
-    vi.mocked(loadBitbucket).mockReset();
+    vi.mocked(loadAtlassian).mockReset();
   });
 
   it("github: includes the PAT in the insteadOf rewrite", async () => {
@@ -27,10 +27,10 @@ describe("buildCloneEnv", () => {
   });
 
   it("bitbucket: uses the bitbucket-api-token-auth user", async () => {
-    vi.mocked(loadBitbucket).mockResolvedValue({
+    vi.mocked(loadAtlassian).mockResolvedValue({
       email: "user@x.com",
-      apiToken: "atatt_secret",
-      workspace: "ws",
+      jira: null,
+      bitbucket: { apiToken: "atatt_secret", workspace: "ws" },
     });
     const env = await buildCloneEnv("bitbucket");
     expect(env.GIT_CONFIG_KEY_0).toBe(
@@ -46,9 +46,18 @@ describe("buildCloneEnv", () => {
   });
 
   it("bitbucket: throws CloneAuthMissingError when not configured", async () => {
-    vi.mocked(loadBitbucket).mockResolvedValue(null);
+    vi.mocked(loadAtlassian).mockResolvedValue(null);
     await expect(buildCloneEnv("bitbucket")).rejects.toBeInstanceOf(CloneAuthMissingError);
     await expect(buildCloneEnv("bitbucket")).rejects.toMatchObject({ kind: "bitbucket" });
+  });
+
+  it("bitbucket: throws CloneAuthMissingError when bitbucket half is empty", async () => {
+    vi.mocked(loadAtlassian).mockResolvedValue({
+      email: "user@x.com",
+      jira: { siteUrl: "x.atlassian.net", apiToken: "j" },
+      bitbucket: null,
+    });
+    await expect(buildCloneEnv("bitbucket")).rejects.toBeInstanceOf(CloneAuthMissingError);
   });
 });
 

@@ -23,6 +23,11 @@ interface ToolResult {
   [key: string]: unknown;
 }
 
+interface CliFailure {
+  message: string;
+  exitCode: number;
+}
+
 function runCli(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const stdoutChunks: Buffer[] = [];
@@ -41,18 +46,38 @@ function runCli(args: string[]): Promise<string> {
         return;
       }
       const stderr = Buffer.concat(stderrChunks).toString("utf-8");
-      reject(
-        new Error(stderr.trim() || stdout.trim() || `bitbucket-cli.sh exited with code ${code}`),
-      );
+      const failure: CliFailure = {
+        exitCode: typeof code === "number" ? code : 1,
+        message:
+          stderr.trim() || stdout.trim() || `bitbucket-cli.sh exited with code ${code ?? "?"}`,
+      };
+      reject(failure);
     });
   });
 }
+
+const SCOPE_HINT =
+  "Bitbucket returned 403 — your API token is missing required scopes. Re-create it at " +
+  "https://id.atlassian.com/manage-profile/security/api-tokens with at minimum " +
+  "read:user:bitbucket, read:workspace:bitbucket, read:repository:bitbucket, " +
+  "read:pullrequest:bitbucket. App passwords stop working 2026-06-09.";
+
+const AUTH_HINT =
+  "Bitbucket returned 401 — credentials rejected. Confirm the token is current and " +
+  "that the username is your Atlassian account email (not your Bitbucket username).";
 
 async function runTool(args: string[]): Promise<ToolResult> {
   try {
     const out = await runCli(args);
     return { content: [{ type: "text", text: out.length > 0 ? out : "(empty)" }] };
   } catch (err) {
+    if (typeof err === "object" && err !== null && "exitCode" in err) {
+      const failure = err as CliFailure;
+      let text = failure.message;
+      if (failure.exitCode === 3) text = `${SCOPE_HINT}\n\nUpstream detail: ${failure.message}`;
+      else if (failure.exitCode === 2) text = `${AUTH_HINT}\n\nUpstream detail: ${failure.message}`;
+      return { content: [{ type: "text", text }], isError: true };
+    }
     const message = err instanceof Error ? err.message : String(err);
     return { content: [{ type: "text", text: message }], isError: true };
   }

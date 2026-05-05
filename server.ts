@@ -1966,6 +1966,7 @@ class SessionManager {
         const authError =
           lowered.includes("authentication_error") ||
           lowered.includes("invalid authentication credentials") ||
+          lowered.includes("failed to authenticate") ||
           /\b401\b/.test(rawMessage) ||
           lowered.includes("unauthorized");
 
@@ -2014,6 +2015,9 @@ class SessionManager {
         );
 
         if (authError) {
+          // Drain the queue so no queued messages retry with the same broken
+          // credentials, which would create a chain of repeated auth failures.
+          session.messageQueue = [];
           this.broadcast(session, {
             type: "auth_required",
             provider: "claude",

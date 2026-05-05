@@ -109,6 +109,16 @@ export const MessageBubble = memo(function MessageBubble({
     );
   }
 
+  if (message.type === "stopped") {
+    return (
+      <div className="flex justify-center px-4 py-1.5">
+        <span className="rounded-md bg-gray-500/10 px-3 py-1.5 text-[12px] text-gray-400">
+          {message.content}
+        </span>
+      </div>
+    );
+  }
+
   if (message.role === "user") {
     return (
       <div className="flex justify-end px-4 py-1.5">

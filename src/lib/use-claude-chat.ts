@@ -473,20 +473,6 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       }
 
       if (type === "result") {
-        // If the response came through a non-streamed path (no text_delta events),
-        // no assistant message was created during streaming. Create it now from evt.text.
-        if (!evt.isError && evt.text && !currentAssistantRef.current) {
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              role: "assistant" as const,
-              type: "text" as const,
-              content: evt.text as string,
-              timestamp: Date.now(),
-            },
-          ]);
-        }
         currentAssistantRef.current = null;
         currentThinkingRef.current = null;
         setActiveTool(null);
@@ -499,6 +485,20 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
               role: "system" as const,
               type: "error" as const,
               content: (evt.text as string) || "An error occurred",
+              timestamp: Date.now(),
+            },
+          ]);
+        } else if (evt.text) {
+          // Always show the result text (e.g. "Stopped by user") as a neutral
+          // system notice rather than a plain assistant bubble — it signals a
+          // session-end event, not Claude-authored content.
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "system" as const,
+              type: "stopped" as const,
+              content: evt.text as string,
               timestamp: Date.now(),
             },
           ]);
@@ -551,13 +551,29 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         currentThinkingRef.current = null;
         setActiveTool(null);
         setStatus("idle");
+        const msg = (evt.message as string) || "Bridge error";
+        // If the raw error looks like an auth failure (the server's detection
+        // may miss edge-case error formats), redirect to the amber banner flow
+        // rather than dumping the raw JSON blob into the chat.
+        const looksLikeAuth =
+          msg.toLowerCase().includes("authentication_error") ||
+          msg.toLowerCase().includes("invalid authentication") ||
+          msg.toLowerCase().includes("failed to authenticate") ||
+          /\b401\b/.test(msg);
+        if (looksLikeAuth) {
+          setAuthRequired({
+            message: "Claude authentication failed. Your token may have expired.",
+            hint: "Run `claude auth login` in the settings terminal, or click below.",
+          });
+          return;
+        }
         setMessages((prev) => [
           ...prev,
           {
             id: crypto.randomUUID(),
             role: "system" as const,
             type: "error" as const,
-            content: (evt.message as string) || "Bridge error",
+            content: msg,
             timestamp: Date.now(),
           },
         ]);
@@ -743,6 +759,9 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     (text: string) => {
       const trimmed = text.trim();
       if (!trimmed) return;
+      // Block while re-authentication is required — sending with broken
+      // credentials just queues more failures and duplicates messages.
+      if (authRequired !== null) return;
       // Allow send while "connecting" — the most common case where
       // a user hits send on a brand-new chat before the WS has finished
       // its handshake. The HTTP POST below is what actually delivers it.
@@ -806,7 +825,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         // message could be added later if this proves common.
       });
     },
-    [status, sessionId, sessionCwd],
+    [status, sessionId, sessionCwd, authRequired],
   );
 
   /* ── Plan-proposal response ── */

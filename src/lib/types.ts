@@ -9,6 +9,7 @@ export interface ChatMessage {
     | "permission_request"
     | "ask_question"
     | "plan_proposal"
+    | "stopped"
     | "error";
   content: string;
   toolName?: string;

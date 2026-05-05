@@ -38,4 +38,12 @@ describe("shouldShowStoppedPill", () => {
     const streamed = "Long assistant reply that ends mentioning a stop somewhere.";
     expect(shouldShowStoppedPill("Stopped by user", streamed)).toBe(true);
   });
+
+  it("matches when streamed content was built up across many small deltas", () => {
+    // Simulates `streamedTurnTextRef.current` being mutated by every
+    // text_delta. Final concatenation should equal `result.text`.
+    const deltas = ["Hello", " — ", "this ", "is the ", "**streamed** ", "reply."];
+    const accumulated = deltas.reduce((acc, d) => acc + d, "");
+    expect(shouldShowStoppedPill(accumulated, accumulated)).toBe(false);
+  });
 });

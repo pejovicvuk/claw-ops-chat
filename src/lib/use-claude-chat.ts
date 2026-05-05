@@ -93,6 +93,17 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const wsRef = useRef<WebSocket | null>(null);
   const currentAssistantRef = useRef<string | null>(null);
   const currentThinkingRef = useRef<string | null>(null);
+  /**
+   * Accumulates every text_delta in the current turn, mutated SYNCHRONOUSLY
+   * in the event handler (not inside a `setMessages` updater). Used by the
+   * `result` handler to compare `evt.text` against what we just streamed,
+   * so we can suppress the duplicate "stopped" pill that the SDK populates
+   * for normal completions. Looking the streamed content up via the
+   * messages array is unreliable here: on rapid text_delta → result event
+   * sequences, React may not have flushed the message-creating updater
+   * before the result handler reads back, leaving the comparison empty.
+   */
+  const streamedTurnTextRef = useRef<string>("");
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Track whether the hook is intentionally closing (unmount/session change). */
@@ -119,6 +130,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
   /* ── Append or update streaming assistant text ── */
   const upsertAssistantText = useCallback((delta: string) => {
+    // Track the cumulative streamed text synchronously so the `result`
+    // handler's dedup check sees an up-to-date snapshot regardless of when
+    // React flushes the setMessages updater below.
+    streamedTurnTextRef.current += delta;
     setMessages((prev) => {
       const existing = prev.find((m) => m.id === currentAssistantRef.current);
       if (existing) {
@@ -211,9 +226,12 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       if (type === "turn_start") {
         // Fresh turn — reset the streaming refs so the first text_delta /
         // thinking_delta creates new messages instead of appending to the
-        // previous turn's tail.
+        // previous turn's tail. Also clear the cumulative streamed-text
+        // tracker so the next turn's `result` dedup compares against a
+        // clean buffer.
         currentAssistantRef.current = null;
         currentThinkingRef.current = null;
+        streamedTurnTextRef.current = "";
         setActiveTool(null);
         return;
       }
@@ -479,12 +497,17 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       }
 
       if (type === "result") {
-        // Capture the streamed assistant message id BEFORE we reset the ref —
-        // the dedup check below needs it to compare result.text against the
-        // content we already rendered via text_delta events.
-        const streamedAssistantId = currentAssistantRef.current;
+        // Snapshot the cumulative text streamed in this turn BEFORE we reset
+        // the trackers — the dedup check below needs it to compare against
+        // `evt.text`. We pull from `streamedTurnTextRef` (mutated
+        // synchronously in `upsertAssistantText`) rather than looking up
+        // the assistant message in the React state, because on rapid
+        // text_delta → result sequences React may not have flushed the
+        // message-creating updater yet.
+        const streamedSnapshot = streamedTurnTextRef.current;
         currentAssistantRef.current = null;
         currentThinkingRef.current = null;
+        streamedTurnTextRef.current = "";
         setActiveTool(null);
         setStatus("idle");
         if (evt.isError) {
@@ -505,24 +528,19 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
           // pill (e.g. "Stopped by user") only when the result text is
           // genuinely different from what we just rendered — otherwise the
           // chat shows a flat-text duplicate that disappears on refresh.
-          setMessages((prev) => {
-            const streamedContent = streamedAssistantId
-              ? (prev.find((m) => m.id === streamedAssistantId)?.content ?? "")
-              : "";
-            if (!shouldShowStoppedPill(evt.text as string, streamedContent)) {
-              return prev;
-            }
-            return [
-              ...prev,
-              {
-                id: crypto.randomUUID(),
-                role: "system" as const,
-                type: "stopped" as const,
-                content: evt.text as string,
-                timestamp: Date.now(),
-              },
-            ];
-          });
+          if (!shouldShowStoppedPill(evt.text as string, streamedSnapshot)) {
+            return;
+          }
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "system" as const,
+              type: "stopped" as const,
+              content: evt.text as string,
+              timestamp: Date.now(),
+            },
+          ]);
         }
         return;
       }

@@ -96,7 +96,7 @@ export function SettingsMainPage() {
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-medium text-canvas-fg">Manage connections</p>
             <p className="mt-0.5 text-[11px] text-canvas-muted">
-              Claude Code, GitHub, Bitbucket, Gmail, Outlook
+              Claude Code, GitHub, Atlassian, Gmail, Outlook
             </p>
           </div>
           <FiChevronRight size={14} className="shrink-0 text-canvas-muted" />

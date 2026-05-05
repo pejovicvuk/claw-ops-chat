@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import pidusage from "pidusage";
-import { getBrowserPid } from "@/lib/preview-stream/chromium-pool";
-import { getActivePreviews, previewMaxActive } from "@/lib/preview-stream/health";
+import { getBrowserPid } from "../../preview-stream/chromium-pool";
+import { getActivePreviews, previewMaxActive } from "../../preview-stream/health";
 import { RingBuffer } from "../ring-buffer";
 import type { PreviewsSnapshot } from "../types";
 

@@ -47,7 +47,7 @@ export async function fetchGithubRepos(): Promise<RepoListResponse> {
 }
 
 export async function fetchBitbucketRepos(): Promise<RepoListResponse> {
-  const res = await fetch("/chat/api/bitbucket-custom/repos");
+  const res = await fetch("/chat/api/atlassian-custom/repos");
   if (!res.ok) throw new ProjectsApiError(res.status, await readError(res));
   return (await res.json()) as RepoListResponse;
 }

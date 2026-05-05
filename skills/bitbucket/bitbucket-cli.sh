@@ -106,6 +106,14 @@ bb_get() {
         local err="{\"error\": \"HTTP $http_code\", \"url\": \"$1\", \"detail\": \"$snippet\"}"
         echo "$err" >&2
         echo "$err"
+        # Distinct exit code for 401 vs 403 lets the MCP wrapper surface
+        # scope-aware guidance instead of a generic auth-failed error.
+        if [ "$http_code" -eq 403 ]; then
+            exit 3
+        fi
+        if [ "$http_code" -eq 401 ]; then
+            exit 2
+        fi
         exit 1
     fi
     echo "$body"
@@ -122,6 +130,14 @@ bb_get_raw() {
         local err="{\"error\": \"HTTP $http_code\", \"url\": \"$1\", \"detail\": \"$snippet\"}"
         echo "$err" >&2
         echo "$err"
+        # Distinct exit code for 401 vs 403 lets the MCP wrapper surface
+        # scope-aware guidance instead of a generic auth-failed error.
+        if [ "$http_code" -eq 403 ]; then
+            exit 3
+        fi
+        if [ "$http_code" -eq 401 ]; then
+            exit 2
+        fi
         exit 1
     fi
     echo "$body"

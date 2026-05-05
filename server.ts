@@ -17,7 +17,10 @@ import { consumeWsTicket } from "./src/lib/ws-ticket-store";
 import { execGit, GitExecError } from "./src/lib/git/exec";
 import { detectClaude } from "./src/lib/claude-status";
 import { resolveShell } from "./src/lib/terminal-shell";
-import { loadCredentialsSync as loadJiraCredentials } from "./src/lib/jira-custom-config";
+import {
+  loadCredentialsSync as loadAtlassianCredentials,
+  migrateLegacyCredentials as migrateAtlassianLegacy,
+} from "./src/lib/atlassian-custom-config";
 import { loadCredentialsSync as loadTrelloCredentials } from "./src/lib/trello-custom-config";
 import { augmentPathWithLocalBin } from "./src/lib/platform-detect";
 import { existsSync, readdirSync, statSync } from "fs";
@@ -1460,15 +1463,17 @@ class SessionManager {
         const base = augmentPathWithLocalBin();
         const out: NodeJS.ProcessEnv = { ...base };
         // Bitbucket creds no longer live here — they ride along with the
-        // `bitbucket` MCP server's own env block in ~/.claude.json (see
-        // src/lib/bitbucket-custom-config.ts#registerMcpServer).
-        const jira = loadJiraCredentials();
+        // `bitbucket` MCP server's own env block in ~/.claude.json
+        // (registered by src/lib/atlassian-custom-config.ts). The Jira
+        // half of the unified config is still injected as JIRA_* env
+        // vars so user-supplied skills/MCPs can read them.
+        const atlassian = loadAtlassianCredentials();
         const trello = loadTrelloCredentials();
-        if (jira) {
-          out.JIRA_URL = `https://${jira.domain}`;
-          out.JIRA_EMAIL = jira.email;
-          out.JIRA_API_TOKEN = jira.apiToken;
-          out.ATLASSIAN_EMAIL = jira.email;
+        if (atlassian?.jira) {
+          out.JIRA_URL = `https://${atlassian.jira.siteUrl}`;
+          out.JIRA_EMAIL = atlassian.email;
+          out.JIRA_API_TOKEN = atlassian.jira.apiToken;
+          out.ATLASSIAN_EMAIL = atlassian.email;
         }
         if (trello) {
           out.TRELLO_API_KEY = trello.apiKey;
@@ -2548,6 +2553,25 @@ setChatSendHandle({
     }
   } catch (err) {
     console.warn(`!! Google MCP tier migration skipped: ${(err as Error).message}`);
+  }
+})();
+
+// One-shot migration: merge legacy ~/.claude/custom-jira/credentials.json
+// + ~/.claude/custom-bitbucket/credentials.json into the unified
+// ~/.claude/custom-atlassian/credentials.json the first time the server
+// starts after the Atlassian unification ships. Idempotent (no-op if
+// the unified file already exists); non-fatal on error.
+(async () => {
+  try {
+    const migrated = await migrateAtlassianLegacy();
+    if (migrated) {
+      const halves = [migrated.jira ? "Jira" : null, migrated.bitbucket ? "Bitbucket" : null]
+        .filter(Boolean)
+        .join(" + ");
+      console.log(`> Atlassian credentials migrated to unified config (${halves})`);
+    }
+  } catch (err) {
+    console.warn(`!! Atlassian credential migration skipped: ${(err as Error).message}`);
   }
 })();
 

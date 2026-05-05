@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FiTerminal, FiGithub, FiGitBranch, FiCloud, FiPackage } from "react-icons/fi";
-import { SiLinear, SiJira, SiSlack, SiNotion, SiTrello } from "react-icons/si";
+import { FiTerminal, FiGithub, FiCloud, FiPackage } from "react-icons/fi";
+import { SiLinear, SiSlack, SiNotion, SiTrello, SiAtlassian } from "react-icons/si";
 import { authFetch } from "@/lib/auth";
 import { useUrlState } from "@/lib/use-url-state";
 import { ConnectionRow, type ConnectionStatus } from "../connection-row";
@@ -18,11 +18,6 @@ interface McpServerInfo {
 
 /** IDs of MCP servers that belong to the Google Workspace group. */
 const GOOGLE_IDS = new Set(["gmail", "google-drive", "google-calendar"]);
-
-interface SimpleIntegrationStatus {
-  /** GitHub: tokenSaved + registered; Bitbucket: saved. */
-  connected: boolean;
-}
 
 /**
  * Derive an overall `ConnectionStatus` for a group of sub-services.
@@ -49,9 +44,9 @@ export function SettingsConnectionsPage() {
   const [cliAvailable, setCliAvailable] = useState<boolean | null>(null);
   const [mcpServers, setMcpServers] = useState<McpServerInfo[] | null>(null);
   const [githubStatus, setGithubStatus] = useState<ConnectionStatus>("unknown");
-  const [bitbucketStatus, setBitbucketStatus] = useState<ConnectionStatus>("unknown");
+  const [atlassianStatus, setAtlassianStatus] = useState<ConnectionStatus>("unknown");
+  const [atlassianSummary, setAtlassianSummary] = useState<string | null>(null);
   const [linearStatus, setLinearStatus] = useState<ConnectionStatus>("unknown");
-  const [jiraStatus, setJiraStatus] = useState<ConnectionStatus>("unknown");
   const [notionStatus, setNotionStatus] = useState<ConnectionStatus>("unknown");
   const [trelloStatus, setTrelloStatus] = useState<ConnectionStatus>("unknown");
   /**
@@ -125,16 +120,38 @@ export function SettingsConnectionsPage() {
     };
   }, []);
 
+  // Unified Atlassian — one probe drives a single row that summarises
+  // both Jira and Bitbucket halves (either, both, or neither connected).
   useEffect(() => {
     let cancelled = false;
-    authFetch(`${BASE}/api/bitbucket-custom/status`)
+    authFetch(`${BASE}/api/atlassian-custom/status`)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null)
-      .then((data: SimpleIntegrationStatus | { saved?: boolean } | null) => {
-        if (cancelled) return;
-        const saved = (data as { saved?: boolean } | null)?.saved ?? false;
-        setBitbucketStatus(saved ? "connected" : "disconnected");
-      });
+      .then(
+        (
+          data: {
+            jira?: { connected?: boolean } | null;
+            bitbucket?: { connected?: boolean } | null;
+          } | null,
+        ) => {
+          if (cancelled) return;
+          const jira = !!data?.jira?.connected;
+          const bitbucket = !!data?.bitbucket?.connected;
+          if (jira && bitbucket) {
+            setAtlassianStatus("connected");
+            setAtlassianSummary("Jira + Bitbucket connected");
+          } else if (jira) {
+            setAtlassianStatus("connected");
+            setAtlassianSummary("Jira connected — add Bitbucket");
+          } else if (bitbucket) {
+            setAtlassianStatus("connected");
+            setAtlassianSummary("Bitbucket connected — add Jira");
+          } else {
+            setAtlassianStatus("disconnected");
+            setAtlassianSummary(null);
+          }
+        },
+      );
     return () => {
       cancelled = true;
     };
@@ -148,20 +165,6 @@ export function SettingsConnectionsPage() {
       .then((data: { tokenSaved?: boolean; registered?: boolean } | null) => {
         if (cancelled) return;
         setLinearStatus(data?.tokenSaved && data?.registered ? "connected" : "disconnected");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    authFetch(`${BASE}/api/jira-custom/status`)
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null)
-      .then((data: { saved?: boolean } | null) => {
-        if (cancelled) return;
-        setJiraStatus(data?.saved ? "connected" : "disconnected");
       });
     return () => {
       cancelled = true;
@@ -256,12 +259,11 @@ export function SettingsConnectionsPage() {
       : mcpServers !== null || customGoogleConnected !== null
         ? "disconnected"
         : "unknown";
-  const microsoftStatus: ConnectionStatus =
-    customMicrosoftConnected
-      ? "connected"
-      : customMicrosoftConnected !== null
-        ? "disconnected"
-        : "unknown";
+  const microsoftStatus: ConnectionStatus = customMicrosoftConnected
+    ? "connected"
+    : customMicrosoftConnected !== null
+      ? "disconnected"
+      : "unknown";
   const slackStatus = singleStatus(mcpServers, "slack");
 
   return (
@@ -292,11 +294,11 @@ export function SettingsConnectionsPage() {
       />
 
       <ConnectionRow
-        icon={<FiGitBranch size={16} />}
-        name="Bitbucket"
-        description="Access repositories and pull requests (read-only)"
-        status={bitbucketStatus}
-        onClick={() => setParam("settings", "connections/bitbucket")}
+        icon={<SiAtlassian size={16} className="text-blue-500" />}
+        name="Atlassian"
+        description={atlassianSummary ?? "Jira and Bitbucket — one Atlassian account"}
+        status={atlassianStatus}
+        onClick={() => setParam("settings", "connections/atlassian")}
       />
 
       <ConnectionRow
@@ -329,14 +331,6 @@ export function SettingsConnectionsPage() {
         description="Search, read, and create issues"
         status={linearStatus}
         onClick={() => setParam("settings", "connections/linear")}
-      />
-
-      <ConnectionRow
-        icon={<SiJira size={16} className="text-blue-500" />}
-        name="Jira"
-        description="Access issues, sprints, and boards"
-        status={jiraStatus}
-        onClick={() => setParam("settings", "connections/jira")}
       />
 
       <ConnectionRow

@@ -246,6 +246,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         else if (s === "awaiting_input") setStatus("awaiting_input");
         else if (s === "thinking") setStatus("thinking");
         else if (s === "tool_running") setStatus("tool_running");
+        else if (s === "idle") setStatus("idle");
         return;
       }
 

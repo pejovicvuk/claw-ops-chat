@@ -2,6 +2,7 @@ import { readFile } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { getRuntimeAuthFailed } from "@/lib/claude-auth-runtime-state";
 
 interface ClaudeCredentials {
   claudeAiOauth?: {
@@ -21,6 +22,7 @@ export async function GET(request: Request) {
   if (!extractSession(request)) return unauthorized();
 
   const credentialsPath = join(homedir(), ".claude", ".credentials.json");
+  const { failed: runtimeAuthFailed, reason: runtimeAuthFailedReason } = getRuntimeAuthFailed();
 
   try {
     const raw = await readFile(credentialsPath, "utf-8");
@@ -33,6 +35,8 @@ export async function GET(request: Request) {
         email: null,
         subscriptionType: null,
         expiresAt: null,
+        runtimeAuthFailed,
+        runtimeAuthFailedReason,
       });
     }
 
@@ -41,6 +45,8 @@ export async function GET(request: Request) {
       email: creds.oauthAccount?.emailAddress ?? null,
       subscriptionType: oauth.subscriptionType ?? null,
       expiresAt: oauth.expiresAt ?? null,
+      runtimeAuthFailed,
+      runtimeAuthFailedReason,
     });
   } catch {
     return Response.json({
@@ -48,6 +54,8 @@ export async function GET(request: Request) {
       email: null,
       subscriptionType: null,
       expiresAt: null,
+      runtimeAuthFailed,
+      runtimeAuthFailedReason,
     });
   }
 }

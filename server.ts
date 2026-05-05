@@ -26,6 +26,7 @@ import {
   clearSessionStatus,
   type SessionStatus,
 } from "./src/lib/session-status-store";
+import { setRuntimeAuthFailed } from "./src/lib/claude-auth-runtime-state";
 import {
   loadAllSessions,
   persistSession,
@@ -764,7 +765,9 @@ class SessionManager {
     // tool finished running) would sit on whatever state it had before
     // the disconnect — often showing "thinking…" forever, or worse,
     // silently missing the fact that a permission prompt is pending.
-    this.send(ws, { type: "status", status: session.status });
+    // When auth is known-broken, always report idle so the client's stop
+    // button can't get stuck in "thinking" due to a stale session.status.
+    this.send(ws, { type: "status", status: this.claudeAuthFailed ? "idle" : session.status });
 
     // If the server was restarted while this session was mid-turn,
     // surface a one-shot "interrupted" event so the UI can render a
@@ -1134,6 +1137,9 @@ class SessionManager {
     // prevents new or switched-to sessions from wasting a full SDK turn just to
     // hit the same failure, and is the primary fix for "spawning many broken chats".
     if (this.claudeAuthFailed) {
+      // Reset status-store + broadcast status:idle so the sidebar stops showing
+      // this session as "thinking" and the client's stop button disappears.
+      this.setStatus(session, "idle");
       this.broadcast(session, {
         type: "auth_required",
         provider: "claude",
@@ -1838,6 +1844,7 @@ class SessionManager {
           // Credentials clearly work — clear the global auth gate so all
           // sessions can send messages again.
           this.claudeAuthFailed = false;
+          setRuntimeAuthFailed(false);
           session.accumulatedText = "";
           this.broadcast(session, {
             type: "result",
@@ -2076,6 +2083,9 @@ class SessionManager {
           // restored. This is the primary fix for "spawning many broken chats".
           this.claudeAuthFailed = true;
           this.claudeAuthFailedReason = subscriptionError ? "subscription_expired" : "token_expired";
+          // Mirror to the module singleton so /api/claude-auth/status can
+          // report the live failure state to the Settings page.
+          setRuntimeAuthFailed(true, this.claudeAuthFailedReason);
           this.claudeAuthFailedHint = subscriptionError
             ? "Check your plan at claude.ai/settings/billing."
             : "Run `claude auth login` in the container terminal, or click below.";

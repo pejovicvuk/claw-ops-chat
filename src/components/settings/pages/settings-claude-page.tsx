@@ -35,6 +35,8 @@ interface Status {
   email: string | null;
   subscriptionType: string | null;
   expiresAt: number | null;
+  runtimeAuthFailed?: boolean;
+  runtimeAuthFailedReason?: "token_expired" | "subscription_expired";
 }
 
 interface ClaudeInfo {
@@ -499,6 +501,23 @@ export function SettingsClaudePage() {
               </p>
             )}
           </div>
+          {status.runtimeAuthFailed && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[12px]">
+              <FiAlertTriangle size={13} className="mt-0.5 shrink-0 text-amber-400" />
+              <div>
+                <p className="font-medium text-amber-300">
+                  {status.runtimeAuthFailedReason === "subscription_expired"
+                    ? "Subscription inactive"
+                    : "Token expired at runtime"}
+                </p>
+                <p className="mt-0.5 text-canvas-muted">
+                  {status.runtimeAuthFailedReason === "subscription_expired"
+                    ? "Claude rejected the request due to an inactive subscription or usage limit."
+                    : "Claude rejected these credentials at runtime. Re-authenticate below to restore access."}
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
         <button

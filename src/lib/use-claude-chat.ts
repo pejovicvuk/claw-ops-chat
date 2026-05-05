@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getAccessToken } from "@/lib/apiClient";
 import { authFetch } from "@/lib/auth";
+import { shouldShowStoppedPill } from "@/lib/chat-result-dedupe";
 import type { ChatMessage, ClaudeStatus, ActiveToolInfo } from "@/lib/types";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -478,6 +479,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       }
 
       if (type === "result") {
+        // Capture the streamed assistant message id BEFORE we reset the ref —
+        // the dedup check below needs it to compare result.text against the
+        // content we already rendered via text_delta events.
+        const streamedAssistantId = currentAssistantRef.current;
         currentAssistantRef.current = null;
         currentThinkingRef.current = null;
         setActiveTool(null);
@@ -494,19 +499,30 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
             },
           ]);
         } else if (evt.text) {
-          // Always show the result text (e.g. "Stopped by user") as a neutral
-          // system notice rather than a plain assistant bubble — it signals a
-          // session-end event, not Claude-authored content.
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              role: "system" as const,
-              type: "stopped" as const,
-              content: evt.text as string,
-              timestamp: Date.now(),
-            },
-          ]);
+          // The SDK populates `result.text` with the FULL assistant turn for
+          // normal completions, but text_delta events have already streamed
+          // that content as a regular bubble. Surface the neutral system
+          // pill (e.g. "Stopped by user") only when the result text is
+          // genuinely different from what we just rendered — otherwise the
+          // chat shows a flat-text duplicate that disappears on refresh.
+          setMessages((prev) => {
+            const streamedContent = streamedAssistantId
+              ? (prev.find((m) => m.id === streamedAssistantId)?.content ?? "")
+              : "";
+            if (!shouldShowStoppedPill(evt.text as string, streamedContent)) {
+              return prev;
+            }
+            return [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                role: "system" as const,
+                type: "stopped" as const,
+                content: evt.text as string,
+                timestamp: Date.now(),
+              },
+            ];
+          });
         }
         return;
       }

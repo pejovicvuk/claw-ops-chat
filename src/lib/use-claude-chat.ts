@@ -46,7 +46,11 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const [activeTool, setActiveTool] = useState<ActiveToolInfo | null>(null);
   const [claudeSessionId, setClaudeSessionId] = useState<string | null>(null);
   const [setupRequired, setSetupRequired] = useState(false);
-  const [authRequired, setAuthRequired] = useState<{ message: string; hint: string } | null>(null);
+  const [authRequired, setAuthRequired] = useState<{
+    message: string;
+    hint: string;
+    reason?: "token_expired" | "subscription_expired";
+  } | null>(null);
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   // Per-session permission mode, persisted under modeStorageKey(sessionId).
   // `default` when the session is fresh / localStorage is empty.
@@ -533,6 +537,8 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         setAuthRequired({
           message: (evt.message as string) || "Claude auth expired.",
           hint: (evt.hint as string) || "Run `claude auth login` in the settings terminal.",
+          reason:
+            (evt.reason as "token_expired" | "subscription_expired" | undefined) ?? "token_expired",
         });
         return;
       }
@@ -776,13 +782,15 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       if (!sessionId) return;
 
       // Optimistic UI — user sees their message immediately even if the
-      // tab is about to close.
+      // tab is about to close. Capture the id so we can remove the bubble
+      // if the HTTP delivery itself fails (e.g. Spring session expired).
+      const optimisticId = crypto.randomUUID();
       setMessages((prev) => [
         ...prev,
         {
-          id: crypto.randomUUID(),
-          role: "user",
-          type: "text",
+          id: optimisticId,
+          role: "user" as const,
+          type: "text" as const,
           content: trimmed,
           timestamp: Date.now(),
         },
@@ -806,7 +814,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       // the user reopens the chat (or switches tabs), the server replays
       // eventHistory so they pick up wherever the SDK got to.
       const clientMessageId = crypto.randomUUID();
-      void authFetch(`${BASE}/api/chat/send`, {
+      authFetch(`${BASE}/api/chat/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -816,14 +824,34 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
           sessionCwd: sessionCwd ?? null,
         }),
         keepalive: true,
-      }).catch(() => {
-        // keepalive guarantees the browser tries; surface failures to the
-        // user only if we're still mounted (otherwise nothing to show).
-        // The optimistic message stays in the list — server-side rate
-        // limit / idempotency rejection is rare and will manifest as the
-        // assistant simply never replying. A retry button on a stuck
-        // message could be added later if this proves common.
-      });
+      })
+        .then((resp) => {
+          if (resp.status === 401) {
+            // The app session (Spring JWT) has expired — the message never
+            // reached the Claude server. Remove the optimistic bubble and
+            // prompt the user to log in again.
+            setMessages((prev) => prev.filter((m) => m.id !== optimisticId));
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                role: "system" as const,
+                type: "error" as const,
+                content: "Your app session has expired. Please log in again.",
+                timestamp: Date.now(),
+              },
+            ]);
+            setStatus("idle");
+          }
+        })
+        .catch(() => {
+          // keepalive guarantees the browser tries; surface failures to the
+          // user only if we're still mounted (otherwise nothing to show).
+          // The optimistic message stays in the list — server-side rate
+          // limit / idempotency rejection is rare and will manifest as the
+          // assistant simply never replying. A retry button on a stuck
+          // message could be added later if this proves common.
+        });
     },
     [status, sessionId, sessionCwd, authRequired],
   );

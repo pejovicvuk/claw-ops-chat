@@ -411,6 +411,15 @@ const SERVER_BOOT_ID = Math.random().toString(36).slice(2, 10);
 class SessionManager {
   private sessions = new Map<string, ChatSession>();
 
+  // Global credential-failure gate. When ANY session hits a Claude 401 /
+  // subscription error, all subsequent turns across ALL sessions are blocked
+  // and immediately receive an auth_required event so the user knows to
+  // re-authenticate before creating new chats or retrying. Cleared on the
+  // first successful SDK result after credentials are restored.
+  private claudeAuthFailed = false;
+  private claudeAuthFailedReason: "token_expired" | "subscription_expired" = "token_expired";
+  private claudeAuthFailedHint = "Run `claude auth login` in the settings terminal, or click below.";
+
   getOrCreateSession(sessionId: string): ChatSession {
     let session = this.sessions.get(sessionId);
     if (!session) {
@@ -735,6 +744,22 @@ class SessionManager {
       for (const event of session.eventHistory) {
         this.send(ws, event);
       }
+    }
+
+    // If credentials are known-broken, tell the new client immediately so it
+    // shows the auth banner regardless of which session it connected to or
+    // whether the user has navigated to a fresh chat since the failure.
+    if (this.claudeAuthFailed) {
+      this.send(ws, {
+        type: "auth_required",
+        provider: "claude",
+        reason: this.claudeAuthFailedReason,
+        message:
+          this.claudeAuthFailedReason === "subscription_expired"
+            ? "Your Claude subscription is inactive or has reached its usage limit."
+            : "Claude rejected the stored credentials. Your OAuth token has probably expired.",
+        hint: this.claudeAuthFailedHint,
+      });
     }
 
     // Always send the current status snapshot on reconnect. Without this,
@@ -1103,6 +1128,25 @@ class SessionManager {
         error: "Conversation resume failed after multiple retries. Please start a new chat.",
       });
       session.retryCount = 0;
+      session.isProcessing = false;
+      return;
+    }
+
+    // Global credential gate — if any session has already hit a 401 / subscription
+    // error, block ALL turns immediately and re-surface the auth banner. This
+    // prevents new or switched-to sessions from wasting a full SDK turn just to
+    // hit the same failure, and is the primary fix for "spawning many broken chats".
+    if (this.claudeAuthFailed) {
+      this.broadcast(session, {
+        type: "auth_required",
+        provider: "claude",
+        reason: this.claudeAuthFailedReason,
+        message:
+          this.claudeAuthFailedReason === "subscription_expired"
+            ? "Your Claude subscription is inactive or has reached its usage limit."
+            : "Claude rejected the stored credentials. Your OAuth token has probably expired.",
+        hint: this.claudeAuthFailedHint,
+      });
       session.isProcessing = false;
       return;
     }
@@ -1796,6 +1840,9 @@ class SessionManager {
           }
           session.claudeSessionId = msg.session_id as string;
           session.retryCount = 0; // reset on successful result
+          // Credentials clearly work — clear the global auth gate so all
+          // sessions can send messages again.
+          this.claudeAuthFailed = false;
           session.accumulatedText = "";
           this.broadcast(session, {
             type: "result",
@@ -1970,6 +2017,16 @@ class SessionManager {
           /\b401\b/.test(rawMessage) ||
           lowered.includes("unauthorized");
 
+        // Distinguish a subscription/billing problem from a plain token expiry
+        // so the UI can show a "check your plan" message instead of "sign in again".
+        const subscriptionError =
+          authError &&
+          (lowered.includes("inactive subscription") ||
+            lowered.includes("subscription_inactive") ||
+            lowered.includes("quota_exceeded") ||
+            (lowered.includes("billing") && lowered.includes("error")) ||
+            (lowered.includes("usage") && lowered.includes("limit")));
+
         const stderrTail =
           typeof (errnoErr as unknown as { stderr?: string }).stderr === "string"
             ? (errnoErr as unknown as { stderr: string }).stderr
@@ -2015,16 +2072,27 @@ class SessionManager {
         );
 
         if (authError) {
-          // Drain the queue so no queued messages retry with the same broken
-          // credentials, which would create a chain of repeated auth failures.
+          // Drain the queue and clear stale event-history so reconnecting
+          // clients don't replay a dangling turn_start and show ghost content.
           session.messageQueue = [];
+          session.eventHistory = [];
+          // Set the global gate so ALL subsequent turns — including turns in
+          // new or switched-to sessions — are blocked until credentials are
+          // restored. This is the primary fix for "spawning many broken chats".
+          this.claudeAuthFailed = true;
+          this.claudeAuthFailedReason = subscriptionError ? "subscription_expired" : "token_expired";
+          this.claudeAuthFailedHint = subscriptionError
+            ? "Check your plan at claude.ai/settings/billing."
+            : "Run `claude auth login` in the container terminal, or click below.";
           this.broadcast(session, {
             type: "auth_required",
             provider: "claude",
-            message:
-              "Claude rejected the stored credentials (HTTP 401). Your OAuth " +
-              "token has probably expired — sign in again to keep chatting.",
-            hint: "Run `claude auth login` in the container terminal, or click below.",
+            reason: this.claudeAuthFailedReason,
+            message: subscriptionError
+              ? "Your Claude subscription is inactive or has reached its usage limit."
+              : "Claude rejected the stored credentials (HTTP 401). Your OAuth " +
+                "token has probably expired — sign in again to keep chatting.",
+            hint: this.claudeAuthFailedHint,
           });
         } else if (setupRequired) {
           this.broadcast(session, {

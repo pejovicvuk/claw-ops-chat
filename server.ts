@@ -1981,6 +1981,13 @@ class SessionManager {
         inactivityTimer = null;
       }
       if (turnTimedOut && !session.userAborted) {
+        // Drain the queue and clear stale event history before broadcasting.
+        // Without this, messages queued while the turn was hung (e.g. the
+        // user clicking Send again out of frustration) would immediately
+        // restart a new turn against an API that is still unreachable,
+        // creating an infinite stop-restart loop.
+        session.messageQueue = [];
+        session.eventHistory = [];
         const secs = Math.round(this.turnInactivityMs / 1000);
         this.broadcast(session, {
           type: "error",
@@ -2003,8 +2010,10 @@ class SessionManager {
         // currentQuery and processes the next queued message (if any).
       } else if (turnTimedOut) {
         // Inactivity timeout fired — abortController.abort() caused the
-        // async iterator to reject. Broadcast a friendly "API unreachable"
-        // message and skip the generic error analysis below.
+        // async iterator to reject. Drain the queue and clear event history
+        // for the same reason as the normal-exit path above, then broadcast.
+        session.messageQueue = [];
+        session.eventHistory = [];
         const secs = Math.round(this.turnInactivityMs / 1000);
         this.broadcast(session, {
           type: "error",

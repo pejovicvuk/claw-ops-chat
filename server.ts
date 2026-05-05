@@ -420,6 +420,14 @@ class SessionManager {
   private claudeAuthFailed = false;
   private claudeAuthFailedReason: "token_expired" | "subscription_expired" = "token_expired";
   private claudeAuthFailedHint = "Run `claude auth login` in the settings terminal, or click below.";
+  // Maximum ms of silence from the SDK before the turn is force-aborted.
+  // Reset on every SDK event so long tool executions aren't cut off while
+  // actively streaming. 0 disables the timeout entirely.
+  // Override via CLAUDE_TURN_TIMEOUT_MS env variable.
+  private readonly turnInactivityMs = parseInt(
+    process.env.CLAUDE_TURN_TIMEOUT_MS ?? "120000",
+    10,
+  );
 
   getOrCreateSession(sessionId: string): ChatSession {
     let session = this.sessions.get(sessionId);
@@ -1541,6 +1549,17 @@ class SessionManager {
       (queryParams.options as Record<string, unknown>).resume = resumeId;
     }
 
+    let turnTimedOut = false;
+    let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
+    const startInactivityTimer = () => {
+      if (this.turnInactivityMs <= 0) return;
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(() => {
+        turnTimedOut = true;
+        abortController.abort();
+      }, this.turnInactivityMs);
+    };
+
     try {
       let messageStream;
       try {
@@ -1607,6 +1626,7 @@ class SessionManager {
         }
       }
 
+      startInactivityTimer();
       for await (const message of messageStream!) {
         // Bail out immediately if the user hit Stop. The SDK's
         // abortController.abort() kills the subprocess, but the async
@@ -1614,6 +1634,7 @@ class SessionManager {
         // — leaving the turn visibly unresponsive to the user. This
         // check short-circuits the loop the moment a stop arrives.
         if (session.userAborted || abortController.signal.aborted) break;
+        startInactivityTimer(); // reset on each SDK event so active tool runs don't time out
 
         const msg = message as Record<string, unknown>;
 
@@ -1951,7 +1972,27 @@ class SessionManager {
           );
         }
       }
+
+      // for-await exited normally (iterator done or `break`).
+      // Clear the inactivity timer and, if we timed out, broadcast a
+      // friendly message before the post-catch cleanup runs.
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = null;
+      }
+      if (turnTimedOut && !session.userAborted) {
+        const secs = Math.round(this.turnInactivityMs / 1000);
+        this.broadcast(session, {
+          type: "error",
+          message: `Claude did not respond for ${secs} seconds. The Anthropic API may be temporarily unreachable — please try again.`,
+        });
+      }
     } catch (err) {
+      // Clear the inactivity timer regardless of which error path we take.
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = null;
+      }
       // User asked us to stop — the resulting AbortError / killed-child
       // error is expected, not a failure. Swallow the whole error path;
       // the stop handler already broadcast a clean "Stopped by user"
@@ -1960,6 +2001,15 @@ class SessionManager {
         // Fall through to the post-catch cleanup at the bottom of this
         // method, which resets isProcessing / abortController /
         // currentQuery and processes the next queued message (if any).
+      } else if (turnTimedOut) {
+        // Inactivity timeout fired — abortController.abort() caused the
+        // async iterator to reject. Broadcast a friendly "API unreachable"
+        // message and skip the generic error analysis below.
+        const secs = Math.round(this.turnInactivityMs / 1000);
+        this.broadcast(session, {
+          type: "error",
+          message: `Claude did not respond for ${secs} seconds. The Anthropic API may be temporarily unreachable — please try again.`,
+        });
       } else {
         const rawMessage0 = err instanceof Error ? err.message : "Unknown error";
         // Resume-not-found surfaces here when the SDK throws DURING the
@@ -2124,6 +2174,11 @@ class SessionManager {
       } // end `else` — non-userAborted error path
     }
 
+    // Safety-net: ensure the inactivity timer never outlives the turn.
+    if (inactivityTimer) {
+      clearTimeout(inactivityTimer);
+      inactivityTimer = null;
+    }
     session.isProcessing = false;
     session.abortController = null;
     session.currentQuery = null;

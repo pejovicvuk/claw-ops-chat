@@ -9,6 +9,7 @@ import {
   FiFolder,
   FiMessageCircle,
   FiAlertTriangle,
+  FiAlertOctagon,
 } from "react-icons/fi";
 import { useClaudeChat } from "@/lib/use-claude-chat";
 import { formatStreamingHint } from "@/lib/format-streaming-hint";
@@ -754,24 +755,57 @@ export function ChatView({
         </div>
 
         {authRequired && (
-          <div className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2.5">
+          <div
+            className={`shrink-0 border-b px-4 py-2.5 ${
+              authRequired.reason === "subscription_expired"
+                ? "border-red-500/30 bg-red-500/10"
+                : "border-amber-500/30 bg-amber-500/10"
+            }`}
+          >
             <div className="flex items-start gap-2.5">
-              <FiAlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+              {authRequired.reason === "subscription_expired" ? (
+                <FiAlertOctagon size={14} className="mt-0.5 shrink-0 text-red-400" />
+              ) : (
+                <FiAlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+              )}
               <div className="min-w-0 flex-1 text-[12px] leading-relaxed">
-                <p className="font-medium text-amber-300">Claude sign-in expired</p>
-                <p className="mt-0.5 text-canvas-muted">{authRequired.message}</p>
-                <p className="mt-1 text-canvas-muted">
-                  The sign-in panel has opened — finish the flow there, then retry the message.
+                <p
+                  className={`font-medium ${
+                    authRequired.reason === "subscription_expired"
+                      ? "text-red-300"
+                      : "text-amber-300"
+                  }`}
+                >
+                  {authRequired.reason === "subscription_expired"
+                    ? "Claude subscription inactive"
+                    : "Claude sign-in expired"}
                 </p>
+                <p className="mt-0.5 text-canvas-muted">{authRequired.message}</p>
+                {authRequired.reason !== "subscription_expired" && (
+                  <p className="mt-1 text-canvas-muted">
+                    The sign-in panel has opened — finish the flow there, then retry the message.
+                  </p>
+                )}
               </div>
               <div className="flex shrink-0 gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setParam("settings", "connections/claude")}
-                  className="rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
-                >
-                  Go to sign-in
-                </button>
+                {authRequired.reason === "subscription_expired" ? (
+                  <a
+                    href="https://claude.ai/settings/billing"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-md bg-red-500 px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+                  >
+                    View billing
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setParam("settings", "connections/claude")}
+                    className="rounded-md bg-accent px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+                  >
+                    Go to sign-in
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={clearAuthRequired}

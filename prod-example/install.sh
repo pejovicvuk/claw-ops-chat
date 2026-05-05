@@ -20,6 +20,12 @@ set -euo pipefail
 : "${NEXT_PUBLIC_API_ORIGIN:?NEXT_PUBLIC_API_ORIGIN env var is required (the ClawOps backend URL, e.g. https://clawops.example.com)}"
 : "${SESSION_SECRET:=$(openssl rand -hex 48 2>/dev/null || head -c 48 /dev/urandom | xxd -p | tr -d '\n')}"
 : "${ALLOWED_ORIGINS:=https://$HOSTNAME}"
+# Public URL the chat is reachable at — used to build the Google OAuth
+# redirect_uri at code-exchange time. Must match exactly the URI registered
+# in Google Cloud Console (Authorized redirect URIs). x-forwarded-host can
+# be spoofed by an upstream proxy, so the callback route refuses to derive
+# this from request headers.
+: "${NEXT_PUBLIC_CHAT_ORIGIN:=https://$HOSTNAME}"
 : "${APP_DIR:=/opt/claw-chat}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,6 +96,7 @@ NEXT_PUBLIC_API_ORIGIN=$NEXT_PUBLIC_API_ORIGIN
 ALLOWED_EMAIL=$ALLOWED_EMAIL
 SESSION_SECRET=$SESSION_SECRET
 ALLOWED_ORIGINS=$ALLOWED_ORIGINS
+NEXT_PUBLIC_CHAT_ORIGIN=$NEXT_PUBLIC_CHAT_ORIGIN
 CLAUDE_CWD=/
 EOF
 

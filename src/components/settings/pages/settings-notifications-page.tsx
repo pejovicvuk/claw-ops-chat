@@ -111,6 +111,10 @@ export function SettingsNotificationsPage() {
     }
   }, [sub]);
 
+  const handleRefresh = useCallback(() => {
+    void sub.refreshSubscription();
+  }, [sub]);
+
   if (sub.support.kind === "unsupported") {
     return (
       <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
@@ -167,14 +171,35 @@ export function SettingsNotificationsPage() {
         )}
         <div className="flex flex-wrap gap-2">
           {enabled ? (
-            <button
-              type="button"
-              onClick={handleDisable}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/15"
-            >
-              <FiBellOff size={11} />
-              Disable on this device
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={handleDisable}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/15"
+              >
+                <FiBellOff size={11} />
+                Disable on this device
+              </button>
+              <button
+                type="button"
+                onClick={handleRefresh}
+                disabled={sub.refreshing}
+                title="Re-mints the browser's push subscription. Use when the server says deliveries are 'sent' but the device shows nothing — common after iOS updates or notification-budget hits."
+                className="inline-flex items-center gap-1.5 rounded-lg border border-canvas-border px-3 py-2 text-[12px] font-medium text-canvas-fg transition-colors hover:bg-canvas-surface-hover disabled:opacity-40"
+              >
+                {sub.refreshing ? (
+                  <>
+                    <FiLoader size={11} className="animate-spin" />
+                    Refreshing…
+                  </>
+                ) : (
+                  <>
+                    <FiRefreshCw size={11} />
+                    Refresh subscription
+                  </>
+                )}
+              </button>
+            </>
           ) : (
             <button
               type="button"

@@ -128,6 +128,19 @@ export interface UsePushSubscriptionResult {
    * instead of an opaque success.
    */
   sendTest: (kind?: PushEventKind) => Promise<TestSendResult>;
+  /**
+   * Force the browser to mint a new `PushSubscription` on this device
+   * and re-register it with the server, preserving the current event +
+   * focus-behaviour preferences. Useful when the upstream push service
+   * accepts deliveries (200) but the device-side never surfaces them
+   * — typical iOS PWA failure mode after a notification-budget hit, an
+   * iOS major upgrade, or a permission toggle in OS Settings. The old
+   * server record naturally ages out the next time anything fires for
+   * its now-orphaned endpoint (push service responds 410 → store drops).
+   */
+  refreshSubscription: () => Promise<void>;
+  /** True while `refreshSubscription` is in flight. */
+  refreshing: boolean;
   refresh: () => Promise<void>;
 }
 
@@ -209,6 +222,7 @@ export function usePushSubscription(): UsePushSubscriptionResult {
   const [allDevices, setAllDevices] = useState<DeviceSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [enabling, setEnabling] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -431,6 +445,84 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     }
   }, [refresh]);
 
+  const refreshSubscription = useCallback(async (): Promise<void> => {
+    if (support.kind !== "supported" || refreshing) return;
+    setRefreshing(true);
+    setError(null);
+    try {
+      const reg = await navigator.serviceWorker.getRegistration(`${BASE}/`);
+      if (!reg) {
+        throw new Error(
+          "Service worker isn't registered yet — wait for it to activate, then try again.",
+        );
+      }
+      await withTimeout(waitForActivation(reg), 30_000, "service worker activation");
+
+      // Capture the current device's preferences so the new record
+      // inherits them. Falls back to defaults when this is the first
+      // ever subscribe (refreshSubscription should normally only be
+      // called when thisDevice exists, but the UI might race).
+      const previousEvents = thisDevice?.events ?? DEFAULT_PREFERENCES;
+      const previousBehavior = thisDevice?.behavior ?? DEFAULT_BEHAVIOR;
+      const previousId = thisDevice?.id ?? null;
+
+      // Tear down the old subscription locally — this releases the old
+      // endpoint so the browser issues a fresh one. We don't DELETE
+      // the server record here: the new subscription will have a new
+      // endpoint (and therefore a new device id), so the orphaned old
+      // record will be left behind. It self-purges the next time the
+      // server tries to deliver to it (410 → removeByEndpoint). Doing
+      // it that way avoids a window where the user has neither
+      // subscription on the server.
+      const existing = await reg.pushManager.getSubscription();
+      if (existing) {
+        try {
+          await existing.unsubscribe();
+        } catch {
+          /* best effort — `subscribe()` below will overwrite anyway */
+        }
+      }
+
+      const publicKey = await fetchVapidPublicKey();
+      const fresh = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToBuffer(publicKey),
+      });
+      const json = fresh.toJSON();
+      const res = await authFetch(`${BASE}/api/push/subscriptions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subscription: { endpoint: fresh.endpoint, keys: json.keys },
+          label: deriveLabel(),
+          events: previousEvents,
+          behavior: previousBehavior,
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`Failed to register refreshed subscription (${res.status})`);
+      }
+
+      // Best-effort: drop the old server record explicitly so the
+      // settings UI doesn't show the orphan alongside the fresh one
+      // until the next 410. Failure here is non-fatal — the orphan
+      // will self-purge the next time something tries to deliver.
+      if (previousId) {
+        try {
+          await authFetch(`${BASE}/api/push/subscriptions/${previousId}`, { method: "DELETE" });
+        } catch {
+          /* tolerate — orphan will 410-purge */
+        }
+      }
+
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to refresh subscription");
+    } finally {
+      setRefreshing(false);
+    }
+  }, [support.kind, refreshing, thisDevice, refresh]);
+
   const sendTest = useCallback(
     async (kind: PushEventKind = "turnComplete"): Promise<TestSendResult> => {
       setError(null);
@@ -468,6 +560,8 @@ export function usePushSubscription(): UsePushSubscriptionResult {
     removeDevice,
     clearAll,
     sendTest,
+    refreshSubscription,
+    refreshing,
     refresh,
   };
 }

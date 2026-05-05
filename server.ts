@@ -1858,6 +1858,11 @@ class SessionManager {
             typeof msg.result === "string" &&
             msg.result.includes("No conversation found")
           ) {
+            // Set idle BEFORE clearing claudeSessionId so setStatus() can
+            // update the old SDK uuid's status file to "idle". Without this,
+            // the alias entry stays "thinking" forever and appears as a ghost
+            // session in the sidebar.
+            this.setStatus(session, "idle");
             session.claudeSessionId = null;
             // Retry the query without resume
             delete (queryParams.options as Record<string, unknown>).resume;
@@ -2032,12 +2037,18 @@ class SessionManager {
           rawMessage0.toLowerCase().includes("no conversation found") ||
           /returned an error result/i.test(rawMessage0)
         ) {
+          // Same fix as the result path above: update the old sdk-uuid's
+          // status file to "idle" BEFORE wiping claudeSessionId, so the
+          // alias entry doesn't stay "thinking" in the sidebar.
+          // Also increment retryCount so the guard at the top of
+          // handleUserMessage bounds this path (was missing here).
+          this.setStatus(session, "idle");
           session.claudeSessionId = null;
           delete (queryParams.options as Record<string, unknown>).resume;
           session.isProcessing = false;
           session.abortController = null;
           session.currentQuery = null;
-          this.setStatus(session, "idle");
+          session.retryCount += 1;
           this.handleUserMessage(session, text);
           return;
         }

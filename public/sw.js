@@ -1,9 +1,14 @@
-// Bumped to v4 when the push handler learned about `focusBehavior`
-// ("alwaysShow" | "smartChat" | "suppress") and per-tab "active chat"
-// so a focused tab on chat A still gets a system notification for
-// chat B. The activate handler below cleans up stale caches on every
-// bump.
-const CACHE_NAME = "claw-chat-v4";
+// Bumped to v5: smartChat suppression now keys off `visibilityState`
+// alone instead of `visibilityState && focused`. `Document.hasFocus()`
+// (the source of `Client.focused`) is unreliable on iOS PWAs and on
+// desktop browsers when another OS window has input focus, even though
+// the chat is in plain sight — that meant pushes were firing for the
+// chat the user was actively watching. The new gate: if a window is
+// visible and on the same chat, suppress. Source of truth for the
+// algorithm + tests: `src/lib/push/should-suppress.ts` — keep the
+// inline `shouldSuppress` below in sync with that module. The
+// activate handler cleans up stale caches on every bump.
+const CACHE_NAME = "claw-chat-v5";
 
 const PRECACHE_URLS = ["/chat", "/chat/login"];
 
@@ -299,25 +304,37 @@ function tagFor(data) {
 
 /**
  * Decide whether the SW should suppress the system notification given
- * the focused windows and the requested focus behavior.
+ * the visible/focused windows and the requested focus behaviour.
  *
  *  - alwaysShow → never suppress.
- *  - suppress   → suppress whenever any window is focused.
- *  - smartChat  → suppress only when at least one focused window is
- *                 viewing the same chatId the push is for. Falls open
- *                 to "show" when no chatId is supplied (e.g. cron) or
- *                 when no focused tab has reported its active chat.
+ *  - suppress   → suppress only when a window is visible AND focused.
+ *                 (Stricter mode: nuke notifications only when the user
+ *                 is right there with input focus on the app.)
+ *  - smartChat  → suppress when at least one **visible** window is on
+ *                 the same chatId the push is for. Visibility alone is
+ *                 the gate — `Client.focused` is unreliable on iOS PWAs
+ *                 and on desktop when another window has OS focus, and
+ *                 the user's intent for "smart" is "if I can see the
+ *                 conversation, don't bother me." Falls open to "show"
+ *                 when no chatId is supplied (e.g. cron) or when no
+ *                 visible tab has reported its active chat.
+ *
+ * Source of truth + unit tests: `src/lib/push/should-suppress.ts`. Keep
+ * this inline copy in sync with that module — the SW can't import TS,
+ * so the algorithm is duplicated and the test file covers it.
  *
  * Returns true to suppress (in-app toast), false to show.
  */
 function shouldSuppress(focusBehavior, wins, chatId) {
   if (focusBehavior === "alwaysShow") return false;
-  const focused = wins.filter((w) => w.visibilityState === "visible" && w.focused);
-  if (focused.length === 0) return false;
-  if (focusBehavior === "suppress") return true;
+  const visible = wins.filter((w) => w.visibilityState === "visible");
+  if (visible.length === 0) return false;
+  if (focusBehavior === "suppress") {
+    return visible.some((w) => w.focused);
+  }
   // smartChat (default)
   if (!chatId) return false;
-  return focused.some((w) => activeChatByClientId.get(w.id) === chatId);
+  return visible.some((w) => activeChatByClientId.get(w.id) === chatId);
 }
 
 /* ───────────────────────── Web Push ─────────────────────────

@@ -10,12 +10,22 @@
  * server). BITBUCKET_CLI points at the bash script; defaults to the path
  * docker-compose mounts at runtime.
  */
+import { existsSync } from "fs";
+import { join } from "path";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { spawn } from "child_process";
 import { z } from "zod";
 
-const CLI_PATH = process.env.BITBUCKET_CLI ?? "/opt/skills/bitbucket/bitbucket-cli.sh";
+function resolveBitbucketCliPath(): string {
+  if (process.env.BITBUCKET_CLI) return process.env.BITBUCKET_CLI;
+  const dockerPath = "/opt/skills/bitbucket/bitbucket-cli.sh";
+  if (existsSync(dockerPath)) return dockerPath;
+  const localPath = join(process.cwd(), "skills/bitbucket/bitbucket-cli.sh");
+  if (existsSync(localPath)) return localPath;
+  return dockerPath;
+}
+const CLI_PATH = resolveBitbucketCliPath();
 
 interface ToolResult {
   content: Array<{ type: "text"; text: string }>;

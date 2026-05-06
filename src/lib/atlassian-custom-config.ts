@@ -36,7 +36,16 @@ const LEGACY_JIRA_FILE = join(homedir(), ".claude", "custom-jira", "credentials.
 const LEGACY_BITBUCKET_FILE = join(homedir(), ".claude", "custom-bitbucket", "credentials.json");
 
 const BITBUCKET_MCP_SCRIPT = process.env.BITBUCKET_MCP_SCRIPT ?? "/app/bitbucket-mcp.js";
-const BITBUCKET_CLI_PATH = process.env.BITBUCKET_CLI ?? "/opt/skills/bitbucket/bitbucket-cli.sh";
+
+function resolveBitbucketCliPath(): string {
+  if (process.env.BITBUCKET_CLI) return process.env.BITBUCKET_CLI;
+  const dockerPath = "/opt/skills/bitbucket/bitbucket-cli.sh";
+  if (existsSync(dockerPath)) return dockerPath;
+  const localPath = join(process.cwd(), "skills/bitbucket/bitbucket-cli.sh");
+  if (existsSync(localPath)) return localPath;
+  return dockerPath;
+}
+const BITBUCKET_CLI_PATH = resolveBitbucketCliPath();
 
 export interface JiraHalf {
   /** Bare host without scheme, e.g. "mycompany.atlassian.net". */

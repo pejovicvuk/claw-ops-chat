@@ -10,6 +10,13 @@ export class FileApiError extends Error {
     public status: number,
     message: string,
     public code?: string,
+    /**
+     * The full JSON body returned by the server, when one was parseable.
+     * Lets callers introspect richer error payloads (e.g. the 409 conflict
+     * response from `/api/files/write` carries `currentMtimeMs` and
+     * `currentContent` for the editor's stale-write banner).
+     */
+    public body?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "FileApiError";
@@ -23,13 +30,15 @@ export class FileApiError extends Error {
  */
 async function assertOk(res: Response, fallback: string): Promise<void> {
   if (res.ok) return;
-  let body: { error?: string; code?: string } = {};
+  let body: Record<string, unknown> = {};
   try {
     body = await res.json();
   } catch {
     /* non-JSON error body — keep going with the fallback message */
   }
-  throw new FileApiError(res.status, body.error || `${fallback} (${res.status})`, body.code);
+  const error = typeof body.error === "string" ? body.error : null;
+  const code = typeof body.code === "string" ? body.code : undefined;
+  throw new FileApiError(res.status, error || `${fallback} (${res.status})`, code, body);
 }
 
 /* ── Sessions ── */
@@ -94,20 +103,60 @@ export async function searchWorkspace(
   return res.json();
 }
 
-export async function readFile(path: string): Promise<string> {
-  const res = await authFetch(`${BASE}/api/files/read?path=${encodeURIComponent(path)}`);
-  await assertOk(res, "Failed to read file");
-  const data = (await res.json()) as { content: string };
-  return data.content;
+export interface ReadFileResult {
+  content: string;
+  size: number;
+  /** ms epoch — pass back as `expectedMtimeMs` on the next save to enable conflict detection. */
+  mtimeMs: number;
+  /**
+   * Canonical (realpath-resolved) path of the file. Differs from the
+   * caller-supplied `path` when the request traversed a symlink.
+   * Consumers comparing path identity (e.g. file-change-bus subscribers)
+   * should key off this value so they match the server's own canonical
+   * identity.
+   */
+  path: string;
 }
 
-export async function writeFile(path: string, content: string): Promise<void> {
+export async function readFile(path: string): Promise<ReadFileResult> {
+  const res = await authFetch(`${BASE}/api/files/read?path=${encodeURIComponent(path)}`);
+  await assertOk(res, "Failed to read file");
+  return (await res.json()) as ReadFileResult;
+}
+
+export interface WriteFileResult {
+  /** ms epoch of the file after the write — store this for the next save. */
+  mtimeMs: number;
+}
+
+export interface WriteFileOptions {
+  /**
+   * The mtime returned by the most recent `readFile` call. When set, the
+   * server returns 409 with `code: "stale_mtime"` if the file changed on
+   * disk since you read it. Omit for unconditional overwrite (legacy
+   * behavior — use only for "create new file" flows where conflict
+   * detection is not meaningful).
+   */
+  expectedMtimeMs?: number;
+}
+
+export async function writeFile(
+  path: string,
+  content: string,
+  options: WriteFileOptions = {},
+): Promise<WriteFileResult> {
+  const payload: { path: string; content: string; expectedMtimeMs?: number } = { path, content };
+  if (typeof options.expectedMtimeMs === "number") {
+    payload.expectedMtimeMs = options.expectedMtimeMs;
+  }
   const res = await authFetch(`${BASE}/api/files/write`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ path, content }),
+    body: JSON.stringify(payload),
   });
   await assertOk(res, "Failed to write file");
+  const data = (await res.json()) as Partial<WriteFileResult>;
+  return { mtimeMs: typeof data.mtimeMs === "number" ? data.mtimeMs : 0 };
 }
 
 /**

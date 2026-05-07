@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getAccessToken } from "@/lib/apiClient";
 import { authFetch } from "@/lib/auth";
 import { shouldShowStoppedPill } from "@/lib/chat-result-dedupe";
+import { emitFileChange } from "@/lib/file-change-bus";
 import type { ChatMessage, ClaudeStatus, ActiveToolInfo } from "@/lib/types";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -323,6 +324,24 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
             },
           ];
         });
+        return;
+      }
+
+      if (type === "file_changed") {
+        // Server announces a Claude-driven Write/Edit/MultiEdit landed
+        // on disk. Fan out via the file-change bus so any open editor
+        // / file-stat consumer for that path can refresh. Path arrives
+        // as the realpath canonicalized via safePath() server-side, so
+        // subscribers using the same realpath identity will match.
+        const path = typeof evt.path === "string" ? evt.path : "";
+        if (path) {
+          emitFileChange({
+            path,
+            mtimeMs: typeof evt.mtimeMs === "number" ? evt.mtimeMs : null,
+            source: typeof evt.source === "string" ? evt.source : "unknown",
+            deleted: evt.deleted === true,
+          });
+        }
         return;
       }
 

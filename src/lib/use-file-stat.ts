@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { authFetch } from "@/lib/auth";
+import { subscribeFileChange } from "@/lib/file-change-bus";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
@@ -45,6 +46,12 @@ async function fetchStat(path: string): Promise<FileStat | null> {
  * Hook: lazy-fetch { size, mtime, mime } for a local file path.
  * Debounced 100 ms so cards that mount/unmount during fast scroll
  * don't fire the stat call.
+ *
+ * Subscribes to the file-change bus while mounted: when the server
+ * announces a `file_changed` for this path (Claude wrote / edited /
+ * multi-edited it), the cached stat is dropped and a fresh fetch is
+ * triggered so cards / pills reflect the new size + mtime without a
+ * page reload.
  */
 export function useFileStat(path: string): { stat: FileStat | null; loading: boolean } {
   const [state, setState] = useState<{ stat: FileStat | null; loading: boolean }>({
@@ -66,6 +73,18 @@ export function useFileStat(path: string): { stat: FileStat | null; loading: boo
       cancelled = true;
       clearTimeout(timer);
     };
+  }, [path]);
+
+  useEffect(() => {
+    const unsub = subscribeFileChange(path, () => {
+      memoryCache.delete(path);
+      inFlight.delete(path);
+      setState({ stat: null, loading: true });
+      fetchStat(path).then((data) => {
+        setState({ stat: data, loading: false });
+      });
+    });
+    return unsub;
   }, [path]);
 
   return state;

@@ -34,7 +34,7 @@ async function getHandler(request: Request): Promise<Response> {
     }
 
     const content = await readFile(filePath, "utf-8");
-    return Response.json({ content, size: s.size });
+    return Response.json({ content, size: s.size, mtimeMs: s.mtimeMs, path: filePath });
   } catch (err) {
     return Response.json(
       { error: err instanceof Error ? err.message : "Failed to read file" },

@@ -435,7 +435,7 @@ class SessionManager {
   // Reset on every SDK event so long tool executions aren't cut off while
   // actively streaming. 0 disables the timeout entirely.
   // Override via CLAUDE_TURN_TIMEOUT_MS env variable.
-  private readonly turnInactivityMs = parseInt(process.env.CLAUDE_TURN_TIMEOUT_MS ?? "120000", 10);
+  private readonly turnInactivityMs = parseInt(process.env.CLAUDE_TURN_TIMEOUT_MS ?? "1800000", 10);
 
   getOrCreateSession(sessionId: string): ChatSession {
     let session = this.sessions.get(sessionId);

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiAlertTriangle, FiLoader, FiX } from "react-icons/fi";
 import { readFile, writeFile, FileApiError } from "@/lib/api";
+import { subscribeFileChange } from "@/lib/file-change-bus";
 import { isEditableKind, pickRenderer, type PreviewKind } from "@/lib/file-preview/pick-renderer";
 import { useDownload } from "@/lib/use-download";
 import { useGitDiff } from "@/lib/use-git-diff";
@@ -14,11 +15,23 @@ import type { DiffAgainst } from "@/lib/git/types";
 import type { FileEntry } from "@/lib/types";
 import { BinaryPlaceholder } from "./binary-placeholder";
 import { CodeMirror } from "./code-mirror";
+import { ConflictBanner } from "./conflict-banner";
 import { DiffView } from "./diff-view";
 import { DownloadProgress } from "./download-progress";
 import { EditorHeader, type EditorMode } from "./header";
 import { getPanelLayout, setPanelLayout } from "./layout-store";
 import { ReadablePreview } from "./readable-preview";
+
+/**
+ * State carried while the editor is showing the stale-write banner. The
+ * disk version is captured at conflict-detection time so the user can
+ * pick "Reload" without a follow-up fetch. `currentContent: null` means
+ * the file was deleted on disk; "Reload" in that case clears the buffer.
+ */
+interface ConflictState {
+  currentContent: string | null;
+  currentMtimeMs: number | null;
+}
 
 type Mode = EditorMode;
 
@@ -160,10 +173,27 @@ export function FileEditorPanel({
 
   const [original, setOriginal] = useState<string>("");
   const [content, setContent] = useState<string>("");
+  const [mtimeMs, setMtimeMs] = useState<number | null>(null);
+  /**
+   * Server-canonicalized realpath returned by `/api/files/read`. Used
+   * as the file-change-bus subscription key (server emits realpath
+   * too) and as the breadcrumb identity in the header so symlink-
+   * traversed opens display the underlying file. Falls back to the
+   * caller-supplied `file.path` until the first read completes.
+   */
+  const [realPath, setRealPath] = useState<string | null>(null);
   const [loading, setLoading] = useState(editable);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [conflict, setConflict] = useState<ConflictState | null>(null);
   const dirty = editable && content !== original;
+  // Captured by the file-change subscription so we don't need to
+  // re-subscribe on every keystroke; the latest dirty value is read
+  // inside the handler at fire time.
+  const dirtyRef = useRef(dirty);
+  useEffect(() => {
+    dirtyRef.current = dirty;
+  }, [dirty]);
 
   useEffect(() => {
     if (!editable) {
@@ -173,11 +203,14 @@ export function FileEditorPanel({
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setConflict(null);
     readFile(file.path)
-      .then((c) => {
+      .then((res) => {
         if (cancelled) return;
-        setOriginal(c);
-        setContent(c);
+        setOriginal(res.content);
+        setContent(res.content);
+        setMtimeMs(res.mtimeMs);
+        setRealPath(res.path);
         setLoading(false);
       })
       .catch((err) => {
@@ -190,21 +223,138 @@ export function FileEditorPanel({
     };
   }, [file.path, editable]);
 
+  // Subscribe to server-pushed `file_changed` events for this path.
+  // Sources today: Claude's Write/Edit/MultiEdit. When the user has no
+  // unsaved local edits we silently re-fetch and toast; with edits we
+  // surface the conflict banner pre-emptively (no need to wait for
+  // their next save to discover the stale state).
+  //
+  // Subscribe by realpath when known so symlink-traversed opens still
+  // match the server's canonical key (server emits realpath via
+  // safePath()). Falls back to the typed path on the first render
+  // before the initial read resolves.
+  const subscriptionPath = realPath ?? file.path;
+  useEffect(() => {
+    if (!editable) return;
+    let cancelled = false;
+    const unsub = subscribeFileChange(subscriptionPath, (event) => {
+      if (cancelled) return;
+      if (event.deleted) {
+        setConflict({ currentContent: null, currentMtimeMs: null });
+        return;
+      }
+      if (dirtyRef.current) {
+        // Pull the on-disk version so the banner's Reload button can
+        // apply it without a follow-up fetch.
+        readFile(file.path)
+          .then((res) => {
+            if (cancelled) return;
+            setConflict({ currentContent: res.content, currentMtimeMs: res.mtimeMs });
+          })
+          .catch(() => {
+            if (cancelled) return;
+            setConflict({ currentContent: null, currentMtimeMs: null });
+          });
+        return;
+      }
+      // No unsaved edits — auto-reload the buffer.
+      readFile(file.path)
+        .then((res) => {
+          if (cancelled) return;
+          setOriginal(res.content);
+          setContent(res.content);
+          setMtimeMs(res.mtimeMs);
+          setRealPath(res.path);
+          toast.success("Updated by Claude");
+        })
+        .catch(() => {
+          /* swallow — user's next interaction will surface the issue */
+        });
+    });
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, [subscriptionPath, file.path, editable, toast]);
+
   const handleSave = useCallback(async () => {
     if (!editable || !dirty || saving) return;
     setSaving(true);
     setError(null);
     try {
-      await writeFile(file.path, content);
+      const res = await writeFile(
+        file.path,
+        content,
+        mtimeMs !== null ? { expectedMtimeMs: mtimeMs } : {},
+      );
       setOriginal(content);
+      setMtimeMs(res.mtimeMs);
+      setConflict(null);
       // Invalidate any cached diff so re-entering Diff mode re-fetches.
       setDiffRefreshKey((n) => n + 1);
     } catch (err) {
-      setError(mapError(err));
+      if (err instanceof FileApiError && err.code === "stale_mtime") {
+        const body = (err.body ?? {}) as {
+          currentContent?: string | null;
+          currentMtimeMs?: number | null;
+        };
+        setConflict({
+          currentContent: typeof body.currentContent === "string" ? body.currentContent : null,
+          currentMtimeMs: typeof body.currentMtimeMs === "number" ? body.currentMtimeMs : null,
+        });
+      } else {
+        setError(mapError(err));
+      }
     } finally {
       setSaving(false);
     }
-  }, [editable, dirty, saving, file.path, content]);
+  }, [editable, dirty, saving, file.path, content, mtimeMs]);
+
+  const handleReloadConflict = useCallback(() => {
+    if (!conflict) return;
+    const next = conflict.currentContent ?? "";
+    setOriginal(next);
+    setContent(next);
+    setMtimeMs(conflict.currentMtimeMs);
+    setConflict(null);
+    setError(null);
+  }, [conflict]);
+
+  const handleOverwriteConflict = useCallback(async () => {
+    if (!conflict || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await writeFile(
+        file.path,
+        content,
+        // Pass the freshly-observed mtime so the second write succeeds
+        // even with the optimistic-concurrency check still enabled.
+        // currentMtimeMs is null only when the file was deleted under
+        // us — in that case skip the check to recreate the file.
+        conflict.currentMtimeMs !== null ? { expectedMtimeMs: conflict.currentMtimeMs } : {},
+      );
+      setOriginal(content);
+      setMtimeMs(res.mtimeMs);
+      setConflict(null);
+      setDiffRefreshKey((n) => n + 1);
+    } catch (err) {
+      if (err instanceof FileApiError && err.code === "stale_mtime") {
+        const body = (err.body ?? {}) as {
+          currentContent?: string | null;
+          currentMtimeMs?: number | null;
+        };
+        setConflict({
+          currentContent: typeof body.currentContent === "string" ? body.currentContent : null,
+          currentMtimeMs: typeof body.currentMtimeMs === "number" ? body.currentMtimeMs : null,
+        });
+      } else {
+        setError(mapError(err));
+      }
+    } finally {
+      setSaving(false);
+    }
+  }, [conflict, saving, file.path, content]);
 
   // Scroll-position preservation: when the user toggles between view and
   // edit, restore the scrollTop of the inner container so they don't lose
@@ -476,7 +626,7 @@ export function FileEditorPanel({
       } ${closing ? "animate-panel-out" : "animate-panel-in"}`}
     >
       <EditorHeader
-        path={file.path}
+        path={realPath ?? file.path}
         dirty={dirty}
         saving={saving}
         maximized={isMaximized}
@@ -514,6 +664,15 @@ export function FileEditorPanel({
         onTouchEnd={onHeaderTouchEnd}
       />
 
+      {conflict && editable && (
+        <ConflictBanner
+          dirty={dirty}
+          busy={saving}
+          onReload={handleReloadConflict}
+          onOverwrite={handleOverwriteConflict}
+        />
+      )}
+
       <div ref={contentScrollRef} className="min-h-0 flex-1 overflow-y-auto">
         {loading && (
           <div className="flex h-full items-center justify-center">
@@ -530,9 +689,11 @@ export function FileEditorPanel({
                 setError(null);
                 setLoading(true);
                 readFile(file.path)
-                  .then((c) => {
-                    setOriginal(c);
-                    setContent(c);
+                  .then((res) => {
+                    setOriginal(res.content);
+                    setContent(res.content);
+                    setMtimeMs(res.mtimeMs);
+                    setRealPath(res.path);
                     setLoading(false);
                   })
                   .catch((err) => {

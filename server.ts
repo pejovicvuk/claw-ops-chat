@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createServer, IncomingMessage } from "http";
 import { parse } from "url";
 import { readFileSync } from "fs";
-import { access } from "fs/promises";
+import { access, stat } from "fs/promises";
 import { spawn, type ChildProcess } from "child_process";
 import { dirname, join, sep } from "path";
 import { homedir } from "os";
@@ -44,6 +44,7 @@ import {
 } from "./src/lib/context-usage";
 import { applyRateLimitEvent as applyAccountRateLimitEvent } from "./src/lib/account-rate-limits";
 import { startRateLimitProbe } from "./src/lib/rate-limit-probe";
+import { safePath, SafePathError } from "./src/lib/safe-path";
 import { decideCronTool, type ToolPolicy } from "./src/lib/reports/tool-policy";
 import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
@@ -353,6 +354,14 @@ interface ChatSession {
    * twice. Capped at 50 entries — FIFO eviction in enqueueUserMessage.
    */
   recentClientMessageIds: Set<string>;
+  /**
+   * Map<tool_use_id, { name, input }> populated when a tool call's input
+   * finishes streaming and consumed when its tool_result arrives. Lets
+   * the tool_result handler look up the (file_path) input for Write /
+   * Edit / MultiEdit so it can stat the post-write file and fire a
+   * `file_changed` event for the editor to live-reload.
+   */
+  pendingToolInputs: Map<string, { name: string; input: Record<string, unknown> }>;
 }
 
 /**
@@ -464,6 +473,7 @@ class SessionManager {
         actorEmail: "anonymous",
         displayPreview: "",
         recentClientMessageIds: new Set(),
+        pendingToolInputs: new Map(),
       };
       this.sessions.set(sessionId, session);
       setSessionStatus(sessionId, "idle");
@@ -549,6 +559,7 @@ class SessionManager {
       actorEmail: "anonymous",
       displayPreview: persisted.lastUserMessage ? persisted.lastUserMessage.slice(0, 80) : "",
       recentClientMessageIds: new Set(),
+      pendingToolInputs: new Map(),
     };
     this.sessions.set(session.id, session);
     setSessionStatus(session.id, "idle");
@@ -1726,6 +1737,13 @@ class SessionManager {
               } catch {
                 /* empty */
               }
+              // Remember (id → name + input) so the matching tool_result
+              // handler can broadcast `file_changed` for Write/Edit/MultiEdit
+              // without having to re-parse the assistant message.
+              session.pendingToolInputs.set(pendingToolUse.id, {
+                name: pendingToolUse.name,
+                input: parsedInput,
+              });
               this.broadcast(session, {
                 type: "tool_use_start",
                 id: pendingToolUse.id,
@@ -1790,6 +1808,27 @@ class SessionManager {
                   content: resultContent,
                   isError: item.is_error || false,
                 });
+
+                // File-state propagation: when Claude completes a
+                // Write/Edit/MultiEdit, fire `file_changed` so any open
+                // editor for that path can live-reload (or surface a
+                // conflict banner if the user has unsaved edits). The
+                // tool_use_id keys back to the input we cached at
+                // tool_use_start because the SDK's tool_result message
+                // carries no input data.
+                const toolUseId = typeof item.tool_use_id === "string" ? item.tool_use_id : null;
+                if (toolUseId) {
+                  const pending = session.pendingToolInputs.get(toolUseId);
+                  if (pending) {
+                    session.pendingToolInputs.delete(toolUseId);
+                    void this.handleFileMutationToolResult(
+                      session,
+                      pending,
+                      item.is_error === true,
+                      turnId,
+                    );
+                  }
+                }
               }
             }
           }
@@ -2342,6 +2381,76 @@ class SessionManager {
       const data = JSON.stringify(event);
       ws.send(data);
     }
+  }
+
+  /**
+   * Broadcast a `file_changed` event when Claude completes a Write,
+   * Edit, or MultiEdit so an open editor can live-reload (or surface
+   * a conflict banner if the user has unsaved local edits).
+   *
+   * Path is canonicalized via safePath() so the editor — which uses
+   * the same realpath identity from `/api/files/read` — sees a
+   * matching subscription key. Stat failures (e.g. Claude wrote then
+   * deleted in the same turn) emit `{ deleted: true, mtimeMs: null }`
+   * rather than dropping the event.
+   *
+   * Tool errors (`isError`) skip the broadcast — a failed Write didn't
+   * change anything on disk so there's nothing to reload.
+   */
+  private async handleFileMutationToolResult(
+    session: ChatSession,
+    pending: { name: string; input: Record<string, unknown> },
+    isError: boolean,
+    turnId: string,
+  ): Promise<void> {
+    if (isError) return;
+    const FILE_MUTATING_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+    if (!FILE_MUTATING_TOOLS.has(pending.name)) return;
+    const rawPath = pending.input.file_path;
+    if (typeof rawPath !== "string" || rawPath.length === 0) return;
+
+    let canonical: string;
+    try {
+      canonical = await safePath(rawPath);
+    } catch (err) {
+      if (err instanceof SafePathError) return;
+      // Path that doesn't exist (e.g. Write to a brand new file's
+      // parent dir that doesn't exist either) shouldn't reach here
+      // because the SDK would have errored, but stay defensive.
+      return;
+    }
+
+    let mtimeMs: number | null = null;
+    let deleted = false;
+    try {
+      const s = await stat(canonical);
+      mtimeMs = s.mtimeMs;
+    } catch {
+      deleted = true;
+    }
+
+    this.broadcast(session, {
+      type: "file_changed",
+      path: canonical,
+      mtimeMs,
+      source: "claude",
+      tool: pending.name,
+      deleted,
+    });
+    getAuditWriter()
+      .session({
+        type: "file_changed",
+        severity: "info",
+        actor: session.actorEmail,
+        subject: `File ${deleted ? "deleted" : "changed"} by ${pending.name}`,
+        durationMs: null,
+        sessionId: session.id,
+        claudeSessionId: session.claudeSessionId,
+        turnId,
+        toolName: pending.name,
+        details: { path: canonical, deleted },
+      })
+      .catch(() => {});
   }
 
   /**

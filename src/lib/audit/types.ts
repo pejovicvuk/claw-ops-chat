@@ -78,6 +78,7 @@ export type SessionAuditEventType =
   | "user_message"
   | "tool_use_start"
   | "tool_use_complete"
+  | "file_changed"
   | "permission_requested"
   | "permission_granted"
   | "permission_denied"

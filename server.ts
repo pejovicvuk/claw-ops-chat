@@ -36,6 +36,7 @@ import {
   type PersistedSession,
 } from "./src/lib/session-persistence";
 import { getCustomAppendForSdk } from "./src/lib/agent-config";
+import { getDisallowedHostedGoogleMcpTools } from "./src/lib/hosted-mcp-blocklist";
 import {
   snapshotFromAssistantUsage,
   extractContextWindow,
@@ -419,15 +420,13 @@ class SessionManager {
   // first successful SDK result after credentials are restored.
   private claudeAuthFailed = false;
   private claudeAuthFailedReason: "token_expired" | "subscription_expired" = "token_expired";
-  private claudeAuthFailedHint = "Run `claude auth login` in the settings terminal, or click below.";
+  private claudeAuthFailedHint =
+    "Run `claude auth login` in the settings terminal, or click below.";
   // Maximum ms of silence from the SDK before the turn is force-aborted.
   // Reset on every SDK event so long tool executions aren't cut off while
   // actively streaming. 0 disables the timeout entirely.
   // Override via CLAUDE_TURN_TIMEOUT_MS env variable.
-  private readonly turnInactivityMs = parseInt(
-    process.env.CLAUDE_TURN_TIMEOUT_MS ?? "120000",
-    10,
-  );
+  private readonly turnInactivityMs = parseInt(process.env.CLAUDE_TURN_TIMEOUT_MS ?? "120000", 10);
 
   getOrCreateSession(sessionId: string): ChatSession {
     let session = this.sessions.get(sessionId);
@@ -1488,6 +1487,16 @@ class SessionManager {
         const current = loadMcpServers();
         return current ? { mcpServers: current } : {};
       })(),
+      // Hide Anthropic's hosted Gmail / Drive / Calendar connectors
+      // (`claude.ai <Service>`) from the model. The SDK auto-injects
+      // them based on subscription state, and they appear alongside
+      // our connected `google-workspace-custom` server flagged "Needs
+      // authentication" — which causes the model to bail out with
+      // "Gmail requires you to authenticate first" instead of calling
+      // the workspace-mcp tools that *are* connected. Removing them
+      // from disallowedTools eliminates the ambiguity. See
+      // src/lib/hosted-mcp-blocklist.ts for the rationale.
+      disallowedTools: getDisallowedHostedGoogleMcpTools(),
       // System prompt append. Combines the user's "Agent behavior" settings
       // (custom prompt + concatenated rules from $CLAUDE_CWD/.claude/) with
       // the mode-specific hint that tells Claude whether it's in plan or
@@ -2159,7 +2168,9 @@ class SessionManager {
           // new or switched-to sessions — are blocked until credentials are
           // restored. This is the primary fix for "spawning many broken chats".
           this.claudeAuthFailed = true;
-          this.claudeAuthFailedReason = subscriptionError ? "subscription_expired" : "token_expired";
+          this.claudeAuthFailedReason = subscriptionError
+            ? "subscription_expired"
+            : "token_expired";
           // Mirror to the module singleton so /api/claude-auth/status can
           // report the live failure state to the Settings page.
           setRuntimeAuthFailed(true, this.claudeAuthFailedReason);

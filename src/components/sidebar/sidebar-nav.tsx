@@ -1,26 +1,27 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { FiBarChart2, FiCpu, FiFileText, FiFolder, FiPlus } from "react-icons/fi";
+import { FiBarChart2, FiCpu, FiFolder, FiMessageSquare, FiPlus } from "react-icons/fi";
 
 /**
- * Section keys used by the sidebar nav. "chats" is the implicit default
- * when none of the named sections is active — clicking the chat history
- * rows below the nav bar takes you there too, so it never has its own
- * nav button.
+ * Section keys used by the sidebar nav.
+ *
+ * `null` (no key) is the implicit "in a conversation" state — when the
+ * user is reading or sending a chat (no `?view=`), no nav row is
+ * highlighted. The five explicit values map 1:1 to a `?view=` param.
  */
-export type NavSection = "chats" | "projects" | "reports" | "agents" | "documents";
+export type NavSection = "projects" | "reports" | "agents" | "chats";
 
 interface SidebarNavProps {
-  /** The section currently rendered in the main pane. */
-  active: NavSection;
+  /** The section currently rendered in the main pane, or `null` while
+   *  the user is reading a conversation (no nav row highlighted). */
+  active: NavSection | null;
   /** Fires when the "+ New" row is clicked — same affordance as the old
    *  "+" button: starts a fresh chat and routes back to the chat view. */
   onNew: () => void;
-  /** Fires for any of the section rows (Projects / Reports / Agents /
-   *  Documents). The parent owns the URL change so it can also close the
-   *  mobile drawer when appropriate. */
-  onNavigate: (section: Exclude<NavSection, "chats">) => void;
+  /** Fires for any of the section rows. The parent owns the URL change
+   *  so it can also close the mobile drawer when appropriate. */
+  onNavigate: (section: NavSection) => void;
   /** Optional unread count rendered on the Reports row. */
   unreadReports?: number;
 }
@@ -104,10 +105,10 @@ export function SidebarNav({
         onClick={() => onNavigate("agents")}
       />
       <NavRow
-        icon={<FiFileText size={14} />}
-        label="Documents"
-        active={active === "documents"}
-        onClick={() => onNavigate("documents")}
+        icon={<FiMessageSquare size={14} />}
+        label="Chats"
+        active={active === "chats"}
+        onClick={() => onNavigate("chats")}
       />
     </nav>
   );

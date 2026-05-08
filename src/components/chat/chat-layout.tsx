@@ -18,7 +18,7 @@ import { Sidebar } from "@/components/sidebar/sidebar";
 import { ReportsMainPane } from "@/components/reports/reports-main-pane";
 import { ProjectsMainPane } from "@/components/projects/projects-main-pane";
 import { AgentsMainPane } from "@/components/agents/agents-main-pane";
-import { DocumentsMainPane } from "@/components/documents/documents-main-pane";
+import { ChatsMainPane } from "@/components/chats/chats-main-pane";
 
 // Lazy: CodeMirror core (~180kb gz) is pulled into this chunk. Only loads
 // when the user opens a file. ssr:false because the editor is pointer-driven.
@@ -304,8 +304,18 @@ export function ChatLayout({
             <ReportsMainPane onOpenSessions={() => setSidebarOpen(true)} />
           ) : params.get("view") === "agents" ? (
             <AgentsMainPane onOpenSessions={() => setSidebarOpen(true)} />
-          ) : params.get("view") === "documents" ? (
-            <DocumentsMainPane onOpenSessions={() => setSidebarOpen(true)} />
+          ) : params.get("view") === "chats" ? (
+            <ChatsMainPane
+              sessions={sessions}
+              selectedSessionId={selectedSessionId}
+              sessionsLoading={sessionsLoading}
+              onSelectSession={onSelectSession}
+              onNewChat={onNewChat}
+              onRefreshSessions={onRefreshSessions}
+              runningSessionIds={runningSessionIds}
+              onDeleteSession={onDeleteSession}
+              onOpenSessions={() => setSidebarOpen(true)}
+            />
           ) : (
             <ChatView
               sessionId={sessionId}
@@ -444,8 +454,17 @@ export function ChatLayout({
             <ReportsMainPane />
           ) : params.get("view") === "agents" ? (
             <AgentsMainPane />
-          ) : params.get("view") === "documents" ? (
-            <DocumentsMainPane />
+          ) : params.get("view") === "chats" ? (
+            <ChatsMainPane
+              sessions={sessions}
+              selectedSessionId={selectedSessionId}
+              sessionsLoading={sessionsLoading}
+              onSelectSession={onSelectSession}
+              onNewChat={onNewChat}
+              onRefreshSessions={onRefreshSessions}
+              runningSessionIds={runningSessionIds}
+              onDeleteSession={onDeleteSession}
+            />
           ) : (
             <ChatView
               sessionId={sessionId}

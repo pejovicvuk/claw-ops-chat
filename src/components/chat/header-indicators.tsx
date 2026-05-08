@@ -11,7 +11,6 @@ import {
 } from "@/lib/rate-limits-window";
 import { formatResetsIn, toMillis } from "@/lib/format-relative-time";
 import type { RateLimitWindow } from "@/lib/account-rate-limits";
-import { ContextIndicator } from "./context-indicator";
 import { HudIndicator } from "./hud-indicator";
 import { HudPopup } from "./hud-popup";
 import { RateLimitIndicator } from "./rate-limit-indicator";
@@ -34,7 +33,7 @@ function weeklyKeyLabel(key: string | null): string {
   return "Combined";
 }
 
-type PopupKind = "status" | "context" | "five_hour" | "weekly" | "hud";
+type PopupKind = "status" | "five_hour" | "weekly" | "hud";
 
 interface HeaderIndicatorsProps {
   status: ClaudeStatus;
@@ -108,11 +107,6 @@ export function HeaderIndicators({
         isOpen={openPopup === "status"}
         onClick={() => toggle("status")}
       />
-      <ContextIndicator
-        percentage={contextUsage?.percentage ?? null}
-        isOpen={openPopup === "context"}
-        onClick={() => toggle("context")}
-      />
       <RateLimitIndicator
         label="5-hour"
         window={fiveHour.window}
@@ -145,27 +139,6 @@ export function HeaderIndicators({
             >
               Reconnect
             </button>
-          )}
-        </div>
-      )}
-
-      {openPopup === "context" && (
-        <div className="animate-modal-in absolute right-0 top-full z-50 mt-1.5 min-w-[180px] rounded-xl border border-canvas-border bg-canvas-bg p-3 shadow-xl">
-          {contextUsage ? (
-            <>
-              <p className="text-[18px] font-semibold text-canvas-fg">{contextUsage.percentage}%</p>
-              <p className="mt-0.5 text-[11px] text-canvas-muted">
-                {formatTokens(contextUsage.used)} of {formatTokens(contextUsage.max)} tokens
-              </p>
-              <p className="mt-1 text-[10px] text-canvas-muted">Context window usage</p>
-            </>
-          ) : (
-            <>
-              <p className="text-[12px] font-medium text-canvas-fg">No usage yet</p>
-              <p className="mt-0.5 text-[11px] text-canvas-muted">
-                Send a message to see context usage.
-              </p>
-            </>
           )}
         </div>
       )}
@@ -279,10 +252,4 @@ function percentClass(pct: number, status: RateLimitWindow["status"]): string {
   if (status === "rejected" || pct >= 100) return "text-red-500";
   if (status === "allowed_warning" || pct >= 80) return "text-orange-500";
   return "text-canvas-fg";
-}
-
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
 }

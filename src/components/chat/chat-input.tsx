@@ -1,14 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FiArrowUp, FiPaperclip, FiSquare } from "react-icons/fi";
+import { useIsMobile } from "@/lib/use-is-mobile";
 import { useMentions } from "@/lib/use-mentions";
 import type { ClaudeStatus } from "@/lib/types";
+import type { ContextUsage } from "@/lib/use-claude-chat";
 import { preloadMarkdown } from "./message-bubble";
 import { AttachmentRow } from "./chat-input/attachment-row";
 import type { AttachmentPillData } from "./chat-input/attachment-pill";
 import { MentionPopover, type MentionPopoverHandle } from "./chat-input/mention-popover";
-import { VoiceRecorder } from "./chat-input/voice-recorder";
+import { ComposerToolbar } from "./composer/composer-toolbar";
+import { ContextUsageBadge } from "./composer/context-usage-badge";
+import type { ModeValue } from "./composer/composer-constants";
 
 interface ChatInputProps {
   status: ClaudeStatus;
@@ -25,6 +28,15 @@ interface ChatInputProps {
   onAddFiles: (files: File[]) => void | Promise<void>;
   onRemoveAttachment: (id: string) => void;
   onClearAttachments: () => void;
+
+  /* ── Lifted from the old top Mode/Effort bar / HUD popup ────────── */
+  permissionMode: string;
+  setPermissionMode: (next: ModeValue) => void;
+  effort: string | null;
+  setEffort: (next: string | null) => void;
+  model: string | null;
+  setModel: (next: string | null) => void;
+  contextUsage: ContextUsage | null;
 }
 
 /** Statuses where Claude is actively working and can be stopped. */
@@ -48,7 +60,15 @@ export function ChatInput({
   onAddFiles,
   onRemoveAttachment,
   onClearAttachments,
+  permissionMode,
+  setPermissionMode,
+  effort,
+  setEffort,
+  model,
+  setModel,
+  contextUsage,
 }: ChatInputProps) {
+  const isMobile = useIsMobile();
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
   const [mentionDismissed, setMentionDismissed] = useState<number | null>(null);
@@ -211,6 +231,8 @@ export function ChatInput({
     e.preventDefault();
   }, []);
 
+  const voiceDisabled = status === "disconnected" || status === "connecting";
+
   return (
     <div
       className="shrink-0 px-3 py-2"
@@ -222,102 +244,69 @@ export function ChatInput({
         }`}
       >
         <div
-          className={`glass-input flex flex-col rounded-[28px] transition-all duration-300 ease-out ${
+          className={`glass-input flex flex-col rounded-[24px] transition-all duration-300 ease-out ${
             hasContent
-              ? "-translate-y-1 px-3 py-2 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
-              : "px-2.5 py-1.5 focus-within:-translate-y-1 focus-within:px-3 focus-within:py-2 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
+              ? "-translate-y-1 px-3 py-2.5 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
+              : "px-3 py-2 focus-within:-translate-y-1 focus-within:py-2.5 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
           }`}
         >
           <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
-          <div className="flex items-end gap-1.5">
-            {/* Use a <label> wrapping the <input type="file"> so the browser
-                opens the native picker on click without any JavaScript. The
-                earlier `<button onClick={() => fileInput.click()}>` pattern
-                was flaky: whenever the composer was empty and unfocused,
-                the programmatic click got dropped by the browser (it fires
-                correctly only inside a "strict" user-activation context and
-                calling `focus()` around it kept consuming that activation).
-                A label's default behavior is the official cross-browser way
-                to open a file picker. */}
-            <label
-              aria-label="Attach files"
-              title="Attach files"
-              className="pointer-events-auto mb-0.5 flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-full text-canvas-muted transition-colors duration-150 hover:bg-canvas-surface-hover hover:text-canvas-fg"
-            >
-              <FiPaperclip size={15} />
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="sr-only"
-                tabIndex={-1}
-                aria-hidden="true"
-                onChange={handleFileInput}
-              />
-            </label>
-            <textarea
-              ref={textareaRef}
-              value={text}
-              onChange={(e) => {
-                setText(e.target.value);
-                setCaret(e.target.selectionStart);
-                setMentionDismissed(null);
-                handleInput();
-              }}
-              onSelect={syncCaret}
-              onClick={syncCaret}
-              onKeyUp={syncCaret}
-              onKeyDown={handleKeyDown}
-              onDragOver={preventDefault}
-              onDrop={preventDefault}
-              placeholder={
-                status === "idle"
-                  ? "Message Claude..."
-                  : status === "connecting"
-                    ? "Connecting..."
-                    : status === "disconnected"
-                      ? "Disconnected"
-                      : "Claude is working..."
-              }
-              disabled={status === "disconnected" || status === "connecting"}
-              rows={1}
-              className={`flex-1 resize-none bg-transparent px-2 py-1.5 text-[15px] leading-normal text-canvas-fg placeholder:text-canvas-muted/50 focus:outline-none disabled:opacity-50 ${
-                isRecording ? "hidden" : ""
-              }`}
-              style={{ fontSize: "16px" }}
-            />
-            <VoiceRecorder
-              onTranscribed={handleTranscribed}
-              onRecordingChange={setIsRecording}
-              disabled={status === "disconnected" || status === "connecting"}
-            />
-            {isActive ? (
-              <button
-                type="button"
-                onClick={onStop}
-                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500 transition-all duration-200 hover:bg-red-600 active:scale-90"
-                title="Stop generation"
-              >
-                <FiSquare size={12} className="text-white" fill="white" />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={handleSend}
-                disabled={!canSend}
-                className="mb-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all duration-200 disabled:opacity-20"
-                style={{
-                  backgroundColor: canSend ? "var(--accent)" : "var(--canvas-muted)",
-                  transform: canSend ? "scale(1)" : "scale(0.9)",
-                }}
-                title={hasPendingUpload ? "Waiting for uploads..." : "Send"}
-              >
-                <FiArrowUp size={16} className="text-white" strokeWidth={2.5} />
-              </button>
-            )}
-          </div>
+          <textarea
+            ref={textareaRef}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value);
+              setCaret(e.target.selectionStart);
+              setMentionDismissed(null);
+              handleInput();
+            }}
+            onSelect={syncCaret}
+            onClick={syncCaret}
+            onKeyUp={syncCaret}
+            onKeyDown={handleKeyDown}
+            onDragOver={preventDefault}
+            onDrop={preventDefault}
+            placeholder={
+              status === "idle"
+                ? "Message Claude..."
+                : status === "connecting"
+                  ? "Connecting..."
+                  : status === "disconnected"
+                    ? "Disconnected"
+                    : "Claude is working..."
+            }
+            disabled={status === "disconnected" || status === "connecting"}
+            rows={1}
+            className={`w-full resize-none bg-transparent px-1 py-1 text-[15px] leading-normal text-canvas-fg placeholder:text-canvas-muted/50 focus:outline-none disabled:opacity-50 ${
+              isRecording ? "hidden" : ""
+            }`}
+            style={{ fontSize: "16px" }}
+          />
+
+          <ComposerToolbar
+            fileInputRef={fileInputRef}
+            onFileInputChange={handleFileInput}
+            permissionMode={permissionMode}
+            setPermissionMode={setPermissionMode}
+            model={model}
+            setModel={setModel}
+            effort={effort}
+            setEffort={setEffort}
+            contextUsage={contextUsage}
+            voiceDisabled={voiceDisabled}
+            onTranscribed={handleTranscribed}
+            onRecordingChange={setIsRecording}
+            isActive={isActive}
+            canSend={canSend}
+            hasPendingUpload={hasPendingUpload}
+            onSend={handleSend}
+            onStop={onStop}
+            isMobile={isMobile}
+          />
         </div>
+
+        <ContextUsageBadge usage={contextUsage} />
       </div>
       <MentionPopover
         ref={popoverRef}

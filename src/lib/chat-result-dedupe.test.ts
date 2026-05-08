@@ -46,4 +46,31 @@ describe("shouldShowStoppedPill", () => {
     const accumulated = deltas.reduce((acc, d) => acc + d, "");
     expect(shouldShowStoppedPill(accumulated, accumulated)).toBe(false);
   });
+
+  it("ignores internal whitespace differences (the leak that motivated this fix)", () => {
+    // The SDK's `msg.result` may join multiple text content blocks with a
+    // newline that the raw `text_delta` stream didn't emit, or normalize
+    // paragraph breaks differently. As long as the non-whitespace tokens
+    // are identical in order, treat them as the same content and suppress
+    // the duplicate pill.
+    const streamed = "Here is the answer.\n\nLet me know if you want more.";
+    const resultWithExtraNewline = "Here is the answer.\n\n\nLet me know if you want more.\n";
+    expect(shouldShowStoppedPill(resultWithExtraNewline, streamed)).toBe(false);
+
+    const streamedTabs = "Line one.\tLine two.";
+    const resultSpaces = "Line one. Line two.";
+    expect(shouldShowStoppedPill(resultSpaces, streamedTabs)).toBe(false);
+
+    // Multi-block turn: SDK joins with "\n\n", stream concatenates raw.
+    const streamedRaw = "First block.Second block.";
+    const resultJoined = "First block.\n\nSecond block.";
+    // Tokens differ ("block.Second" vs "block." + "Second") so this is a
+    // genuine difference and the pill should still surface.
+    expect(shouldShowStoppedPill(resultJoined, streamedRaw)).toBe(true);
+  });
+
+  it("still surfaces an explicit interrupt that shares no tokens with the stream", () => {
+    const streamed = "I'll go ahead and refactor that for you.";
+    expect(shouldShowStoppedPill("Stopped by user", streamed)).toBe(true);
+  });
 });

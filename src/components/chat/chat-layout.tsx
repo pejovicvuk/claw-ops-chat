@@ -390,9 +390,17 @@ export function ChatLayout({
 
   /* ── DESKTOP ── */
 
-  const desktopGridCols = `${sidebarCollapsed ? 40 : 300}px minmax(0,1fr) ${
-    filesPanelOpen ? 300 : 40
-  }px`;
+  // ~1/5 of the viewport (20vw), clamped so the sidebar never collapses
+  // its content on smaller laptops or balloons on ultrawides:
+  //   ≤ 1500 px viewport → pinned at 300 px floor
+  //   1500 – 2100 px      → grows linearly with the screen (≈ 1/5)
+  //   ≥ 2100 px           → capped at 420 px
+  // Shared between the grid track and the inner div via this constant
+  // so they stay in sync when the value is tuned.
+  const SIDEBAR_EXPANDED_WIDTH = "clamp(300px, 20vw, 420px)";
+  const desktopGridCols = `${
+    sidebarCollapsed ? "40px" : SIDEBAR_EXPANDED_WIDTH
+  } minmax(0,1fr) ${filesPanelOpen ? 300 : 40}px`;
 
   return (
     <>
@@ -412,7 +420,7 @@ export function ChatLayout({
               <FiMessageSquare size={16} />
             </button>
           ) : (
-            <div className="flex h-full w-[300px] flex-col">
+            <div className="flex h-full flex-col" style={{ width: SIDEBAR_EXPANDED_WIDTH }}>
               <div className="flex h-12 shrink-0 items-center justify-between border-b border-canvas-border px-3">
                 <span className="text-[13px] font-semibold text-canvas-fg">Claw Chat</span>
                 <button

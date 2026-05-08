@@ -218,7 +218,7 @@ export function ChatInput({
     >
       <div
         className={`mx-auto ${
-          hasContent ? "md:max-w-4xl" : "md:max-w-3xl md:focus-within:max-w-4xl"
+          hasContent ? "md:max-w-7xl" : "md:max-w-6xl md:focus-within:max-w-7xl"
         }`}
       >
         <div

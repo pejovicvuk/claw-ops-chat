@@ -195,13 +195,13 @@ function renderBlockWithFileCards(children: ReactNode, tag: "p" | "li"): ReactEl
   if (!hasCard) {
     const transformed = transformTextChildren(children);
     if (tag === "p") {
-      return <p className="my-1 text-[15px] leading-relaxed text-canvas-fg">{transformed}</p>;
+      return <p className="my-1 text-[16px] leading-relaxed text-canvas-fg">{transformed}</p>;
     }
     return <li className="my-0.5">{transformed}</li>;
   }
 
   const body = (
-    <div className="my-1 space-y-2 text-[15px] leading-relaxed text-canvas-fg">
+    <div className="my-1 space-y-2 text-[16px] leading-relaxed text-canvas-fg">
       {segments.map((seg) => {
         if (seg.kind === "card") {
           return <FileCard key={seg.key} path={seg.path} />;
@@ -259,10 +259,10 @@ const chatComponents = {
     <strong className="font-bold text-canvas-fg">{children}</strong>
   ),
   ul: ({ children }: { children?: ReactNode }) => (
-    <ul className="my-1.5 ml-4 list-disc text-[15px] text-canvas-fg">{children}</ul>
+    <ul className="my-1.5 ml-4 list-disc text-[16px] text-canvas-fg">{children}</ul>
   ),
   ol: ({ children }: { children?: ReactNode }) => (
-    <ol className="my-1.5 ml-4 list-decimal text-[15px] text-canvas-fg">{children}</ol>
+    <ol className="my-1.5 ml-4 list-decimal text-[16px] text-canvas-fg">{children}</ol>
   ),
   a: ({ href, children }: { href?: string; children?: ReactNode }) => {
     if (!href) return <>{children}</>;

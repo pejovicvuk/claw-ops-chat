@@ -373,7 +373,7 @@ export function ChatLayout({
 
   /* ── DESKTOP ── */
 
-  const desktopGridCols = `${sidebarCollapsed ? 40 : 260}px minmax(0,1fr) ${
+  const desktopGridCols = `${sidebarCollapsed ? 40 : 300}px minmax(0,1fr) ${
     filesPanelOpen ? 300 : 40
   }px`;
 
@@ -395,7 +395,7 @@ export function ChatLayout({
               <FiMessageSquare size={16} />
             </button>
           ) : (
-            <div className="flex h-full w-[260px] flex-col">
+            <div className="flex h-full w-[300px] flex-col">
               <div className="flex h-12 shrink-0 items-center justify-between border-b border-canvas-border px-3">
                 <span className="text-[13px] font-semibold text-canvas-fg">Claw Chat</span>
                 <button

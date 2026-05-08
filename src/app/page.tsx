@@ -88,6 +88,24 @@ export default function ChatPage() {
     };
   }, [loadSessions]);
 
+  /**
+   * Clears every search-param the various section views (?view=projects,
+   * ?view=reports, ?view=agents, ?view=chats, plus their sidebar /
+   * project / report / newX cousins) keep around so a chat-bound
+   * navigation always lands on the conversation pane. Without this the
+   * URL retains a stale `view=projects` after picking a chat from the
+   * History list and the main-pane router routes to the Projects
+   * dashboard — which is what the production bug screenshot shows.
+   */
+  const clearSectionParams = useCallback(() => {
+    setParam("view", null);
+    setParam("sidebar", null);
+    setParam("project", null);
+    setParam("report", null);
+    setParam("newProject", null);
+    setParam("newReport", null);
+  }, [setParam]);
+
   const handleNewChat = useCallback(() => {
     // Generate a UUID up front so the new session's ID matches the
     // server's UUID_RE (server.ts:226-229). Previously we set null,
@@ -95,14 +113,16 @@ export default function ChatPage() {
     // ID the server couldn't recognise as resumable and that triggered
     // a WS reconnect on the first "real" response, making the first
     // message feel like it was dropped.
+    clearSectionParams();
     setParam("chat", crypto.randomUUID());
-  }, [setParam]);
+  }, [clearSectionParams, setParam]);
 
   const handleSelectSession = useCallback(
     (sessionId: string) => {
+      clearSectionParams();
       setParam("chat", sessionId);
     },
-    [setParam],
+    [clearSectionParams, setParam],
   );
 
   const handleSessionCreated = useCallback(

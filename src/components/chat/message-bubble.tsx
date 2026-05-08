@@ -127,7 +127,7 @@ export const MessageBubble = memo(function MessageBubble({
           style={{ backgroundColor: "var(--user-bubble)" }}
         >
           <p
-            className="whitespace-pre-wrap text-[15px] leading-relaxed"
+            className="whitespace-pre-wrap text-[16px] leading-relaxed"
             style={{ color: "var(--user-bubble-fg)" }}
           >
             {message.content}

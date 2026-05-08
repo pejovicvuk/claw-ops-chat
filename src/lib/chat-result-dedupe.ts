@@ -16,17 +16,32 @@
  * different from the just-streamed content (e.g. an explicit
  * "Stopped by user" interrupt fired by the server, or a session-end
  * marker the SDK emits when no streamed turn preceded it). Equality is
- * checked after trimming so trailing-newline diffs don't defeat the dedup.
+ * checked after collapsing all runs of whitespace to a single space, so
+ * cosmetic differences between the SDK's joined `result` and the raw
+ * concatenation of `text_delta` chunks (e.g. an extra newline between
+ * content blocks, or paragraph breaks the SDK normalizes) don't defeat
+ * the dedup. Two strings are considered "the same content" iff their
+ * non-whitespace tokens are identical in order — which is exactly the
+ * property a user perceives when they say "the pill is showing the same
+ * message twice".
  */
+function normalizeForCompare(s: string): string {
+  // Collapse every run of ASCII / Unicode whitespace (spaces, tabs,
+  // newlines, NBSP, etc.) to a single space, then trim. Markdown structure
+  // is whitespace-sensitive at render time but not at identity time —
+  // "Hello\n\nworld" and "Hello world" carry the same words.
+  return s.replace(/\s+/g, " ").trim();
+}
+
 export function shouldShowStoppedPill(
   resultText: string | null | undefined,
   streamedAssistantContent: string | null | undefined,
 ): boolean {
   if (!resultText) return false;
-  const result = resultText.trim();
+  const result = normalizeForCompare(resultText);
   if (result.length === 0) return false;
 
-  const streamed = (streamedAssistantContent ?? "").trim();
+  const streamed = normalizeForCompare(streamedAssistantContent ?? "");
   if (streamed.length === 0) {
     // No streamed content at all (e.g. tool-only turn, or interrupt before
     // the first text_delta). A pill with the result text is the right UX.

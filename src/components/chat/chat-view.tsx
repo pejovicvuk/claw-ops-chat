@@ -5,7 +5,6 @@ import {
   FiArrowDown,
   FiArrowLeft,
   FiShield,
-  FiChevronDown,
   FiFolder,
   FiMessageCircle,
   FiAlertTriangle,
@@ -29,45 +28,7 @@ import { SetupGuard } from "./setup-guard";
 import { EmptyState } from "./empty-state";
 import { FileDropzone } from "./file-browser/file-dropzone";
 import { PushReminderBanner } from "./push-reminder-banner";
-
-const MODE_LABELS: Record<string, string> = {
-  default: "Default",
-  acceptEdits: "Accept Edits",
-  plan: "Plan Mode",
-  auto: "Auto",
-};
-
-const MODE_OPTIONS = [
-  { value: "default", label: "Default", description: "Ask before edits and commands" },
-  { value: "acceptEdits", label: "Accept Edits", description: "Auto-approve file edits" },
-  { value: "plan", label: "Plan Mode", description: "Plan only, no changes" },
-  { value: "auto", label: "Auto", description: "Model classifier decides (SDK)" },
-];
-
-/**
- * Reasoning-effort picker. Mirrors the SDK's `EffortLevel` (low | medium |
- * high | xhigh | max). Empty string means **Adaptive** thinking — the SDK
- * chooses a thinking budget per turn (`thinking: { type: 'adaptive' }`).
- *
- * The "Adaptive" label was previously "Auto", which clashed with the
- * mode picker's own "Auto" (model-classifier permission mode). Two
- * unrelated controls labelled "Auto" in the same compact toolbar made
- * the UI unreadable — Adaptive matches the SDK's own terminology and
- * disambiguates the two.
- *
- * `mobileLabel` is hand-picked rather than derived from `label.charAt(0)`
- * because that derivation produced "M" for both "Med" and "Max", and
- * "H" for both "High" and "X-High" — collisions that left users unable
- * to tell which level was active on a phone.
- */
-const EFFORT_OPTIONS = [
-  { value: "", label: "Adaptive", mobileLabel: "A" },
-  { value: "low", label: "Low", mobileLabel: "L" },
-  { value: "medium", label: "Med", mobileLabel: "M" },
-  { value: "high", label: "High", mobileLabel: "H" },
-  { value: "xhigh", label: "X-High", mobileLabel: "X" },
-  { value: "max", label: "Max", mobileLabel: "✦" },
-];
+import { MODE_LABELS, type ModeValue } from "./composer/composer-constants";
 
 /** Playful gerunds used in place of plain "Thinking..." in the live
     activity indicator. One is picked at random each time Claude enters the
@@ -269,7 +230,6 @@ export function ChatView({
   const historyIdsRef = useRef<string[]>([]);
   const capturedHistoryRef = useRef(false);
   const [loadingHistory, setLoadingHistory] = useState(!!resumeSessionId);
-  const [showModeMenu, setShowModeMenu] = useState(false);
   // Pre-fills the composer from empty-state suggestion chips. The seq
   // version bumps on every click so ChatInput's effect re-runs even when
   // the user clicks the same chip twice.
@@ -320,6 +280,30 @@ export function ChatView({
     Array<{ id: string; content: string; timestamp: number }>
   >([]);
   const bridgeSyncedRef = useRef(false);
+
+  /**
+   * Wraps the SDK setter so any mode change — whether triggered by the
+   * composer's mode picker or by the Shift+Tab keyboard cycler — also
+   * surfaces a small info-message pill in the message stream so the
+   * user notices the switch even when their eyes are on the messages.
+   */
+  const handleModeChange = useCallback(
+    (next: ModeValue) => {
+      if (next !== permissionMode) {
+        const label = MODE_LABELS[next] ?? next;
+        setInfoMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            content: `Switched to ${label} mode`,
+            timestamp: Date.now(),
+          },
+        ]);
+      }
+      setPermissionMode(next);
+    },
+    [permissionMode, setPermissionMode],
+  );
 
   // Indicator-popup state and outside-click dismissal moved into
   // <HeaderIndicators />. ChatView no longer owns it.
@@ -376,15 +360,7 @@ export function ChatView({
         const order = ["default", "plan", "acceptEdits", "auto"] as const;
         const idx = order.indexOf(permissionMode as (typeof order)[number]);
         const next = order[(idx + 1) % order.length] ?? "default";
-        setPermissionMode(next);
-        setInfoMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            content: `Mode: ${MODE_LABELS[next] ?? next}`,
-            timestamp: Date.now(),
-          },
-        ]);
+        handleModeChange(next);
         return;
       }
 
@@ -396,7 +372,7 @@ export function ChatView({
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [permissionMode, setPermissionMode, status, stopGeneration]);
+  }, [permissionMode, handleModeChange, status, stopGeneration]);
 
   useEffect(() => {
     // Switching to "+ New chat" — no history to load, just clear out any
@@ -627,85 +603,39 @@ export function ChatView({
           </div>
         )}
 
-        {/* Mode & Effort bar — compact single row. On mobile this IS the
-          top toolbar (headerless also true on mobile); on desktop it
-          sits below the main header. The sessions-list icon is
-          prepended only when onOpenSessions is provided (mobile path). */}
-        <div
-          className="relative flex shrink-0 items-center gap-2 px-3 pr-3 py-1.5"
-          style={{
-            borderBottom: "1px solid var(--canvas-border)",
-            // Desktop with full header keeps the original 12px left inset.
-            // Headerless desktop used to reserve 52px for the legacy top-left
-            // button that now lives in this bar — collapse to 12px instead.
-            paddingLeft: "12px",
-          }}
-        >
-          {isMobile && onOpenSessions && (
-            <button
-              type="button"
-              onClick={onOpenSessions}
-              aria-label="Open conversations"
-              className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-95"
-            >
-              <FiMessageCircle size={15} />
-            </button>
-          )}
-          {isMobile && onOpenFiles && (
-            <button
-              type="button"
-              onClick={onOpenFiles}
-              aria-label="Open files"
-              className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-95"
-            >
-              <FiFolder size={15} />
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => setShowModeMenu((v) => !v)}
-            aria-label={`Permission mode: ${MODE_LABELS[permissionMode] ?? "Default"}`}
-            className={
-              isMobile
-                ? "flex h-7 w-7 items-center justify-center rounded-full text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
-                : "flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] text-canvas-muted hover:bg-canvas-surface-hover transition-colors duration-150"
-            }
+        {/* Slim utility bar — only rendered in `headerless` mode (the
+            common path used by ChatLayout). Hosts the mobile-only
+            sessions / files icons and right-aligns the HeaderIndicators
+            cluster (status · 5-hour · weekly · HUD; the context ring
+            moved into the composer). The old Mode pill and Effort
+            segmented control now live inside the composer toolbar. */}
+        {headerless && (
+          <div
+            className="flex shrink-0 items-center gap-2 border-b border-canvas-border px-3 py-1.5"
+            style={{
+              paddingTop: "max(env(safe-area-inset-top, 0px), 6px)",
+            }}
           >
-            <FiShield size={isMobile ? 13 : 10} />
-            {!isMobile && <span>{MODE_LABELS[permissionMode] ?? "Default"}</span>}
-            {!isMobile && <FiChevronDown size={8} />}
-          </button>
-
-          <div className="h-3 w-px bg-canvas-border" />
-
-          <div className="flex items-center gap-0.5 rounded-full bg-canvas-surface-hover p-0.5">
-            {EFFORT_OPTIONS.map((opt) => {
-              const isActive = (opt.value === "" && !effort) || opt.value === effort;
-              // Mobile shows the option's hand-picked single-character
-              // mnemonic (A/L/M/H/X/✦). Each option owns its own short
-              // glyph rather than deriving one from `label.charAt(0)` —
-              // the derivation collapsed Med + Max to the same "M" and
-              // High + X-High to the same "H", leaving users unable to
-              // tell which level was active.
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => setEffort(opt.value || null)}
-                  aria-label={`Effort: ${opt.label}`}
-                  className={`rounded-full ${isMobile ? "min-w-[18px] px-1 py-0.5 text-[10px]" : "px-2 py-0.5 text-[9px]"} font-medium transition-all duration-200 ${
-                    isActive
-                      ? "bg-canvas-bg text-canvas-fg shadow-sm"
-                      : "text-canvas-muted hover:text-canvas-fg"
-                  }`}
-                >
-                  {isMobile ? opt.mobileLabel : opt.label}
-                </button>
-              );
-            })}
-          </div>
-
-          {headerless && (
+            {isMobile && onOpenSessions && (
+              <button
+                type="button"
+                onClick={onOpenSessions}
+                aria-label="Open conversations"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-95"
+              >
+                <FiMessageCircle size={15} />
+              </button>
+            )}
+            {isMobile && onOpenFiles && (
+              <button
+                type="button"
+                onClick={onOpenFiles}
+                aria-label="Open files"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-95"
+              >
+                <FiFolder size={15} />
+              </button>
+            )}
             <div className="ml-auto">
               <HeaderIndicators
                 status={status}
@@ -718,41 +648,8 @@ export function ChatView({
                 reconnect={reconnect}
               />
             </div>
-          )}
-
-          {showModeMenu && (
-            <div className="absolute left-3 top-full z-50 mt-1 rounded-xl border border-canvas-border bg-canvas-bg py-1 shadow-xl animate-modal-in">
-              {MODE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => {
-                    if (opt.value !== permissionMode) {
-                      setInfoMessages((prev) => [
-                        ...prev,
-                        {
-                          id: crypto.randomUUID(),
-                          content: `Switched to ${opt.label} mode`,
-                          timestamp: Date.now(),
-                        },
-                      ]);
-                    }
-                    setPermissionMode(opt.value);
-                    setShowModeMenu(false);
-                  }}
-                  className={`flex w-full items-start gap-2 px-3.5 py-2.5 text-left transition-colors duration-150 hover:bg-canvas-surface-hover ${
-                    permissionMode === opt.value ? "bg-canvas-surface-hover" : ""
-                  }`}
-                >
-                  <div>
-                    <p className="text-[12px] font-medium text-canvas-fg">{opt.label}</p>
-                    <p className="text-[10px] text-canvas-muted">{opt.description}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+          </div>
+        )}
 
         {authRequired && (
           <div
@@ -998,6 +895,13 @@ export function ChatView({
               onAddFiles={composerAttachments.addFiles}
               onRemoveAttachment={composerAttachments.remove}
               onClearAttachments={composerAttachments.clear}
+              permissionMode={permissionMode}
+              setPermissionMode={handleModeChange}
+              effort={effort}
+              setEffort={setEffort}
+              model={model}
+              setModel={setModel}
+              contextUsage={contextUsage}
             />
           </div>
         </SetupGuard>

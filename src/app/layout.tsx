@@ -1,6 +1,18 @@
 import type { Metadata, Viewport } from "next";
+import { Inter } from "next/font/google";
 import { Providers } from "./providers";
 import "./globals.css";
+
+// Inter is the closest free analogue to Perplexity's paid FK Grotesk —
+// geometric grotesque with humanist warmth. Weights 400/500/600 cover
+// body / nav (slight bold) / emphasis. `next/font` self-hosts the WOFF2,
+// so the existing CSP doesn't need updating.
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  weight: ["400", "500", "600", "700"],
+  display: "swap",
+});
 
 export const dynamic = "force-dynamic";
 
@@ -58,7 +70,7 @@ export default function RootLayout({
           being silently swallowed.
         */}
       </head>
-      <body className="antialiased">
+      <body className={`${inter.variable} antialiased`}>
         <Providers>{children}</Providers>
       </body>
     </html>

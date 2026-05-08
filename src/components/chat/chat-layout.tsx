@@ -17,6 +17,8 @@ import { ErrorBoundary } from "@/components/error-boundary";
 import { Sidebar } from "@/components/sidebar/sidebar";
 import { ReportsMainPane } from "@/components/reports/reports-main-pane";
 import { ProjectsMainPane } from "@/components/projects/projects-main-pane";
+import { AgentsMainPane } from "@/components/agents/agents-main-pane";
+import { DocumentsMainPane } from "@/components/documents/documents-main-pane";
 
 // Lazy: CodeMirror core (~180kb gz) is pulled into this chunk. Only loads
 // when the user opens a file. ssr:false because the editor is pointer-driven.
@@ -300,6 +302,10 @@ export function ChatLayout({
             <ProjectsMainPane onOpenSessions={() => setSidebarOpen(true)} />
           ) : params.get("view") === "reports" ? (
             <ReportsMainPane onOpenSessions={() => setSidebarOpen(true)} />
+          ) : params.get("view") === "agents" ? (
+            <AgentsMainPane onOpenSessions={() => setSidebarOpen(true)} />
+          ) : params.get("view") === "documents" ? (
+            <DocumentsMainPane onOpenSessions={() => setSidebarOpen(true)} />
           ) : (
             <ChatView
               sessionId={sessionId}
@@ -349,6 +355,7 @@ export function ChatLayout({
                   onRefreshSessions={onRefreshSessions}
                   runningSessionIds={runningSessionIds}
                   onDeleteSession={onDeleteSession}
+                  onAfterNavigate={() => setSidebarOpen(false)}
                 />
               </div>
             </div>
@@ -435,6 +442,10 @@ export function ChatLayout({
             <ProjectsMainPane />
           ) : params.get("view") === "reports" ? (
             <ReportsMainPane />
+          ) : params.get("view") === "agents" ? (
+            <AgentsMainPane />
+          ) : params.get("view") === "documents" ? (
+            <DocumentsMainPane />
           ) : (
             <ChatView
               sessionId={sessionId}

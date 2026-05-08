@@ -1,18 +1,15 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { FiPlus, FiRefreshCw, FiSearch, FiSettings, FiX } from "react-icons/fi";
+import { FiRefreshCw, FiSearch, FiSettings, FiX } from "react-icons/fi";
 import { SessionList } from "@/components/chat/session-list";
-import { SidebarTabs, type SidebarMode } from "./sidebar-tabs";
-import { ReportsList } from "@/components/reports/reports-list";
-import { ProjectsList } from "@/components/projects/projects-list";
+import { SidebarNav, type NavSection } from "./sidebar-nav";
 import { useUrlState } from "@/lib/use-url-state";
 import { useReportRuns } from "@/lib/use-reports";
-import { useProjects } from "@/lib/use-projects";
 import type { ChatSession } from "@/lib/types";
 
 interface SidebarProps {
-  // Chat props — forwarded to SessionList when mode=chats
+  // Chat props — forwarded to SessionList
   sessions: ChatSession[];
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
@@ -22,16 +19,22 @@ interface SidebarProps {
   runningSessionIds?: Set<string>;
   /** Forwarded to SessionList — enables the Delete context-menu item. */
   onDeleteSession?: (sessionId: string) => Promise<void>;
+  /** Optional hook fired after a top-level nav change (Projects /
+   *  Reports / Agents / Documents / New). The mobile drawer uses this
+   *  to auto-close when the user picks a section so the new pane is
+   *  visible without an extra tap. */
+  onAfterNavigate?: () => void;
 }
 
 /**
- * Wraps the sidebar with a Chats/Reports segmented toggle. Delegates list
- * rendering to either SessionList (unchanged) or ReportsList based on
- * `?sidebar=` URL state.
+ * Sidebar shell: Perplexity-style icon-row navigation at the top
+ * (New / Projects / Reports / Agents / Documents) with a search field
+ * and the recent chat history list always visible below.
  *
- * The +/refresh buttons and settings footer live here so they can be
- * context-aware without pushing that concern into SessionList (which is
- * already complex enough managing chat session status dots).
+ * The list area no longer toggles per nav section the way it used to
+ * with the segmented Chats / Reports / Projects tabs. Recent chats are
+ * always present; the dashboards in the main pane provide the
+ * project / report listings instead.
  */
 export function Sidebar({
   sessions,
@@ -42,31 +45,27 @@ export function Sidebar({
   sessionsLoading,
   runningSessionIds,
   onDeleteSession,
+  onAfterNavigate,
 }: SidebarProps) {
   const { params, setParam } = useUrlState();
-  // Derive mode from BOTH ?view and ?sidebar so any URL that targets the
-  // reports/projects area (e.g. a deep-linked report runId or project
-  // slug) consistently shows the right list instead of silently falling
-  // back to chats.
   const view = params.get("view");
-  const sidebarParam = params.get("sidebar");
-  const mode: SidebarMode =
-    view === "projects" || sidebarParam === "projects"
+  const active: NavSection =
+    view === "projects"
       ? "projects"
-      : view === "reports" || sidebarParam === "reports"
+      : view === "reports"
         ? "reports"
-        : "chats";
-  const selectedReportId = params.get("report");
-  const selectedProjectSlug = params.get("project");
+        : view === "agents"
+          ? "agents"
+          : view === "documents"
+            ? "documents"
+            : "chats";
 
   const openSettings = useCallback(() => setParam("settings", "main"), [setParam]);
 
-  // Local-only search filter for the chats list. Lives in component
-  // state (not URL) on purpose — it's transient input that shouldn't
-  // round-trip through history or be shareable. State resets naturally
-  // each time the mobile drawer remounts. Case-insensitive substring
-  // match against `session.display`; could later widen to first-message
-  // content, but display titles are usually descriptive enough.
+  // Local-only chat search filter — case-insensitive substring match
+  // against `session.display`. Lives in component state (not URL) on
+  // purpose: it's transient input that shouldn't round-trip through
+  // history or be shareable.
   const [chatSearchQuery, setChatSearchQuery] = useState("");
   const filteredSessions = useMemo(() => {
     const q = chatSearchQuery.trim().toLowerCase();
@@ -74,130 +73,88 @@ export function Sidebar({
     return sessions.filter((s) => s.display.toLowerCase().includes(q));
   }, [sessions, chatSearchQuery]);
   const noChatMatches =
-    mode === "chats" &&
-    !!chatSearchQuery.trim() &&
-    sessions.length > 0 &&
-    filteredSessions.length === 0;
+    !!chatSearchQuery.trim() && sessions.length > 0 && filteredSessions.length === 0;
 
-  // Flip to fast polling while the user is looking at the reports list or
-  // the reports view overall — 3s lag vs 30s lag makes running indicators
-  // feel live without any WebSocket plumbing.
-  const fastPoll = mode === "reports" || view === "reports";
-  const {
-    feed,
-    loading: reportsLoading,
-    refresh: refreshReports,
-  } = useReportRuns({
-    fast: fastPoll,
-  });
+  // Reports unread badge — keep the existing fast-poll gate so the
+  // count stays roughly live without a WebSocket. We only need
+  // `unreadCount` here, no list rendering.
+  const fastPoll = active === "reports" || view === "reports";
+  const { feed } = useReportRuns({ fast: fastPoll });
 
-  const { projects, loading: projectsLoading, refresh: refreshProjects } = useProjects();
+  const handleNew = useCallback(() => {
+    // Match the old "+ New chat" behaviour: clear any view scoping
+    // params so the chat surface always wins, then start a fresh chat.
+    setParam("view", null);
+    setParam("project", null);
+    setParam("report", null);
+    setParam("newProject", null);
+    setParam("newReport", null);
+    setParam("sidebar", null);
+    onNewChat();
+    onAfterNavigate?.();
+  }, [setParam, onNewChat, onAfterNavigate]);
 
-  const handleNewReport = useCallback(() => {
-    // Navigate to Reports view + open the New Job drawer. The
-    // ReportsDashboard honors ?newReport=1.
-    setParam("view", "reports");
-    setParam("sidebar", "reports");
-    setParam("newReport", "1");
-  }, [setParam]);
-
-  const handleSelectReport = useCallback(
-    (runId: string) => {
-      setParam("view", "reports");
-      setParam("sidebar", "reports");
-      setParam("report", runId);
-    },
-    [setParam],
-  );
-
-  const handleNewProject = useCallback(() => {
-    setParam("view", "projects");
-    setParam("sidebar", "projects");
-    setParam("newProject", "1");
-  }, [setParam]);
-
-  const handleSelectProject = useCallback(
-    (slug: string) => {
-      setParam("view", "projects");
-      setParam("sidebar", "projects");
-      setParam("project", slug);
-    },
-    [setParam],
-  );
-
-  const handleChangeMode = useCallback(
-    (next: SidebarMode) => {
-      // Clicking a tab must flip BOTH the sidebar list AND the main pane,
-      // and clear params scoped to the OTHER sections so deep-link state
-      // doesn't bleed across (e.g. a stale ?report= surviving into
-      // Projects view).
-      if (next === "reports") {
-        setParam("sidebar", "reports");
-        setParam("view", "reports");
-        setParam("project", null);
-        setParam("newProject", null);
-      } else if (next === "projects") {
-        setParam("sidebar", "projects");
-        setParam("view", "projects");
+  const handleNavigate = useCallback(
+    (section: Exclude<NavSection, "chats">) => {
+      // Centralised section routing. Each branch clears params owned
+      // by *other* sections so deep-link state can't bleed across
+      // (a stale `?report=` shouldn't survive into Projects view).
+      setParam("view", section);
+      setParam("sidebar", section);
+      if (section === "projects") {
         setParam("report", null);
         setParam("newReport", null);
+      } else if (section === "reports") {
+        setParam("project", null);
+        setParam("newProject", null);
       } else {
-        setParam("sidebar", null);
-        setParam("view", null);
-        setParam("report", null);
-        setParam("newReport", null);
         setParam("project", null);
+        setParam("report", null);
         setParam("newProject", null);
+        setParam("newReport", null);
       }
+      onAfterNavigate?.();
     },
-    [setParam],
+    [setParam, onAfterNavigate],
   );
-
-  const handleRefresh =
-    mode === "chats" ? onRefreshSessions : mode === "reports" ? refreshReports : refreshProjects;
-  const handlePlus =
-    mode === "chats" ? onNewChat : mode === "reports" ? handleNewReport : handleNewProject;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-3 py-2.5">
-        <SidebarTabs mode={mode} onChange={handleChangeMode} unreadReports={feed.unreadCount} />
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handleRefresh}
-            className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-            aria-label={
-              mode === "chats"
-                ? "Refresh chats"
-                : mode === "reports"
-                  ? "Refresh reports"
-                  : "Refresh projects"
-            }
-          >
-            <FiRefreshCw size={13} />
-          </button>
-          <button
-            type="button"
-            onClick={handlePlus}
-            className="btn-press flex h-7 w-7 items-center justify-center rounded-md text-accent hover:bg-canvas-surface-hover"
-            aria-label={
-              mode === "chats" ? "New chat" : mode === "reports" ? "New report" : "New project"
-            }
-          >
-            <FiPlus size={15} />
-          </button>
-        </div>
+      <SidebarNav
+        active={active}
+        onNew={handleNew}
+        onNavigate={handleNavigate}
+        unreadReports={feed.unreadCount}
+      />
+
+      {/* Divider between the nav block and the history block. Same hairline
+          as the rest of the app's section separators. */}
+      <div className="mx-3 mb-1 mt-1 border-t border-canvas-border" aria-hidden="true" />
+
+      {/* History header — small caption + refresh button, mirroring the
+          rhythm of the old "Chats" tab header but without the explicit
+          tab strip. */}
+      <div className="flex shrink-0 items-center justify-between px-4 pb-1 pt-1.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-canvas-muted">
+          History
+        </span>
+        <button
+          type="button"
+          onClick={onRefreshSessions}
+          className="btn-press flex h-6 w-6 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+          aria-label="Refresh chats"
+        >
+          <FiRefreshCw size={11} />
+        </button>
       </div>
 
-      {/* Search bar — chats mode only, hidden until there's something to
-          search. Sits OUTSIDE the scroll container so it stays visible
-          while the user scrolls the list. `type="search"` lets the
-          browser render its native clear-X / Esc-clear affordance; we
-          add an explicit clear button + onKeyDown for cross-browser
-          consistency (Firefox doesn't always honor Esc on search inputs). */}
-      {mode === "chats" && sessions.length > 0 && (
-        <div className="shrink-0 border-b border-canvas-border px-3 py-2">
+      {/* Search bar — only shown when there's something to filter.
+          Stays outside the scroll container so it doesn't drift while
+          the list scrolls. `type="search"` gives the browser its native
+          clear-X / Esc-clear affordance; we add an explicit clear
+          button + onKeyDown for cross-browser consistency. */}
+      {sessions.length > 0 && (
+        <div className="shrink-0 px-3 pb-2">
           <div className="relative">
             <FiSearch
               size={11}
@@ -228,49 +185,32 @@ export function Sidebar({
         </div>
       )}
 
-      <div className="flex-1 overflow-y-auto px-2 py-2">
-        {mode === "chats" &&
-          (noChatMatches ? (
-            <div className="px-2 py-8 text-center">
-              <p className="text-[11px] text-canvas-muted">
-                No chats match &ldquo;{chatSearchQuery}&rdquo;
-              </p>
-              <button
-                type="button"
-                onClick={() => setChatSearchQuery("")}
-                className="mt-2 rounded-md px-2 py-1 text-[11px] text-accent hover:bg-canvas-surface-hover"
-              >
-                Clear search
-              </button>
-            </div>
-          ) : (
-            <SessionList
-              selectedSessionId={selectedSessionId}
-              sessions={filteredSessions}
-              loading={sessionsLoading}
-              onSelectSession={onSelectSession}
-              onNewChat={onNewChat}
-              onRefresh={onRefreshSessions}
-              runningSessionIds={runningSessionIds}
-              onDeleteSession={onDeleteSession}
-              hideHeader
-              hideFooter
-            />
-          ))}
-        {mode === "reports" && (
-          <ReportsList
-            runs={feed.runs}
-            selectedRunId={selectedReportId}
-            onSelect={handleSelectReport}
-            loading={reportsLoading}
-          />
-        )}
-        {mode === "projects" && (
-          <ProjectsList
-            projects={projects}
-            selectedSlug={selectedProjectSlug}
-            onSelect={handleSelectProject}
-            loading={projectsLoading}
+      <div className="flex-1 overflow-y-auto px-2 pb-2">
+        {noChatMatches ? (
+          <div className="px-2 py-8 text-center">
+            <p className="text-[11px] text-canvas-muted">
+              No chats match &ldquo;{chatSearchQuery}&rdquo;
+            </p>
+            <button
+              type="button"
+              onClick={() => setChatSearchQuery("")}
+              className="mt-2 rounded-md px-2 py-1 text-[11px] text-accent hover:bg-canvas-surface-hover"
+            >
+              Clear search
+            </button>
+          </div>
+        ) : (
+          <SessionList
+            selectedSessionId={selectedSessionId}
+            sessions={filteredSessions}
+            loading={sessionsLoading}
+            onSelectSession={onSelectSession}
+            onNewChat={onNewChat}
+            onRefresh={onRefreshSessions}
+            runningSessionIds={runningSessionIds}
+            onDeleteSession={onDeleteSession}
+            hideHeader
+            hideFooter
           />
         )}
       </div>

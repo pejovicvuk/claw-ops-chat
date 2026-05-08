@@ -94,9 +94,12 @@ body {
   padding: 0;
   background-color: var(--canvas-bg);
   color: var(--canvas-fg);
+  /* Inter (loaded via next/font in layout.tsx) is the closest free match
+     for Perplexity's FK Grotesk — geometric grotesque with humanist
+     warmth. System fonts remain as fallback so first paint never blanks. */
   font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif,
-    "Apple Color Emoji", "Segoe UI Emoji";
+    var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   overflow: hidden;
 }
 

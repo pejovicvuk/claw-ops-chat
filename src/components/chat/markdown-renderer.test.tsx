@@ -280,6 +280,83 @@ describe("MarkdownRenderer — sanitisation", () => {
   });
 });
 
+/* ── Fenced code without a language tag ─────────────────────────────────
+ *
+ * Long-standing bug: `inlineOrBlockCode` only recognised fences that had
+ * a `language-x` className (the SyntaxCode branch). Language-less fences
+ * fell through to the inline-pill branch and rendered their multi-line
+ * body inside a tiny `<code>` chip with no monospace block layout. The
+ * follow-on damage (inverted fence parity for the rest of the message)
+ * is covered by the `splitForBoxDrawing` tests in message-bubble's tests. */
+describe("MarkdownRenderer — fenced code without a language tag", () => {
+  it("renders a multi-line ``` block as a proper code block, not the inline pill", () => {
+    const md = "before\n\n```\nline1\nline2\nline3\n```\n\nafter";
+    const { container } = render(<MarkdownRenderer text={md} />);
+
+    // The fence should produce a <pre> with the bordered scroll container.
+    const pre = container.querySelector("pre");
+    expect(pre).not.toBeNull();
+    expect(pre?.className).toContain("font-mono");
+    expect(pre?.textContent).toContain("line1");
+    expect(pre?.textContent).toContain("line2");
+    expect(pre?.textContent).toContain("line3");
+
+    // The bordered wrapper makes it visually distinct from inline code.
+    const wrapper = pre?.parentElement;
+    expect(wrapper?.className).toContain("border-canvas-border");
+    expect(wrapper?.className).toContain("overflow-x-auto");
+
+    // Surrounding prose still renders as paragraphs.
+    const ps = Array.from(container.querySelectorAll("p")).map((p) => p.textContent);
+    expect(ps).toContain("before");
+    expect(ps).toContain("after");
+  });
+
+  it("keeps the rounded chip styling for genuine inline code spans", () => {
+    const { container } = render(<MarkdownRenderer text="run `npm test` daily" />);
+    const code = container.querySelector("code");
+    expect(code).not.toBeNull();
+    expect(code?.textContent).toBe("npm test");
+    expect(code?.className).toContain("rounded");
+    expect(code?.className).toContain("bg-canvas-surface-hover");
+  });
+
+  it("does not invert fence parity when a fence contains box-drawing characters", () => {
+    // Reproduces the original symptom: a language-less fence surrounding a
+    // Unicode box, followed by prose with bold + a heading. Pre-fix, the
+    // closing ``` got swallowed and the trailing prose was rendered as one
+    // giant inline-code blob. Post-fix, the box renders inside a <pre> and
+    // the trailing prose recovers normal markdown formatting.
+    const md = [
+      "Diagram below:",
+      "",
+      "```",
+      "┌──────┐",
+      "│ box  │",
+      "└──────┘",
+      "```",
+      "",
+      "## After the diagram",
+      "",
+      "Here is **bold prose** and an inline `flag`.",
+    ].join("\n");
+    const { container } = render(<MarkdownRenderer text={md} />);
+
+    const h2 = container.querySelector("h2");
+    expect(h2?.textContent).toContain("After the diagram");
+
+    const strong = container.querySelector("strong");
+    expect(strong?.textContent).toBe("bold prose");
+
+    // The inline `flag` chip should still be the rounded inline pill.
+    const inlineFlag = Array.from(container.querySelectorAll("code")).find(
+      (c) => c.textContent === "flag",
+    );
+    expect(inlineFlag).toBeTruthy();
+    expect(inlineFlag?.className).toContain("rounded");
+  });
+});
+
 /* ── remend self-healing for streaming markdown ────────────────────────── */
 describe("MarkdownRenderer — remend self-healing", () => {
   it("closes unterminated bold so it renders as <strong> mid-stream", () => {

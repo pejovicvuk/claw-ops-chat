@@ -65,9 +65,60 @@ function extractToolDescription(toolName?: string, toolInput?: string): string {
 
 /* ── Detect Unicode box-drawing content ── */
 const BOX_CHARS = /[┌┐└┘├┤┬┴┼─│═║╔╗╚╝╠╣╦╩╬]/;
+/**
+ * Match an opening or closing fence line (``` or ~~~), allowing optional
+ * leading whitespace and an optional language tag after the opener. We
+ * only need the boolean test, not the language, so the regex is loose.
+ */
+const FENCE_LINE = /^\s*(?:```|~~~)/;
 
 function hasBoxDrawing(text: string): boolean {
   return BOX_CHARS.test(text);
+}
+
+/**
+ * Split an assistant message into alternating "text" and "box" segments
+ * so an unfenced ASCII / Unicode diagram still renders in a monospace
+ * pre-block (otherwise CommonMark would collapse the spaces and the
+ * diagram would lose alignment).
+ *
+ * Critically, this is fence-aware: lines inside a ``` fenced code block
+ * are always treated as "text" regardless of their content, so the
+ * splitter never slices through a fence. Slicing fences was the root
+ * cause of the long-standing "everything after the diagram renders as
+ * one giant inline-code blob" bug — once the splitter cut a fence, the
+ * closing backticks ended up in a different segment than the opener and
+ * inverted the fence parity for every subsequent block.
+ */
+export function splitForBoxDrawing(text: string): Array<{ type: "text" | "box"; content: string }> {
+  const lines = text.split("\n");
+  const segments: Array<{ type: "text" | "box"; content: string }> = [];
+  let current: { type: "text" | "box"; lines: string[] } | null = null;
+  let inFence = false;
+
+  const flush = () => {
+    if (current) {
+      segments.push({ type: current.type, content: current.lines.join("\n") });
+      current = null;
+    }
+  };
+
+  for (const line of lines) {
+    // Fence boundary toggles before we classify the line — the fence
+    // line itself must end up in the surrounding "text" segment, not
+    // wrapped by box-drawing styling.
+    if (FENCE_LINE.test(line)) inFence = !inFence;
+    const isBox = !inFence && BOX_CHARS.test(line);
+    const type: "text" | "box" = isBox ? "box" : "text";
+    if (!current || current.type !== type) {
+      flush();
+      current = { type, lines: [line] };
+    } else {
+      current.lines.push(line);
+    }
+  }
+  flush();
+  return segments;
 }
 
 /* ── Component ── */
@@ -180,21 +231,19 @@ function AssistantTextContent({ content }: { content: string }) {
     );
   }
 
-  const lines = text.split("\n");
-  const segments: Array<{ type: "text" | "box"; content: string }> = [];
-  let current: { type: "text" | "box"; lines: string[] } | null = null;
+  const segments = splitForBoxDrawing(text);
 
-  for (const line of lines) {
-    const isBox = BOX_CHARS.test(line);
-    const type = isBox ? "box" : "text";
-    if (!current || current.type !== type) {
-      if (current) segments.push({ type: current.type, content: current.lines.join("\n") });
-      current = { type, lines: [line] };
-    } else {
-      current.lines.push(line);
-    }
+  // If every box-drawing line lived inside a fenced block, the splitter
+  // emits a single "text" segment. Forward to the regular path so the
+  // fence renders as a proper code block (via the markdown renderer's
+  // `code`/`pre` overrides) instead of being torn apart segment-by-segment.
+  if (segments.length === 1 && segments[0].type === "text") {
+    return (
+      <Suspense fallback={<MarkdownFallback text={text} />}>
+        <MarkdownRenderer text={text} />
+      </Suspense>
+    );
   }
-  if (current) segments.push({ type: current.type, content: current.lines.join("\n") });
 
   return (
     <>

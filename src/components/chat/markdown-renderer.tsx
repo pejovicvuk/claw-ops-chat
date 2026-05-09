@@ -227,9 +227,34 @@ function renderBlockWithFileCards(children: ReactNode, tag: "p" | "li"): ReactEl
   return body;
 }
 
+/**
+ * Read a `<code>` element's raw children as a string. For both inline and
+ * fenced code, react-markdown passes the body as either a plain string or
+ * an array of string parts (no nested elements — code spans don't allow
+ * inline markup). Returning the empty string for any non-text shape is a
+ * defensive fallback; the caller treats "no newline found" as inline.
+ */
+function readCodeText(children: ReactNode): string {
+  if (typeof children === "string") return children;
+  if (Array.isArray(children)) {
+    return children.filter((c): c is string => typeof c === "string").join("");
+  }
+  return "";
+}
+
 // Shared inline / block code renderer. Both variants use the same
 // SyntaxCode + inline-code styling so syntax highlighting and the copy
 // button behave identically across chat and document surfaces.
+//
+// Three branches:
+//   1. Fenced block WITH a language tag → SyntaxCode (lazy shiki).
+//   2. Fenced block WITHOUT a language tag → generic block (mono <pre>
+//      inside a bordered scroll container). Detected via embedded
+//      newlines, since inline code spans can't contain line breaks
+//      (CommonMark §6.1). Without this branch a language-less ``` block
+//      collapses into the inline-code chip — the symptom that turns
+//      multi-line ASCII boxes into a tiny pink pill.
+//   3. Genuine inline code → the rounded chip styling.
 function inlineOrBlockCode({
   className,
   children,
@@ -237,11 +262,24 @@ function inlineOrBlockCode({
   className?: string;
   children?: ReactNode;
 }): ReactElement {
-  const match = /language-(\w+)/.exec(className ?? "");
-  if (match) {
+  const langMatch = /language-(\w+)/.exec(className ?? "");
+  if (langMatch) {
     const code = String(children).replace(/\n$/, "");
-    return <SyntaxCode language={match[1]} code={code} />;
+    return <SyntaxCode language={langMatch[1]} code={code} />;
   }
+
+  const raw = readCodeText(children);
+  if (raw.includes("\n")) {
+    const code = raw.replace(/\n$/, "");
+    return (
+      <div className="my-2 overflow-x-auto rounded-md border border-canvas-border bg-canvas-bg p-3">
+        <pre className="whitespace-pre font-mono text-[12px] leading-relaxed text-canvas-fg">
+          <code>{code}</code>
+        </pre>
+      </div>
+    );
+  }
+
   return (
     <code className="rounded bg-canvas-surface-hover px-1.5 py-0.5 font-mono text-[0.875em] text-canvas-fg">
       {children}

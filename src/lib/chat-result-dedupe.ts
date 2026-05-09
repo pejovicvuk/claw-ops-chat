@@ -16,21 +16,25 @@
  * different from the just-streamed content (e.g. an explicit
  * "Stopped by user" interrupt fired by the server, or a session-end
  * marker the SDK emits when no streamed turn preceded it). Equality is
- * checked after collapsing all runs of whitespace to a single space, so
- * cosmetic differences between the SDK's joined `result` and the raw
- * concatenation of `text_delta` chunks (e.g. an extra newline between
- * content blocks, or paragraph breaks the SDK normalizes) don't defeat
- * the dedup. Two strings are considered "the same content" iff their
- * non-whitespace tokens are identical in order — which is exactly the
- * property a user perceives when they say "the pill is showing the same
- * message twice".
+ * checked after stripping ALL whitespace, not just collapsing runs to a
+ * single space. The reason: when an assistant turn contains multiple text
+ * content blocks, the SDK's `msg.result` joins them with `\n\n`, but the
+ * client's `streamedTurnTextRef` is the raw concatenation of `text_delta`
+ * chunks with NO inter-block separator (block boundaries are not emitted
+ * as `text_delta` events). At each block boundary the streamed version
+ * has two non-whitespace characters adjacent (e.g. `…**###…`) while the
+ * result version has them separated by `\n\n` (`…** ###…`). Token-level
+ * equality (the previous strategy) saw these as different and surfaced
+ * the duplicate pill; character-level identity ignoring whitespace
+ * recognises them as the same content, which is what users perceive.
  */
 function normalizeForCompare(s: string): string {
-  // Collapse every run of ASCII / Unicode whitespace (spaces, tabs,
-  // newlines, NBSP, etc.) to a single space, then trim. Markdown structure
-  // is whitespace-sensitive at render time but not at identity time —
-  // "Hello\n\nworld" and "Hello world" carry the same words.
-  return s.replace(/\s+/g, " ").trim();
+  // Strip every ASCII / Unicode whitespace character (spaces, tabs,
+  // newlines, NBSP, etc.). Markdown structure is whitespace-sensitive at
+  // render time but not at identity time — "Hello\n\nworld" and
+  // "Hello world" and "Helloworld" all carry the same content for the
+  // purposes of the duplicate-pill check.
+  return s.replace(/\s+/g, "");
 }
 
 export function shouldShowStoppedPill(

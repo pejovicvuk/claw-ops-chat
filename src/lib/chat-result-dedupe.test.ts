@@ -50,9 +50,9 @@ describe("shouldShowStoppedPill", () => {
   it("ignores internal whitespace differences (the leak that motivated this fix)", () => {
     // The SDK's `msg.result` may join multiple text content blocks with a
     // newline that the raw `text_delta` stream didn't emit, or normalize
-    // paragraph breaks differently. As long as the non-whitespace tokens
-    // are identical in order, treat them as the same content and suppress
-    // the duplicate pill.
+    // paragraph breaks differently. As long as the non-whitespace
+    // characters are identical in order, treat them as the same content
+    // and suppress the duplicate pill.
     const streamed = "Here is the answer.\n\nLet me know if you want more.";
     const resultWithExtraNewline = "Here is the answer.\n\n\nLet me know if you want more.\n";
     expect(shouldShowStoppedPill(resultWithExtraNewline, streamed)).toBe(false);
@@ -61,12 +61,35 @@ describe("shouldShowStoppedPill", () => {
     const resultSpaces = "Line one. Line two.";
     expect(shouldShowStoppedPill(resultSpaces, streamedTabs)).toBe(false);
 
-    // Multi-block turn: SDK joins with "\n\n", stream concatenates raw.
+    // Multi-block turn: SDK joins blocks with "\n\n" while the
+    // `text_delta` stream concatenates raw with no inter-block separator.
+    // Block boundaries are NOT broadcast to the client (server.ts only
+    // forwards `content_block_delta` text events, not `content_block_start`
+    // for text), so the stream legitimately has no whitespace where the
+    // result has `\n\n`. Users perceive these as the same content; we
+    // suppress the duplicate pill.
     const streamedRaw = "First block.Second block.";
     const resultJoined = "First block.\n\nSecond block.";
-    // Tokens differ ("block.Second" vs "block." + "Second") so this is a
-    // genuine difference and the pill should still surface.
-    expect(shouldShowStoppedPill(resultJoined, streamedRaw)).toBe(true);
+    expect(shouldShowStoppedPill(resultJoined, streamedRaw)).toBe(false);
+  });
+
+  it("suppresses the pill for a realistic multi-block markdown turn (regression)", () => {
+    // Reproduces the exact symptom the user reported: a long markdown
+    // response where the SDK split into multiple text content blocks. The
+    // streamed concatenation has bold-asterisks running directly into a
+    // heading hash because `text_delta` carried no inter-block separator;
+    // the SDK's `result` text inserted `\n\n` between blocks. Token-level
+    // dedup saw `**###` vs `** ###` as different and surfaced the pill;
+    // whitespace-stripping dedup correctly recognises the duplicate.
+    const streamed =
+      "PR opened: **https://github.com/example/repo/pull/1**" +
+      "### What's in it" +
+      "Two fixes, one commit.";
+    const result =
+      "PR opened: **https://github.com/example/repo/pull/1**\n\n" +
+      "### What's in it\n\n" +
+      "Two fixes, one commit.";
+    expect(shouldShowStoppedPill(result, streamed)).toBe(false);
   });
 
   it("still surfaces an explicit interrupt that shares no tokens with the stream", () => {

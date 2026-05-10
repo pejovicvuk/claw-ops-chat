@@ -1,10 +1,28 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
-import { AgentConfigError, createRule, listRules } from "@/lib/agent-config";
+import {
+  DEPRECATION_HEADER,
+  LegacyAdapterError,
+  createLegacyRule,
+  listLegacyRules,
+} from "@/lib/agent-config-legacy-adapter";
+
+/**
+ * **Deprecated.** Reads/writes from `/root/.memory/global/rules/<name>.md`
+ * via the legacy adapter. New callers should use `/api/memory/global` instead.
+ * Slated for removal alongside `getCustomAppendForSdk()` in a follow-up PR.
+ */
+
+function withDeprecation(res: Response): Response {
+  for (const [k, v] of Object.entries(DEPRECATION_HEADER)) {
+    res.headers.set(k, v);
+  }
+  return res;
+}
 
 export async function GET(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
-  const items = await listRules();
-  return Response.json({ items });
+  const items = await listLegacyRules();
+  return withDeprecation(Response.json({ items }));
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -13,18 +31,20 @@ export async function POST(request: Request): Promise<Response> {
   try {
     body = (await request.json()) as { name?: unknown; content?: unknown };
   } catch {
-    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+    return withDeprecation(Response.json({ error: "Invalid JSON body" }, { status: 400 }));
   }
   if (typeof body.name !== "string" || typeof body.content !== "string") {
-    return Response.json({ error: "name and content are required" }, { status: 400 });
+    return withDeprecation(
+      Response.json({ error: "name and content are required" }, { status: 400 }),
+    );
   }
   try {
-    await createRule(body.name, body.content);
+    await createLegacyRule(body.name, body.content);
   } catch (err) {
-    if (err instanceof AgentConfigError) {
-      return Response.json({ error: err.message }, { status: err.status });
+    if (err instanceof LegacyAdapterError) {
+      return withDeprecation(Response.json({ error: err.message }, { status: err.status }));
     }
-    return Response.json({ error: "Failed to create rule" }, { status: 500 });
+    return withDeprecation(Response.json({ error: "Failed to create rule" }, { status: 500 }));
   }
-  return Response.json({ ok: true });
+  return withDeprecation(Response.json({ ok: true }));
 }

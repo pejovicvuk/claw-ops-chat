@@ -78,17 +78,19 @@ Also relevant:
 
 Bound to host as a single `/root` volume. Quick reference:
 
-| Path                                               | What                                               |
-| -------------------------------------------------- | -------------------------------------------------- |
-| `/root/.audit/{api,cron,session}/YYYY-MM-DD.jsonl` | Audit log files (rotated daily, purged after 30 d) |
-| `/root/.memory/global/`                            | Global memory (.md), loaded into every turn        |
-| `~/.claude/projects/<sanitized-cwd>/memory/`       | SDK auto-memory (per-project), model-managed       |
-| `/root/.cache/unfurls/`, `/root/.cache/images/`    | Preview caches (24 h / 7 d TTL)                    |
-| `/root/.session-status/<id>.json`                  | SessionManager status snapshot                     |
-| `/root/.claude/projects/<hash>/<id>.jsonl`         | SDK chat transcripts                               |
-| `/root/.claude/.credentials.json`                  | Claude IDE credentials                             |
-| `/root/.push/vapid.json`                           | Web Push VAPID keypair                             |
-| `~/.claude.json`                                   | MCP servers + global Claude config                 |
+| Path                                               | What                                                |
+| -------------------------------------------------- | --------------------------------------------------- |
+| `/root/.audit/{api,cron,session}/YYYY-MM-DD.jsonl` | Audit log files (rotated daily, purged after 30 d)  |
+| `/root/.memory/global/`                            | Global memory (.md), loaded into every turn         |
+| `/root/.memory/global/auto.md`                     | Auto-collected memory (Haiku consolidator), 5KB cap |
+| `/root/.memory/auto-config.json`                   | Toggle + debounce for the consolidator              |
+| `~/.claude/projects/<sanitized-cwd>/memory/`       | SDK auto-memory (per-project), model-managed        |
+| `/root/.cache/unfurls/`, `/root/.cache/images/`    | Preview caches (24 h / 7 d TTL)                     |
+| `/root/.session-status/<id>.json`                  | SessionManager status snapshot                      |
+| `/root/.claude/projects/<hash>/<id>.jsonl`         | SDK chat transcripts                                |
+| `/root/.claude/.credentials.json`                  | Claude IDE credentials                              |
+| `/root/.push/vapid.json`                           | Web Push VAPID keypair                              |
+| `~/.claude.json`                                   | MCP servers + global Claude config                  |
 
 ## Hooks installed in this repo
 

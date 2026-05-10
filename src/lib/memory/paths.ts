@@ -26,6 +26,26 @@ export const MEMORY_ROOT: string = process.env.MEMORY_ROOT || join(homedir(), ".
 export const MAX_FILE_BYTES = 100 * 1024;
 export const MAX_TOTAL_BYTES = 10 * 1024 * 1024;
 
+/**
+ * Auto-collected memory cap. Tighter than the curated cap because every
+ * byte here lands in the system prompt of every chat in every project.
+ * 5 KB ≈ 1,250 tokens — enough for a handful of stable user-level facts.
+ */
+export const AUTO_MEMORY_MAX_BYTES = 5 * 1024;
+
+/** Filename of the single auto-collected memory file under globalMemoryDir(). */
+export const AUTO_MEMORY_FILENAME = "auto.md";
+
+/** Where the consolidator's auto-collected facts live. */
+export function autoMemoryPath(): string {
+  return join(globalMemoryDir(), AUTO_MEMORY_FILENAME);
+}
+
+/** Where the auto-config (on/off toggle) JSON lives. */
+export function autoMemoryConfigPath(): string {
+  return join(MEMORY_ROOT, "auto-config.json");
+}
+
 /** Directory holding global memory `.md` files. */
 export function globalMemoryDir(): string {
   return join(MEMORY_ROOT, "global");

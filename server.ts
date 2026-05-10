@@ -50,9 +50,12 @@ import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { ensureProjectsTree } from "./src/lib/projects/paths";
-import { ensureMemoryTree } from "./src/lib/memory/paths";
+import { ensureMemoryTree, sanitizeCwdForClaude } from "./src/lib/memory/paths";
 import { getGlobalMemoryAppend } from "./src/lib/memory/global-injector";
 import { ensureSdkAutoMemoryEnabled } from "./src/lib/memory/sdk-settings";
+import { migrateAgentConfigToMemory } from "./src/lib/memory/migrate-from-agent-config";
+import { ConsolidationScheduler } from "./src/lib/memory/consolidator";
+import { loadAutoMemoryConfig } from "./src/lib/memory/auto-config";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
 import { setChatSendHandle } from "./src/lib/chat-send-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
@@ -1981,6 +1984,26 @@ class SessionManager {
               },
             })
             .catch(() => {});
+          // Auto-collected memory: schedule a consolidation pass once
+          // the session has been idle for `idleMs` (default 60s). The
+          // scheduler debounces — multi-turn sessions trigger one pass
+          // after the user stops typing. Errors are swallowed so the
+          // chat loop is never affected by a slow LLM call here.
+          (async () => {
+            const cwd = session.sessionCwd;
+            const claudeSessionId = session.claudeSessionId;
+            if (!cwd || !claudeSessionId) return;
+            const config = await loadAutoMemoryConfig().catch(() => null);
+            if (!config || !config.enabled) return;
+            const transcriptPath = join(
+              homedir(),
+              ".claude",
+              "projects",
+              sanitizeCwdForClaude(cwd),
+              `${claudeSessionId}.jsonl`,
+            );
+            consolidationScheduler.schedule(session.id, transcriptPath, config.idleMs);
+          })().catch(() => {});
           // Web Push: notify subscribed devices that the turn finished.
           // Errors fire on the "error" channel instead so users can opt
           // out of one without losing the other.
@@ -2819,14 +2842,31 @@ setChatSendHandle({
 //   - patch ~/.claude/settings.json so the Agent SDK's autoMemoryEnabled +
 //     autoDreamEnabled flags are on (settingSources includes 'user' so the
 //     SDK actually sees these on every query)
+//   - migrate any existing Agent → System Prompt + Rules content into
+//     /root/.memory/global/ (Phase 2 IA absorption — idempotent, never
+//     deletes the originals)
 (async () => {
   try {
     await ensureMemoryTree();
     await ensureSdkAutoMemoryEnabled();
+    const summary = await migrateAgentConfigToMemory();
+    if (summary.instructionsCopied || summary.rulesCopied > 0) {
+      console.log(
+        `[memory] migrated agent-config → memory: ` +
+          `instructions=${summary.instructionsCopied ? "yes" : "no"}, ` +
+          `rules copied=${summary.rulesCopied} skipped=${summary.rulesSkipped}` +
+          (summary.errors.length ? `, errors=${summary.errors.length}` : ""),
+      );
+    }
   } catch (err) {
     console.warn(`!! Could not init memory subsystem: ${(err as Error).message}`);
   }
 })();
+
+// Auto-collected memory consolidator. Singleton scheduler that owns a
+// per-session debounce timer; SessionManager.schedule() is called from
+// the turn_complete handler below.
+const consolidationScheduler = new ConsolidationScheduler();
 
 // Bootstrap the audit log: ensure /root/.audit exists, run a one-shot
 // purge to sweep anything past retention that lingered through a crash,

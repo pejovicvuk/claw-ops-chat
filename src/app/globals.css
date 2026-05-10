@@ -171,43 +171,52 @@ html:not(.dark) {
 .lg-bubble {
   position: relative;
   isolation: isolate;
-  background: rgba(255, 255, 255, 0.06);
-  /* Higher blur radius (40 px vs the original 24 px) frosts the chat
-     text passing under the composer more aggressively, so the pill
-     reads as a heavier piece of glass instead of barely-tinted clear
-     plastic. saturate(200%) keeps the colour pop in the reflected
-     content from washing out under the heavy blur. */
-  backdrop-filter: blur(40px) saturate(200%);
-  -webkit-backdrop-filter: blur(40px) saturate(200%);
+  /* `blur(28px) saturate(170%)` tuned per user: previous `blur(40px)
+     saturate(200%)` was reading more like a solid frosted panel than
+     real liquid glass. 28 px keeps content behind clearly perceptible
+     while still smoothing it out — that's the "looks like glass, not
+     opaque ice" target the user described. */
+  backdrop-filter: blur(28px) saturate(170%);
+  -webkit-backdrop-filter: blur(28px) saturate(170%);
+  background: rgba(0, 0, 0, 0.18);
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.22),
+    0 8px 24px rgba(0, 0, 0, 0.25),
     inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 html:not(.dark) .lg-bubble {
-  background: rgba(255, 255, 255, 0.55);
+  /* Darker than the old `rgba(255,255,255,0.55)` translucent white.
+     A pale-grey tint with bumped opacity reads as glass over light
+     content — the user wanted both PC and phone to look "a little
+     more darker" so the pill stops disappearing into the light
+     canvas. */
+  background: rgba(40, 40, 40, 0.18);
   border-color: rgba(0, 0, 0, 0.08);
   box-shadow:
-    0 6px 20px rgba(0, 0, 0, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.65);
+    0 6px 20px rgba(0, 0, 0, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.45);
 }
 .dark .lg-bubble {
-  background: rgba(255, 255, 255, 0.04);
+  /* Notably darker than the previous `rgba(255,255,255,0.04)` near-
+     transparent white. A 35 % black tint over the blurred backdrop
+     gives the pill weight against the dark canvas — the chat text
+     scrolling behind still reads through but the pill itself reads
+     as a distinct glass surface. */
+  background: rgba(0, 0, 0, 0.38);
   border-color: rgba(255, 255, 255, 0.1);
   box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.4),
+    0 8px 24px rgba(0, 0, 0, 0.45),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
-/* Subtle "wake up" affordance when the composer textarea is focused —
-   replaces the old `.lg-pill:focus-within > .lg-overlay` swap. */
+/* Subtle "wake up" affordance when the composer textarea is focused. */
 .lg-bubble:focus-within {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.22);
 }
 html:not(.dark) .lg-bubble:focus-within {
-  background: rgba(255, 255, 255, 0.78);
+  background: rgba(40, 40, 40, 0.22);
 }
 .dark .lg-bubble:focus-within {
-  background: rgba(255, 255, 255, 0.07);
+  background: rgba(0, 0, 0, 0.42);
 }
 
 /* ── Scroll fade scrims ──
@@ -227,19 +236,42 @@ html:not(.dark) .lg-bubble:focus-within {
   top: 0;
   left: 0;
   right: 0;
-  height: calc(env(safe-area-inset-top, 0px) + 88px);
+  /* Taller scrim (status bar + 140 px) so the long fade-out tail has
+     room to taper out smoothly instead of cliffing off at a hard edge.
+     User reported they could "still see the line" with the previous
+     88 px height + 65 % mask — which left only a 30 px transition
+     band; far too sharp at this blur radius. */
+  height: calc(env(safe-area-inset-top, 0px) + 140px);
   pointer-events: none;
   z-index: 25;
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   background: linear-gradient(
     to bottom,
-    color-mix(in srgb, var(--canvas-bg) 70%, transparent) 0%,
-    color-mix(in srgb, var(--canvas-bg) 40%, transparent) 50%,
+    color-mix(in srgb, var(--canvas-bg) 65%, transparent) 0%,
+    color-mix(in srgb, var(--canvas-bg) 30%, transparent) 50%,
     transparent 100%
   );
-  mask-image: linear-gradient(to bottom, black 0%, black 65%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to bottom, black 0%, black 65%, transparent 100%);
+  /* Multi-stop mask gives an ease-out curve instead of a single linear
+     ramp — the bottom 60 % of the scrim fades from full blur through
+     half-blur to clear, with the half-blur waypoint hiding the visible
+     edge that a 2-stop mask produces. */
+  mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black 35%,
+    rgba(0, 0, 0, 0.55) 65%,
+    rgba(0, 0, 0, 0.18) 85%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black 0%,
+    black 35%,
+    rgba(0, 0, 0, 0.55) 65%,
+    rgba(0, 0, 0, 0.18) 85%,
+    transparent 100%
+  );
 }
 
 /* `.scroll-fade-bottom` was retired: the user wanted the only frosted

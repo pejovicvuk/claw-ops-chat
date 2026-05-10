@@ -101,6 +101,24 @@ export default function RootLayout({
                 yChannelSelector="G"
               />
             </filter>
+            {/*
+              Goo filter referenced by the .thinking-loader SVG. The big
+              alpha multiplier in the colour-matrix is the trick: it
+              maps a soft Gaussian halo into a hard binary edge, so two
+              nearby circles fuse into one organic blob. Pulled from the
+              L02 "Liquid Metal" recipe in the loader sampler the user
+              shared.
+            */}
+            <filter id="thinking-goo">
+              <feGaussianBlur in="SourceGraphic" stdDeviation={10} result="blur" />
+              <feColorMatrix
+                in="blur"
+                mode="matrix"
+                values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -10"
+                result="goo"
+              />
+              <feComposite in="SourceGraphic" in2="goo" operator="atop" />
+            </filter>
           </defs>
         </svg>
         <Providers>{children}</Providers>

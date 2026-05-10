@@ -793,8 +793,19 @@ export function ChatView({
                     })}
                     {(status === "thinking" || status === "tool_running") && (
                       <div className="animate-msg-in group relative flex w-fit items-center gap-2.5 px-5 py-2">
-                        <span className="thinking-loader" aria-hidden="true" />
-                        <span className="text-accent text-[11px]">
+                        <svg
+                          viewBox="0 0 240 200"
+                          className="thinking-loader"
+                          aria-hidden="true"
+                        >
+                          <g filter="url(#thinking-goo)">
+                            <circle className="blob blob-a" cx="120" cy="100" r="36" />
+                            <circle className="blob blob-b" cx="120" cy="100" r="28" />
+                            <circle className="blob blob-c" cx="120" cy="100" r="24" />
+                            <circle className="core" cx="120" cy="100" r="14" />
+                          </g>
+                        </svg>
+                        <span className="text-accent text-[12px] font-medium">
                           {status === "tool_running" && activeTool
                             ? `Running ${activeTool.name}...`
                             : `${thinkingVerb}...`}

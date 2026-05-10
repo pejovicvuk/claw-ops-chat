@@ -835,12 +835,17 @@ export function ChatView({
               the way the old in-scroller floating pill could. */}
 
           {/* Liquid-glass scroll-to-bottom button. Shows whenever the
-              user is scrolled up (regardless of whether new messages
-              arrived). Centered above the input on desktop, right-
-              aligned on mobile so it sits within thumb reach without
-              colliding with the centered composer.
-              `bottom-3` keeps it just above the composer's top edge;
-              `z-20` sits above the messages but below modals. */}
+              user is scrolled up. Click → smooth-scroll + reset unread.
+              Position is layout-aware:
+              - Mobile: composer sits in-flow below the messages area,
+                so `bottom-3` puts the button just above the composer's
+                top edge. `right-4` keeps it within thumb reach.
+              - Desktop: the composer is absolute-positioned over the
+                bottom ~110-130 px of the messages area, so we bump the
+                button up to `md:bottom-28` (112 px) so it clears the
+                composer pill instead of overlapping it. `md:left-1/2`
+                centres it above the composer.
+              `z-20` puts it above the composer wrapper's z-10. */}
           {isScrolledUp && (
             <button
               type="button"
@@ -854,7 +859,7 @@ export function ChatView({
                   : "Scroll to bottom"
               }
               title="Scroll to bottom"
-              className="glass animate-msg-in absolute bottom-3 right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full text-canvas-fg shadow-lg transition-transform duration-150 hover:scale-105 active:scale-95 md:left-1/2 md:right-auto md:-translate-x-1/2"
+              className="glass animate-msg-in absolute bottom-3 right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full text-canvas-fg shadow-lg transition-transform duration-150 hover:scale-105 active:scale-95 md:bottom-28 md:left-1/2 md:right-auto md:-translate-x-1/2"
             >
               <FiArrowDown size={16} />
               {unreadCount > 0 && (

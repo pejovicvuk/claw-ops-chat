@@ -164,7 +164,11 @@ export default function ChatPage() {
   return (
     <AuthGuard>
       <LightboxProvider>
-        <div className="flex h-dvh flex-col overflow-hidden bg-canvas-bg text-canvas-fg">
+        {/* `h-screen` (= 100vh), not `h-dvh` — 100dvh is uninitialized on
+            iOS PWA cold start until the viewport exercises via rotation,
+            so the page floor sits above the home indicator until then.
+            See globals.css `html` rule for the full rationale. */}
+        <div className="flex h-screen flex-col overflow-hidden bg-canvas-bg text-canvas-fg">
           <ChatLayout
             sessions={sessions}
             selectedSessionId={selectedSessionId}

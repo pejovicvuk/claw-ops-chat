@@ -104,19 +104,24 @@ html {
   /* Cascading viewport-height stack for iOS PWAs in standalone mode.
      With `viewportFit: "cover"` + `apple-mobile-web-app-status-bar-style:
      black-translucent` the page paints edge-to-edge UNDER the status bar
-     and home indicator. Plain `height: 100%` does not extend through the
-     bottom safe-area in standalone mode, leaving a visible gap below the
-     UI. The stack:
-       1. `100%`                — universal fallback for older browsers
-       2. `-webkit-fill-available` — iOS Safari pre-16.4
-       3. `100dvh`              — modern (incl. iOS 16.4+); recalculates
-                                  as browser chrome / keyboard appears
-     Each later declaration overrides the prior when the browser supports
-     the unit. `overflow: hidden` stays so the iOS soft keyboard doesn't
-     push the viewport. */
+     and home indicator. Stack:
+       1. `100%`                — universal fallback
+       2. `-webkit-fill-available` — iOS Safari pre-16 fallback
+       3. `100vh`               — the ONLY unit that's correct from
+                                  cold start in iOS PWA standalone mode
+                                  (100dvh is uninitialized until the
+                                  viewport "exercises" via rotation, so
+                                  the page floor sits above the home
+                                  indicator on first paint — that's the
+                                  "horizontal limit and won't go below"
+                                  symptom users actually see).
+     In standalone PWA mode there is no browser chrome to create the
+     classic 100vh bug, so 100vh equals the full physical screen height.
+     `overflow: hidden` stays so the iOS soft keyboard doesn't push the
+     viewport. */
   height: 100%;
   height: -webkit-fill-available;
-  height: 100dvh;
+  height: 100vh;
   overflow: hidden;
   /* Safari on iOS can pick a slightly larger system font when rotating
      between portrait/landscape. Pinning text-size-adjust keeps typo­
@@ -134,12 +139,12 @@ body {
 body {
   margin: 0;
   padding: 0;
-  /* Same cascading height stack as html — without it, the body's
+  /* Same cascading height stack as html. Without it the body's
      intrinsic height collapses to its content and the dark canvas-bg
-     gap re-appears below the composer on iOS PWAs. */
+     re-appears as a gap below the composer on iOS PWAs. */
   min-height: 100%;
   min-height: -webkit-fill-available;
-  min-height: 100dvh;
+  min-height: 100vh;
   background-color: var(--canvas-bg);
   color: var(--canvas-fg);
   /* Inter (loaded via next/font in layout.tsx) is the closest free match

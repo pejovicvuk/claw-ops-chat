@@ -278,8 +278,14 @@ export function ChatLayout({
 
   if (isMobile) {
     return (
+      // `h-screen` (= 100vh), not `h-dvh`. In iOS PWA standalone mode
+      // 100dvh is uninitialized on cold start until the viewport
+      // "exercises" via a rotation — the page floor lands above the
+      // home indicator until you rotate, producing the visible dark
+      // gap users report as "won't reach the bottom." 100vh is the
+      // only unit that's correct from first paint in standalone PWA.
       <div
-        className="flex flex-col h-dvh overflow-hidden"
+        className="flex flex-col h-screen overflow-hidden"
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}

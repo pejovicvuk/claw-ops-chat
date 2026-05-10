@@ -234,17 +234,15 @@ export function ChatInput({
   const voiceDisabled = status === "disconnected" || status === "connecting";
 
   return (
-    // Safe-area-bottom lives on the OUTER wrapper so the
-    // `<ContextUsageBadge />` (rendered after the pill) can sit
-    // ABOVE the home-indicator zone. The user wanted the % context
-    // line back BELOW the input on phone — keeping the badge there
-    // means the wrapper has to host the safe-area pad, not the pill
-    // itself. The pill's internal padding goes back to the original
-    // even py-2.5 so desktop and mobile look identical.
-    <div
-      className="shrink-0 px-3 pt-2"
-      style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
-    >
+    // The OUTER wrapper has NO bottom padding — the pill itself extends
+    // all the way to the screen bottom (iOS draws the home-indicator
+    // gesture line over the pill's bottom edge; the pill is glass).
+    // `<ContextUsageBadge />` lives INSIDE the pill, below the toolbar,
+    // so the user gets it "below the input" while the pill stays
+    // pinned to the very bottom of the screen. Safe-area-bottom is
+    // applied on the inner content's `paddingBottom` so the badge
+    // text clears the home-indicator zone.
+    <div className="shrink-0 px-3 pt-2">
       <div className={`mx-auto ${hasContent ? "md:max-w-6xl" : "md:max-w-5xl"}`}>
         {/* Refined liquid-glass composer pill — single-recipe `.lg-bubble`
             (clean backdrop-blur + 1 px hairline + inset highlight + drop
@@ -255,7 +253,10 @@ export function ChatInput({
             hasContent ? "-translate-y-1" : ""
           }`}
         >
-          <div className="flex flex-col px-3 py-2.5">
+          <div
+            className="flex flex-col px-3 pt-2.5"
+            style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 10px)" }}
+          >
             <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
             <textarea
@@ -310,14 +311,16 @@ export function ChatInput({
               onStop={onStop}
               isMobile={isMobile}
             />
+
+            {/* Context % indicator lives INSIDE the pill, below the
+                toolbar. Keeps the user's "below the input" placement
+                while letting the pill itself extend to the screen
+                bottom — the previous outside-the-pill layout left
+                visible canvas-bg space below the pill (badge offset
+                + safe-area), which the user wanted gone. */}
+            <ContextUsageBadge usage={contextUsage} />
           </div>
         </div>
-
-        {/* Context % indicator stays UNDER the pill — small grey text
-            with the running context utilisation. The user explicitly
-            asked for it to be below the input on phone (and PC), so
-            it's rendered after the pill in flex-flow. */}
-        <ContextUsageBadge usage={contextUsage} />
       </div>
       <MentionPopover
         ref={popoverRef}

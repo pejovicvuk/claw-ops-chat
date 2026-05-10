@@ -171,52 +171,46 @@ html:not(.dark) {
 .lg-bubble {
   position: relative;
   isolation: isolate;
-  /* `blur(28px) saturate(170%)` tuned per user: previous `blur(40px)
-     saturate(200%)` was reading more like a solid frosted panel than
-     real liquid glass. 28 px keeps content behind clearly perceptible
-     while still smoothing it out — that's the "looks like glass, not
-     opaque ice" target the user described. */
-  backdrop-filter: blur(28px) saturate(170%);
-  -webkit-backdrop-filter: blur(28px) saturate(170%);
-  background: rgba(0, 0, 0, 0.18);
+  /* `blur(32px) saturate(175%)` — bumped slightly from the previous
+     28/170 so the desktop composer reads as identical to the phone
+     (the user noticed the PC pill felt less blurry on a larger
+     viewport even though the rule is shared). Still well below the
+     old "solid frosted panel" 40 px tier. */
+  backdrop-filter: blur(32px) saturate(175%);
+  -webkit-backdrop-filter: blur(32px) saturate(175%);
+  background: rgba(0, 0, 0, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.25),
+    0 8px 24px rgba(0, 0, 0, 0.22),
     inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
 html:not(.dark) .lg-bubble {
-  /* Darker than the old `rgba(255,255,255,0.55)` translucent white.
-     A pale-grey tint with bumped opacity reads as glass over light
-     content — the user wanted both PC and phone to look "a little
-     more darker" so the pill stops disappearing into the light
-     canvas. */
-  background: rgba(40, 40, 40, 0.18);
+  background: rgba(40, 40, 40, 0.12);
   border-color: rgba(0, 0, 0, 0.08);
   box-shadow:
-    0 6px 20px rgba(0, 0, 0, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    0 6px 20px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 .dark .lg-bubble {
-  /* Notably darker than the previous `rgba(255,255,255,0.04)` near-
-     transparent white. A 35 % black tint over the blurred backdrop
-     gives the pill weight against the dark canvas — the chat text
-     scrolling behind still reads through but the pill itself reads
-     as a distinct glass surface. */
-  background: rgba(0, 0, 0, 0.38);
+  /* Lightened from the previous 0.38 black tint (per user: "make it a
+     tiny bit lighter"). 0.28 keeps the pill distinct against the
+     dark canvas while letting more of the blurred chat content show
+     through — closer to real frosted glass and less "dark plastic". */
+  background: rgba(0, 0, 0, 0.28);
   border-color: rgba(255, 255, 255, 0.1);
   box-shadow:
-    0 8px 24px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    0 8px 24px rgba(0, 0, 0, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 /* Subtle "wake up" affordance when the composer textarea is focused. */
 .lg-bubble:focus-within {
-  background: rgba(0, 0, 0, 0.22);
+  background: rgba(0, 0, 0, 0.16);
 }
 html:not(.dark) .lg-bubble:focus-within {
-  background: rgba(40, 40, 40, 0.22);
+  background: rgba(40, 40, 40, 0.16);
 }
 .dark .lg-bubble:focus-within {
-  background: rgba(0, 0, 0, 0.42);
+  background: rgba(0, 0, 0, 0.32);
 }
 
 /* ── Scroll fade scrims ──

@@ -101,8 +101,22 @@ html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  /* Prevent iOS keyboard from pushing viewport */
+  /* Cascading viewport-height stack for iOS PWAs in standalone mode.
+     With `viewportFit: "cover"` + `apple-mobile-web-app-status-bar-style:
+     black-translucent` the page paints edge-to-edge UNDER the status bar
+     and home indicator. Plain `height: 100%` does not extend through the
+     bottom safe-area in standalone mode, leaving a visible gap below the
+     UI. The stack:
+       1. `100%`                — universal fallback for older browsers
+       2. `-webkit-fill-available` — iOS Safari pre-16.4
+       3. `100dvh`              — modern (incl. iOS 16.4+); recalculates
+                                  as browser chrome / keyboard appears
+     Each later declaration overrides the prior when the browser supports
+     the unit. `overflow: hidden` stays so the iOS soft keyboard doesn't
+     push the viewport. */
   height: 100%;
+  height: -webkit-fill-available;
+  height: 100dvh;
   overflow: hidden;
   /* Safari on iOS can pick a slightly larger system font when rotating
      between portrait/landscape. Pinning text-size-adjust keeps typo­
@@ -120,6 +134,12 @@ body {
 body {
   margin: 0;
   padding: 0;
+  /* Same cascading height stack as html — without it, the body's
+     intrinsic height collapses to its content and the dark canvas-bg
+     gap re-appears below the composer on iOS PWAs. */
+  min-height: 100%;
+  min-height: -webkit-fill-available;
+  min-height: 100dvh;
   background-color: var(--canvas-bg);
   color: var(--canvas-fg);
   /* Inter (loaded via next/font in layout.tsx) is the closest free match

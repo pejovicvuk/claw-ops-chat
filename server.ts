@@ -2,7 +2,7 @@ import "dotenv/config";
 import { createServer, IncomingMessage } from "http";
 import { parse } from "url";
 import { readFileSync } from "fs";
-import { access, stat } from "fs/promises";
+import { access, rm, stat } from "fs/promises";
 import { spawn, type ChildProcess } from "child_process";
 import { dirname, join, sep } from "path";
 import { homedir } from "os";
@@ -50,7 +50,11 @@ import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { ensureProjectsTree } from "./src/lib/projects/paths";
-import { ensureMemoryTree, sanitizeCwdForClaude } from "./src/lib/memory/paths";
+import {
+  consolidatorClaudeProjectsDir,
+  ensureMemoryTree,
+  sanitizeCwdForClaude,
+} from "./src/lib/memory/paths";
 import { getGlobalMemoryAppend } from "./src/lib/memory/global-injector";
 import { ensureSdkAutoMemoryEnabled } from "./src/lib/memory/sdk-settings";
 import { migrateAgentConfigToMemory } from "./src/lib/memory/migrate-from-agent-config";
@@ -2858,6 +2862,12 @@ setChatSendHandle({
           (summary.errors.length ? `, errors=${summary.errors.length}` : ""),
       );
     }
+    // Sweep stub session JSONLs the consolidator may have left behind in
+    // a previous run that crashed before its post-run cleanup fired.
+    // Without this, every restart starts with the previous orphans
+    // showing up in the chat sidebar's "Recents" as empty
+    // "New conversation" entries.
+    await rm(consolidatorClaudeProjectsDir(), { recursive: true, force: true }).catch(() => {});
   } catch (err) {
     console.warn(`!! Could not init memory subsystem: ${(err as Error).message}`);
   }

@@ -255,43 +255,67 @@ html:not(.dark) {
     inset 0 0 10px var(--lg-highlight);
 }
 
-/* Tumbling bar + orange bowl loader for the "thinking" indicator. The
-   ::before is the orange half-disc; the ::after is a thin bar that rotates
-   independently. Bar color uses --canvas-fg so it stays crisp white in
-   dark mode and dark in light mode (the original design only contrasted
-   in dark mode). */
-@keyframes thinkingLoaderRotate {
+/* "Liquid metal" thinking loader. Three orange blobs orbit a white
+   core inside an SVG goo filter (#thinking-goo, defined in layout.tsx)
+   that fuses overlapping shapes into one organic blob. The blobs are
+   on staggered phases of a single 3.2 s float keyframe so the merge
+   pattern looks chaotic; the core pulses on its own faster cycle so
+   the centre never freezes. Pulled from the L02 recipe in the user's
+   liquid-metal sampler.
+   `transform-box: fill-box` forces transform-origin to the circle's
+   own bounding box rather than the SVG viewBox — without it Safari
+   anchors transforms at (0,0) and the blobs fly off-canvas. */
+@keyframes thinkingBlobFloat {
+  0%,
   100% {
-    transform: rotate(360deg);
+    transform: translate(0, 0) scale(1);
+  }
+  25% {
+    transform: translate(35px, -10px) scale(0.9);
+  }
+  50% {
+    transform: translate(0, 15px) scale(1.1);
+  }
+  75% {
+    transform: translate(-30px, -8px) scale(0.95);
+  }
+}
+
+@keyframes thinkingCorePulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.4);
   }
 }
 
 .thinking-loader {
-  position: relative;
-  width: 20px;
-  height: 20px;
+  width: 28px;
+  height: 28px;
   flex-shrink: 0;
-  animation: thinkingLoaderRotate 1.5s ease-in infinite alternate;
+  display: inline-block;
 }
-.thinking-loader::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  bottom: 0;
-  width: 20px;
-  height: 10px;
-  background: var(--accent);
-  border-radius: 0 0 16px 16px;
+
+.thinking-loader .blob {
+  fill: var(--accent);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: thinkingBlobFloat 3.2s ease-in-out infinite;
 }
-.thinking-loader::after {
-  content: "";
-  position: absolute;
-  left: 50%;
-  top: 10%;
-  width: 3px;
-  height: 20px;
-  background: var(--canvas-fg);
-  animation: thinkingLoaderRotate 1.2s linear infinite alternate-reverse;
+.thinking-loader .blob-b {
+  animation-delay: -1.1s;
+}
+.thinking-loader .blob-c {
+  animation-delay: -2.1s;
+}
+
+.thinking-loader .core {
+  fill: #ffffff;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: thinkingCorePulse 1.8s ease-in-out infinite;
 }
 
 /* Thinking-indicator text — muted base color with a white sheen that

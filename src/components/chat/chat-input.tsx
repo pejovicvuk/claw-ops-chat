@@ -238,25 +238,21 @@ export function ChatInput({
       className="shrink-0 px-3 py-2"
       style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
     >
-      <div
-        className={`mx-auto ${hasContent ? "md:max-w-6xl" : "md:max-w-5xl"}`}
-      >
-        {/* Liquid-glass composer pill — four-layer recipe (filter +
-            overlay + specular + content). Padding + width are constant
-            across rest / focus / has-content so internal layout never
-            reflows when the user clicks in (the click-miss the user
-            previously reported). The transition is scoped to transform
-            only; bg/border-color shifts are handled by CSS rules on
-            `.lg-overlay` / `.lg-specular` so they animate independently. */}
+      <div className={`mx-auto ${hasContent ? "md:max-w-6xl" : "md:max-w-5xl"}`}>
+        {/* Refined liquid-glass composer pill — single-recipe `.lg-bubble`
+            (clean backdrop-blur + 1 px hairline + inset highlight + drop
+            shadow). Replaces the older four-layer `.lg-pill` with its
+            SVG displacement filter, which warped any chat text scrolling
+            behind the floating composer into a "wavy" gimmicky look. Now
+            that the composer is `position: absolute` on every viewport,
+            the text passing under it reads as cleanly frosted glass —
+            same shape as the floating top bubbles. */}
         <div
-          className={`lg-pill rounded-[24px] transition-transform duration-300 ease-out ${
+          className={`lg-bubble rounded-[24px] transition-transform duration-300 ease-out ${
             hasContent ? "-translate-y-1" : ""
           }`}
         >
-          <span className="lg-filter" aria-hidden="true" />
-          <span className="lg-overlay" aria-hidden="true" />
-          <span className="lg-specular" aria-hidden="true" />
-          <div className="lg-content flex flex-col px-3 py-2.5">
+          <div className="flex flex-col px-3 py-2.5">
             <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
             <textarea

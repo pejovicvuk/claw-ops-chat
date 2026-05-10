@@ -344,7 +344,13 @@ export function ChatLayout({
             >
               <div
                 className="flex h-full flex-col"
-                style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 8px)" }}
+                style={{
+                  paddingTop: "max(env(safe-area-inset-top, 0px), 8px)",
+                  // The drawer is `position: fixed inset-y-0`, so it
+                  // extends edge-to-edge and would otherwise let its last
+                  // session row sit underneath the iOS home indicator.
+                  paddingBottom: "env(safe-area-inset-bottom, 0px)",
+                }}
               >
                 {/* Header intentionally removed on mobile — the drawer
                     closes by tapping the backdrop, swiping left, or

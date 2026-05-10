@@ -85,6 +85,18 @@
   box-sizing: border-box;
 }
 
+/*
+ * Kill the default iOS / Android grey tap-highlight rectangle. Every
+ * button in the app already has its own active/hover affordance —
+ * leaving the OS one in produced the "juddery" tap feedback that
+ * contributed to the "too fixed" feel on iPhone. Per-control opt-back-
+ * in via `-webkit-tap-highlight-color: rgba(...)` if any element ever
+ * needs the native flash again.
+ */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
 html {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -92,6 +104,11 @@ html {
   /* Prevent iOS keyboard from pushing viewport */
   height: 100%;
   overflow: hidden;
+  /* Safari on iOS can pick a slightly larger system font when rotating
+     between portrait/landscape. Pinning text-size-adjust keeps typo­
+     graphic rhythm steady across rotations. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
 }
 
 html,
@@ -112,6 +129,11 @@ body {
     var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   overflow: hidden;
+  /* Disables the iOS 300 ms double-tap-to-zoom delay while still
+     allowing pinch / pan inside scrollable regions (which opt back in
+     via `touch-action: auto`). Removes the latency that made buttons
+     feel sluggish in the PWA. */
+  touch-action: manipulation;
 }
 
 html.dark {
@@ -120,6 +142,30 @@ html.dark {
 
 html:not(.dark) {
   color-scheme: light;
+}
+
+/*
+ * iOS PWA standalone polish. `display-mode: standalone` matches only
+ * when the app is launched from the Home Screen — Safari-in-browser
+ * does NOT match, so these tweaks land only on installed PWAs.
+ *
+ *  - Paint the safe-area regions explicitly with canvas-bg so any
+ *    momentary gap during route transitions / WebSocket reconnects
+ *    can't reveal a black bar behind the notch or home indicator.
+ *  - `overflow: hidden` on html+body is already set above; in
+ *    standalone we ALSO clamp `position: fixed` so iOS doesn't try to
+ *    drag-scroll the document when a child container is at its scroll
+ *    boundary (the "elastic body" bug that lifts the whole UI 1-2 px
+ *    when you over-scroll a chat).
+ */
+@media (display-mode: standalone) {
+  html,
+  body {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
 }
 
 /* ── Overlay Surface ── */

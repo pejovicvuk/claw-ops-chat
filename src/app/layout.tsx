@@ -22,7 +22,14 @@ export const metadata: Metadata = {
   manifest: "/chat/manifest.json",
   appleWebApp: {
     capable: true,
-    statusBarStyle: "black-translucent",
+    // `default` (vs the previous `black-translucent`) lets iOS choose
+    // status-bar text contrast based on the page's theme-color rather
+    // than always using white icons. The old setting forced white iOS
+    // icons on top of our light-mode canvas (#f2f2f2), which made the
+    // status bar borderline-illegible — and combined with the doubled
+    // safe-area padding (see chat-layout / chat-view) it made the
+    // layout feel "fixed" and pushed-down on iPhone PWAs.
+    statusBarStyle: "default",
     title: "Claw Chat",
   },
   icons: {
@@ -40,12 +47,20 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
+  // `maximumScale: 1` + `userScalable: false` suppress the iOS auto-zoom
+  // on input focus when font-size < 16px. We already enforce 16px on the
+  // textarea, so these are belt-and-braces.
   maximumScale: 1,
   userScalable: false,
+  // Required so `env(safe-area-inset-*)` returns real values on notched
+  // iPhones — without `cover` they all evaluate to 0.
   viewportFit: "cover",
+  // Matches `--canvas-bg` in globals.css so the iOS PWA status-bar tint
+  // blends seamlessly into the page background instead of producing a
+  // visible seam between status bar and chrome on first paint.
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+    { media: "(prefers-color-scheme: light)", color: "#f2f2f2" },
+    { media: "(prefers-color-scheme: dark)", color: "#111111" },
   ],
 };
 

@@ -100,20 +100,14 @@ export function ComposerToolbar({
 
       <div className="flex-1" />
 
-      {/* Mobile hoists the model+thinking picker to the floating top
-          chrome (see <MobileTopChrome />), so the composer toolbar
-          drops it on narrow viewports to keep the bottom row breathy
-          and the composer pill from stacking two trigger buttons. */}
-      {!isMobile && (
-        <ModelThinkingPicker
-          model={model}
-          setModel={setModel}
-          effort={effort}
-          setEffort={setEffort}
-          contextUsage={contextUsage}
-          compact={isMobile}
-        />
-      )}
+      <ModelThinkingPicker
+        model={model}
+        setModel={setModel}
+        effort={effort}
+        setEffort={setEffort}
+        contextUsage={contextUsage}
+        compact={isMobile}
+      />
 
       <VoiceRecorder
         onTranscribed={onTranscribed}

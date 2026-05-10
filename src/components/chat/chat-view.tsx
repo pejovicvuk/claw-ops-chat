@@ -613,11 +613,6 @@ export function ChatView({
               status={status}
               activeTool={activeTool}
               reconnect={reconnect}
-              model={model}
-              setModel={setModel}
-              effort={effort}
-              setEffort={setEffort}
-              contextUsage={contextUsage}
             />
           </>
         )}

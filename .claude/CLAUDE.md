@@ -58,6 +58,7 @@ Also relevant:
 | Settings UI                                 | `src/components/settings/pages/`                                                         |
 | Monitoring UI                               | `src/components/monitoring/`                                                             |
 | Audit subsystem                             | `src/lib/audit/`                                                                         |
+| Memory subsystem (global + SDK glue)        | `src/lib/memory/`                                                                        |
 | Push notifications                          | `src/lib/push/` + `public/sw.js`                                                         |
 | Monitoring (collectors, alerts, automation) | `src/lib/monitoring/`                                                                    |
 | Scheduled reports                           | `src/lib/reports/`                                                                       |
@@ -80,6 +81,8 @@ Bound to host as a single `/root` volume. Quick reference:
 | Path                                               | What                                               |
 | -------------------------------------------------- | -------------------------------------------------- |
 | `/root/.audit/{api,cron,session}/YYYY-MM-DD.jsonl` | Audit log files (rotated daily, purged after 30 d) |
+| `/root/.memory/global/`                            | Global memory (.md), loaded into every turn        |
+| `~/.claude/projects/<sanitized-cwd>/memory/`       | SDK auto-memory (per-project), model-managed       |
 | `/root/.cache/unfurls/`, `/root/.cache/images/`    | Preview caches (24 h / 7 d TTL)                    |
 | `/root/.session-status/<id>.json`                  | SessionManager status snapshot                     |
 | `/root/.claude/projects/<hash>/<id>.jsonl`         | SDK chat transcripts                               |

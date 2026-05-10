@@ -10,6 +10,7 @@ export interface ChatMessage {
     | "ask_question"
     | "plan_proposal"
     | "stopped"
+    | "memory_recall"
     | "error";
   content: string;
   toolName?: string;
@@ -35,6 +36,10 @@ export interface ChatMessage {
   /** How the user resolved the plan — drives the "Approved"/"Rejected" badge. */
   planOutcome?: "approved_accept_edits" | "approved_default" | "approved_auto" | "rejected";
   planMessage?: string;
+  /** For memory_recall messages — paths the SDK auto-memory supervisor surfaced into this turn. */
+  memoryRecallPaths?: string[];
+  /** Recall mode reported by the SDK: full file bodies vs. distilled synthesis. */
+  memoryRecallMode?: "select" | "synthesize";
 }
 
 export type ClaudeStatus =

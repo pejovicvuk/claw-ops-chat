@@ -29,17 +29,39 @@ interface MarkdownFileRecord {
   updatedAt: number;
 }
 
+/**
+ * Default name validator: the slug shape used by rules/skills/subagents.
+ * Memory files override this to allow slashes and a `.md` suffix.
+ */
+const DEFAULT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+const DEFAULT_NAME_HINT = "Use lowercase letters, digits, or dashes (up to 64 chars).";
+
 export interface MarkdownFileEditorProps {
   /** Settings page label in the UI — e.g. "Rule", "Skill", "Subagent". */
   singular: string;
   /** Plural form for empty states + list header. */
   plural: string;
-  /** API path segment under /api/agent-config/<endpoint>. */
-  endpoint: "rules" | "skills" | "subagents";
+  /** API path segment under /api/agent-config/<endpoint>. Ignored when `apiPath` is set. */
+  endpoint?: "rules" | "skills" | "subagents";
+  /**
+   * Full API path under the app's base path, e.g. `/api/memory/global`.
+   * When set, takes precedence over `endpoint`. Lets the editor drive
+   * any CRUD endpoint that mirrors the agent-config conventions.
+   */
+  apiPath?: string;
   /** Text shown on the empty-list card. */
   emptyHelp: string;
   /** Template seeded into the textarea when creating a new item. */
   newTemplate: string;
+  /**
+   * Validator for the `name` input on new items. Defaults to the slug
+   * shape used by rules/skills/subagents.
+   */
+  nameRegex?: RegExp;
+  /** Help text shown when `nameRegex` rejects the typed name. */
+  nameHint?: string;
+  /** Placeholder text for the name input. */
+  namePlaceholder?: string;
 }
 
 type Mode =
@@ -55,15 +77,29 @@ export function MarkdownFileEditor({
   singular,
   plural,
   endpoint,
+  apiPath,
   emptyHelp,
   newTemplate,
+  nameRegex = DEFAULT_NAME_RE,
+  nameHint = DEFAULT_NAME_HINT,
+  namePlaceholder = "my-rule",
 }: MarkdownFileEditorProps) {
   const [items, setItems] = useState<MarkdownItem[] | null>(null);
   const [mode, setMode] = useState<Mode>({ kind: "list" });
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const apiRoot = `${BASE}/api/agent-config/${endpoint}`;
+  if (!apiPath && !endpoint) {
+    throw new Error("MarkdownFileEditor requires either apiPath or endpoint");
+  }
+  const apiRoot = apiPath ?? `${BASE}/api/agent-config/${endpoint}`;
+
+  /**
+   * Encode each path segment but preserve `/` separators so memory files
+   * with subpaths (e.g. `progress/today.md`) hit the right catch-all
+   * route. For the existing slug-style names this is a no-op.
+   */
+  const encodePath = (name: string): string => name.split("/").map(encodeURIComponent).join("/");
 
   const refresh = useCallback(async () => {
     try {
@@ -85,7 +121,7 @@ export function MarkdownFileEditor({
       setErr(null);
       setMode({ kind: "edit", name, initialContent: "" });
       try {
-        const res = await authFetch(`${apiRoot}/${encodeURIComponent(name)}`);
+        const res = await authFetch(`${apiRoot}/${encodePath(name)}`);
         if (!res.ok) throw new Error("read");
         const data = (await res.json()) as MarkdownFileRecord;
         setMode({ kind: "edit", name, initialContent: data.content });
@@ -102,7 +138,7 @@ export function MarkdownFileEditor({
       setBusy(true);
       setErr(null);
       try {
-        const res = await authFetch(`${apiRoot}/${encodeURIComponent(name)}`, {
+        const res = await authFetch(`${apiRoot}/${encodePath(name)}`, {
           method: "DELETE",
         });
         if (!res.ok) throw new Error("delete");
@@ -122,7 +158,7 @@ export function MarkdownFileEditor({
       setBusy(true);
       setErr(null);
       try {
-        const url = opts.isNew ? apiRoot : `${apiRoot}/${encodeURIComponent(opts.name)}`;
+        const url = opts.isNew ? apiRoot : `${apiRoot}/${encodePath(opts.name)}`;
         const method = opts.isNew ? "POST" : "PUT";
         const body = opts.isNew
           ? { name: opts.name, content: opts.content }
@@ -158,6 +194,9 @@ export function MarkdownFileEditor({
         initialContent={newTemplate}
         err={err}
         busy={busy}
+        nameRegex={nameRegex}
+        nameHint={nameHint}
+        namePlaceholder={namePlaceholder}
         onCancel={() => {
           setErr(null);
           setMode({ kind: "list" });
@@ -176,6 +215,9 @@ export function MarkdownFileEditor({
         initialContent={mode.initialContent}
         err={err}
         busy={busy}
+        nameRegex={nameRegex}
+        nameHint={nameHint}
+        namePlaceholder={namePlaceholder}
         onCancel={() => {
           setErr(null);
           setMode({ kind: "list" });
@@ -257,6 +299,9 @@ interface EditorViewProps {
   initialContent: string;
   err: string | null;
   busy: boolean;
+  nameRegex: RegExp;
+  nameHint: string;
+  namePlaceholder: string;
   onCancel: () => void;
   onSave: (opts: { name: string; content: string; isNew: boolean }) => void;
   onDelete?: () => void;
@@ -269,6 +314,9 @@ function EditorView({
   initialContent,
   err,
   busy,
+  nameRegex,
+  nameHint,
+  namePlaceholder,
   onCancel,
   onSave,
   onDelete,
@@ -280,7 +328,7 @@ function EditorView({
     setContent(initialContent);
   }, [initialContent]);
 
-  const nameValid = useMemo(() => /^[a-z0-9][a-z0-9-]{0,63}$/.test(name), [name]);
+  const nameValid = useMemo(() => nameRegex.test(name), [name, nameRegex]);
   const canSave = nameValid && content.length > 0 && !busy;
 
   return (
@@ -303,7 +351,7 @@ function EditorView({
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value.toLowerCase())}
-                placeholder="my-rule"
+                placeholder={namePlaceholder}
                 className="w-full rounded-lg border border-canvas-border bg-canvas-bg px-3 py-2 font-mono text-[12px] text-canvas-fg placeholder:text-canvas-muted/60 focus:border-accent focus:outline-none"
                 autoComplete="off"
                 spellCheck={false}
@@ -315,9 +363,7 @@ function EditorView({
               </p>
             )}
             {isNew && name.length > 0 && !nameValid && (
-              <p className="mt-1 text-[10px] text-red-500">
-                Use lowercase letters, digits, or dashes (up to 64 chars).
-              </p>
+              <p className="mt-1 text-[10px] text-red-500">{nameHint}</p>
             )}
           </div>
 

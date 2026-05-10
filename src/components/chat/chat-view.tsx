@@ -568,10 +568,15 @@ export function ChatView({
         style={{ height: headerless ? "100%" : viewportHeight, overflow: "hidden" }}
       >
         {!headerless && (
-          <div
-            className="flex shrink-0 items-center gap-2 border-b border-canvas-border px-3 py-2.5"
-            style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 10px)" }}
-          >
+          // The mobile branch in <ChatLayout /> already reserves the
+          // safe-area-top for the notch on its outer wrapper, and the
+          // desktop branch has no safe area to worry about — so this
+          // toolbar's padding is purely visual breathing room. Adding
+          // env(safe-area-inset-top) here on top of the wrapper's own
+          // env() doubled the notch reservation on iOS PWAs (47 + 47 =
+          // 94 px of dead space) — that's the "too fixed / pushed-down"
+          // look the layout had before.
+          <div className="flex shrink-0 items-center gap-2 border-b border-canvas-border px-3 py-2.5">
             {onBack && (
               <button
                 type="button"
@@ -596,12 +601,12 @@ export function ChatView({
             toolbar; the model picker and context-usage badge live
             there too. */}
         {headerless && (
-          <div
-            className="flex shrink-0 items-center gap-2 px-3 py-1.5"
-            style={{
-              paddingTop: "max(env(safe-area-inset-top, 0px), 6px)",
-            }}
-          >
+          // Same reasoning as the !headerless branch above: ChatLayout's
+          // mobile wrapper already accounts for env(safe-area-inset-top),
+          // so doubling it here was producing ~2× the notch padding on
+          // iPhone PWAs. Plain `py-1.5` is the right amount of breathing
+          // room above this slim utility bar.
+          <div className="flex shrink-0 items-center gap-2 px-3 py-1.5">
             {isMobile && onOpenSessions && (
               <button
                 type="button"

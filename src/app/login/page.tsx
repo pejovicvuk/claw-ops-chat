@@ -109,7 +109,7 @@ export default function LoginPage() {
   if (!mounted || loading) return null;
 
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-canvas-bg p-4">
+    <div className="flex min-h-screen items-center justify-center bg-canvas-bg p-4">
       <form onSubmit={handleSubmit} noValidate className="w-full max-w-sm space-y-4">
         <h1 className="text-center text-xl font-semibold text-canvas-fg">Claw Chat</h1>
         <p className="text-center text-sm text-canvas-muted">Sign in to continue</p>

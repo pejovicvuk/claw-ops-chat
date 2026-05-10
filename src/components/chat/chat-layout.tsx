@@ -291,13 +291,11 @@ export function ChatLayout({
           style={{ zIndex: Z_INDEX.MODAL - 1, opacity: 0, transition: "opacity 100ms" }}
         />
 
-        {/* Mobile only renders ChatView — it owns the single top toolbar
-            now (Mode/Effort pills + sessions button), so we don't stack
-            a second bar above it. Reserve safe-area-top for the notch. */}
-        <div
-          className="flex min-h-0 flex-1 flex-col"
-          style={{ paddingTop: "max(env(safe-area-inset-top, 0px), 0px)" }}
-        >
+        {/* Mobile renders ChatView edge-to-edge: NO top safe-area
+            reservation. Content scrolls under the iOS status bar and
+            under the floating chrome bubbles; the `.scroll-fade-top`
+            overlay handles legibility by frosting that band. */}
+        <div className="flex min-h-0 flex-1 flex-col">
           {params.get("view") === "projects" ? (
             <ProjectsMainPane onOpenSessions={() => setSidebarOpen(true)} />
           ) : params.get("view") === "reports" ? (
@@ -323,6 +321,7 @@ export function ChatLayout({
               onSessionCreated={onSessionCreated}
               onOpenSessions={() => setSidebarOpen(true)}
               onOpenFiles={() => setFilesPanelOpen(true)}
+              onNewChat={onNewChat}
               headerless
             />
           )}

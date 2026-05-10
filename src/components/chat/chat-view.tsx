@@ -832,15 +832,6 @@ export function ChatView({
             )}
           </div>
 
-          {/* Bottom blur scrim — only on mobile, where the composer
-              sits IN the flex flow directly below this `relative flex-1`
-              wrapper. With `position: absolute; bottom: 0` the scrim
-              aligns to the composer's top edge, so chat content fades
-              through a frosted band into the composer pill. Rendered
-              AFTER the scroll container so it stacks above by default
-              (no z-index gymnastics needed). */}
-          {isMobile && headerless && <div className="scroll-fade-bottom" aria-hidden="true" />}
-
           {/* Awaiting-input awareness lives in <ApprovalBanner /> above
               the scroll container — it covers permission, plan, AND ask,
               and can't be content-visibility-skipped or overflow-clipped

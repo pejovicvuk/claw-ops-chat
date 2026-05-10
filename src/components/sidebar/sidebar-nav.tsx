@@ -35,9 +35,9 @@ interface NavRowProps {
 }
 
 /**
- * One row of the sidebar nav. The icon sits inside a thin-bordered
- * circle (Perplexity Comet styling); the label uses font-medium so it
- * reads as "slightly bolded" without crossing into semibold.
+ * One row of the sidebar nav. Plain stroke icon + medium-weight label,
+ * Claude-style — no outlined-circle wrapper around the icon. The
+ * row's hover / active background is the only visual chrome.
  */
 function NavRow({ icon, label, active, badge, onClick }: NavRowProps): ReactNode {
   return (
@@ -45,16 +45,13 @@ function NavRow({ icon, label, active, badge, onClick }: NavRowProps): ReactNode
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`focus-ring btn-press flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left transition-colors ${
+      className={`focus-ring btn-press flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors ${
         active
           ? "bg-canvas-surface-hover text-canvas-fg"
           : "text-canvas-fg hover:bg-canvas-surface-hover/60"
       }`}
     >
-      <span
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border text-canvas-fg"
-        style={{ borderColor: "var(--canvas-border)" }}
-      >
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center text-canvas-muted">
         {icon}
       </span>
       <span className="flex-1 truncate text-[14px] font-medium">{label}</span>
@@ -72,9 +69,8 @@ function NavRow({ icon, label, active, badge, onClick }: NavRowProps): ReactNode
 }
 
 /**
- * Vertical icon-row navigation that replaces the old segmented Chats /
- * Reports / Projects tab strip. The visual reference is the Perplexity
- * Comet sidebar: outlined-circle icons + medium-weight labels.
+ * Vertical icon + label navigation. Claude-style: plain stroke icons
+ * (no circle wrapper), medium-weight labels, soft hover/active rows.
  */
 export function SidebarNav({
   active,
@@ -84,28 +80,28 @@ export function SidebarNav({
 }: SidebarNavProps): ReactNode {
   return (
     <nav className="flex flex-col gap-0.5 px-2 py-2" aria-label="Main">
-      <NavRow icon={<FiPlus size={15} strokeWidth={2.25} />} label="New" onClick={onNew} />
+      <NavRow icon={<FiPlus size={16} strokeWidth={2.25} />} label="New chat" onClick={onNew} />
       <NavRow
-        icon={<FiFolder size={14} />}
+        icon={<FiFolder size={16} />}
         label="Projects"
         active={active === "projects"}
         onClick={() => onNavigate("projects")}
       />
       <NavRow
-        icon={<FiBarChart2 size={14} />}
+        icon={<FiBarChart2 size={16} />}
         label="Reports"
         active={active === "reports"}
         badge={unreadReports}
         onClick={() => onNavigate("reports")}
       />
       <NavRow
-        icon={<FiCpu size={14} />}
+        icon={<FiCpu size={16} />}
         label="Agents"
         active={active === "agents"}
         onClick={() => onNavigate("agents")}
       />
       <NavRow
-        icon={<FiMessageSquare size={14} />}
+        icon={<FiMessageSquare size={16} />}
         label="Chats"
         active={active === "chats"}
         onClick={() => onNavigate("chats")}

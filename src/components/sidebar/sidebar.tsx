@@ -115,17 +115,11 @@ export function Sidebar({
         unreadReports={feed.unreadCount}
       />
 
-      {/* Divider between the nav block and the history block. Same hairline
-          as the rest of the app's section separators. */}
-      <div className="mx-3 mb-1 mt-1 border-t border-canvas-border" aria-hidden="true" />
-
-      {/* History header — small caption + refresh button. The detailed
-          search experience lives on the dedicated Chats page; this list
-          is a quick-jump recents view only. */}
-      <div className="flex shrink-0 items-center justify-between px-4 pb-1 pt-1.5">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-canvas-muted">
-          History
-        </span>
+      {/* "Recents" caption — Claude-style: title-case, muted, no uppercase
+          tracking, no divider above. The whitespace + caption shift is the
+          only signal between the nav and the chat history. */}
+      <div className="flex shrink-0 items-center justify-between px-4 pb-1 pt-3">
+        <span className="text-[12px] text-canvas-muted">Recents</span>
         <button
           type="button"
           onClick={onRefreshSessions}
@@ -151,7 +145,7 @@ export function Sidebar({
         />
       </div>
 
-      <div className="shrink-0 border-t border-canvas-border px-2 py-2">
+      <div className="shrink-0 px-2 py-2">
         <button
           type="button"
           onClick={openSettings}

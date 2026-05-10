@@ -421,7 +421,7 @@ export function ChatLayout({
             </button>
           ) : (
             <div className="flex h-full flex-col" style={{ width: SIDEBAR_EXPANDED_WIDTH }}>
-              <div className="flex h-12 shrink-0 items-center justify-between border-b border-canvas-border px-3">
+              <div className="flex h-12 shrink-0 items-center justify-between px-3">
                 <span className="text-[13px] font-semibold text-canvas-fg">Claw Chat</span>
                 <button
                   type="button"

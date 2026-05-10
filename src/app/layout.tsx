@@ -22,14 +22,13 @@ export const metadata: Metadata = {
   manifest: "/chat/manifest.json",
   appleWebApp: {
     capable: true,
-    // `default` (vs the previous `black-translucent`) lets iOS choose
-    // status-bar text contrast based on the page's theme-color rather
-    // than always using white icons. The old setting forced white iOS
-    // icons on top of our light-mode canvas (#f2f2f2), which made the
-    // status bar borderline-illegible — and combined with the doubled
-    // safe-area padding (see chat-layout / chat-view) it made the
-    // layout feel "fixed" and pushed-down on iPhone PWAs.
-    statusBarStyle: "default",
+    // `black-translucent` lets the page paint EDGE-TO-EDGE under the
+    // iOS status bar — the chat scrolls beneath, and the
+    // `.scroll-fade-top` overlay frosts that band so the white iOS
+    // status icons stay legible against the moving content. With the
+    // doubled safe-area padding now removed, this is the iOS-native
+    // fullscreen treatment the Anthropic / Claude.ai apps use.
+    statusBarStyle: "black-translucent",
     title: "Claw Chat",
   },
   icons: {

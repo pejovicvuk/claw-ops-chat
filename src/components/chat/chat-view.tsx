@@ -5,8 +5,6 @@ import {
   FiArrowDown,
   FiArrowLeft,
   FiShield,
-  FiFolder,
-  FiMessageCircle,
   FiAlertTriangle,
   FiAlertOctagon,
 } from "react-icons/fi";
@@ -21,6 +19,7 @@ import { fetchSessionMessages } from "@/lib/api";
 import type { UploadEntry } from "@/lib/batch-upload";
 import { HeaderIndicators } from "./header-indicators";
 import { MessageBubble } from "./message-bubble";
+import { MobileTopChrome } from "./mobile-top-chrome";
 import { SessionCwdProvider } from "@/lib/session-cwd-context";
 import { ChatFilesProvider } from "@/lib/chat-files-context";
 import { ChatInput } from "./chat-input";
@@ -116,13 +115,12 @@ interface ChatViewProps {
   onBack?: () => void;
   headerless?: boolean;
   onSessionCreated?: (claudeSessionId: string) => void;
-  /** Mobile-only: when provided, the Mode/Effort bar shows a chat-list
-      icon at the start that invokes this. Merges two stacked toolbars
-      into one on narrow viewports. */
+  /** Mobile-only: invoked by the floating sessions glass bubble. */
   onOpenSessions?: () => void;
-  /** Mobile-only: opens the Files panel. Mirrors `onOpenSessions` but at
-      the opposite end of the Mode/Effort bar. */
+  /** Mobile-only: invoked by the floating files glass bubble. */
   onOpenFiles?: () => void;
+  /** Mobile-only: invoked by the floating accent "+" new-chat bubble. */
+  onNewChat?: () => void;
   /**
    * Initial working directory for a NEW chat (no resumeSessionId).
    * Used by the per-item canvas to scope a session to the item's
@@ -140,6 +138,7 @@ export function ChatView({
   onSessionCreated,
   onOpenSessions,
   onOpenFiles,
+  onNewChat,
   defaultCwd,
 }: ChatViewProps) {
   const isMobile = useIsMobile();
@@ -593,40 +592,37 @@ export function ChatView({
           </div>
         )}
 
-        {/* Slim utility bar — only rendered in `headerless` mode (the
-            common path used by ChatLayout). Hosts the mobile-only
-            sessions / files icons and right-aligns the HeaderIndicators
-            cluster (status · 5-hour · weekly). The old Mode pill and
-            Effort segmented control now live inside the composer
-            toolbar; the model picker and context-usage badge live
-            there too. */}
-        {headerless && (
-          // Same reasoning as the !headerless branch above: ChatLayout's
-          // mobile wrapper already accounts for env(safe-area-inset-top),
-          // so doubling it here was producing ~2× the notch padding on
-          // iPhone PWAs. Plain `py-1.5` is the right amount of breathing
-          // room above this slim utility bar.
+        {/* Headerless mode renders different chrome per viewport:
+         *
+         *  - Mobile  → no in-flow toolbar at all. Floating
+         *    `<MobileTopChrome />` glass bubbles + a `.scroll-fade-top`
+         *    blur scrim sit on top of the chat. Messages scroll
+         *    edge-to-edge under both, and the white iOS status-bar
+         *    icons stay legible against the frosted band.
+         *  - Desktop → keep the slim utility bar; it just hosts the
+         *    HeaderIndicators cluster aligned right (no sessions /
+         *    files icons on desktop, those live in the grid sidebars).
+         */}
+        {headerless && isMobile && (onOpenSessions || onOpenFiles || onNewChat) && (
+          <>
+            <div className="scroll-fade-top" aria-hidden="true" />
+            <MobileTopChrome
+              onOpenSessions={onOpenSessions ?? (() => {})}
+              onOpenFiles={onOpenFiles ?? (() => {})}
+              onNewChat={onNewChat ?? (() => {})}
+              status={status}
+              activeTool={activeTool}
+              reconnect={reconnect}
+              model={model}
+              setModel={setModel}
+              effort={effort}
+              setEffort={setEffort}
+              contextUsage={contextUsage}
+            />
+          </>
+        )}
+        {headerless && !isMobile && (
           <div className="flex shrink-0 items-center gap-2 px-3 py-1.5">
-            {isMobile && onOpenSessions && (
-              <button
-                type="button"
-                onClick={onOpenSessions}
-                aria-label="Open conversations"
-                className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-95"
-              >
-                <FiMessageCircle size={15} />
-              </button>
-            )}
-            {isMobile && onOpenFiles && (
-              <button
-                type="button"
-                onClick={onOpenFiles}
-                aria-label="Open files"
-                className="flex h-7 w-7 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg active:scale-95"
-              >
-                <FiFolder size={15} />
-              </button>
-            )}
             <div className="ml-auto">
               <HeaderIndicators status={status} activeTool={activeTool} reconnect={reconnect} />
             </div>
@@ -798,11 +794,7 @@ export function ChatView({
                     })}
                     {(status === "thinking" || status === "tool_running") && (
                       <div className="animate-msg-in group relative flex w-fit items-center gap-2.5 px-5 py-2">
-                        <svg
-                          viewBox="0 0 240 200"
-                          className="thinking-loader"
-                          aria-hidden="true"
-                        >
+                        <svg viewBox="0 0 240 200" className="thinking-loader" aria-hidden="true">
                           <g filter="url(#thinking-goo)">
                             <circle className="blob blob-a" cx="120" cy="100" r="36" />
                             <circle className="blob blob-b" cx="120" cy="100" r="28" />
@@ -844,6 +836,15 @@ export function ChatView({
               </SessionCwdProvider>
             )}
           </div>
+
+          {/* Bottom blur scrim — only on mobile, where the composer
+              sits IN the flex flow directly below this `relative flex-1`
+              wrapper. With `position: absolute; bottom: 0` the scrim
+              aligns to the composer's top edge, so chat content fades
+              through a frosted band into the composer pill. Rendered
+              AFTER the scroll container so it stacks above by default
+              (no z-index gymnastics needed). */}
+          {isMobile && headerless && <div className="scroll-fade-bottom" aria-hidden="true" />}
 
           {/* Awaiting-input awareness lives in <ApprovalBanner /> above
               the scroll container — it covers permission, plan, AND ask,

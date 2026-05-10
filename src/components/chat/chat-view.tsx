@@ -161,7 +161,6 @@ export function ChatView({
     permissionMode,
     effort,
     model,
-    sessionStartedAt,
     respondPermission,
     respondQuestion,
     respondPlan,
@@ -172,14 +171,6 @@ export function ChatView({
     setInitialMessages,
     setInitialContextUsage,
   } = useClaudeChat(sessionId, sessionCwd);
-  // Live "turns" count for the HUD popup. Counts the user's text bubbles
-  // — system info chips (Shift+Tab banners) and Claude's tool_use /
-  // tool_result entries are intentionally excluded so the figure matches
-  // the user's intuition of "how many things have I asked".
-  const turnCount = useMemo(
-    () => messages.filter((m) => m.role === "user" && m.type === "text").length,
-    [messages],
-  );
   const notifiedSessionRef = useRef<string | null>(null);
   const { setParam } = useUrlState();
   const { viewportHeight } = useVisualViewport();
@@ -590,25 +581,17 @@ export function ChatView({
             <div className="min-w-0 flex-1">
               <p className="truncate text-[14px] font-semibold text-canvas-fg">Claude</p>
             </div>
-            <HeaderIndicators
-              status={status}
-              activeTool={activeTool}
-              contextUsage={contextUsage}
-              sessionStartedAt={sessionStartedAt}
-              turnCount={turnCount}
-              model={model}
-              setModel={setModel}
-              reconnect={reconnect}
-            />
+            <HeaderIndicators status={status} activeTool={activeTool} reconnect={reconnect} />
           </div>
         )}
 
         {/* Slim utility bar — only rendered in `headerless` mode (the
             common path used by ChatLayout). Hosts the mobile-only
             sessions / files icons and right-aligns the HeaderIndicators
-            cluster (status · 5-hour · weekly · HUD; the context ring
-            moved into the composer). The old Mode pill and Effort
-            segmented control now live inside the composer toolbar. */}
+            cluster (status · 5-hour · weekly). The old Mode pill and
+            Effort segmented control now live inside the composer
+            toolbar; the model picker and context-usage badge live
+            there too. */}
         {headerless && (
           <div
             className="flex shrink-0 items-center gap-2 border-b border-canvas-border px-3 py-1.5"
@@ -637,16 +620,7 @@ export function ChatView({
               </button>
             )}
             <div className="ml-auto">
-              <HeaderIndicators
-                status={status}
-                activeTool={activeTool}
-                contextUsage={contextUsage}
-                sessionStartedAt={sessionStartedAt}
-                turnCount={turnCount}
-                model={model}
-                setModel={setModel}
-                reconnect={reconnect}
-              />
+              <HeaderIndicators status={status} activeTool={activeTool} reconnect={reconnect} />
             </div>
           </div>
         )}

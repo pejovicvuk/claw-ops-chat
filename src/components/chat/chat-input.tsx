@@ -239,15 +239,22 @@ export function ChatInput({
       style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
     >
       <div
-        className={`mx-auto ${
-          hasContent ? "md:max-w-7xl" : "md:max-w-6xl md:focus-within:max-w-7xl"
-        }`}
+        className={`mx-auto ${hasContent ? "md:max-w-6xl" : "md:max-w-5xl"}`}
       >
+        {/* `px-3 py-2.5` is constant across rest / focus / has-content
+            so internal layout never reflows when the user clicks into
+            the composer. Without that, the pill used to widen and lift
+            on focus, sliding the `+` button ~64px left mid-click and
+            causing the click-miss the user reported. The transition is
+            now scoped to transform / box-shadow / bg / border — the
+            only properties that legitimately change between states.
+            Each elevated shadow includes the inset top highlight so
+            Tailwind's override doesn't drop the liquid-glass specular. */}
         <div
-          className={`glass-input flex flex-col rounded-[24px] transition-all duration-300 ease-out ${
+          className={`glass-input flex flex-col rounded-[24px] px-3 py-2.5 transition-[transform,box-shadow,background-color,border-color] duration-300 ease-out ${
             hasContent
-              ? "-translate-y-1 px-3 py-2.5 shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
-              : "px-3 py-2 focus-within:-translate-y-1 focus-within:py-2.5 focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.14)]"
+              ? "-translate-y-1 shadow-[0_12px_40px_rgba(0,0,0,0.14),inset_0_1px_0_rgba(255,255,255,0.45)]"
+              : "focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.10),inset_0_1px_0_rgba(255,255,255,0.45)]"
           }`}
         >
           <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />

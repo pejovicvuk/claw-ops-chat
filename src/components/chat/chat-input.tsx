@@ -234,20 +234,18 @@ export function ChatInput({
   const voiceDisabled = status === "disconnected" || status === "connecting";
 
   return (
-    // The OUTER wrapper no longer carries `paddingBottom: env(safe-area-
-    // inset-bottom)`. That padding is now pushed INSIDE the pill (see
-    // the `style` on the inner content div below) so the `.lg-bubble`
-    // itself extends all the way to the bottom of the screen — the
-    // user's complaint was that the input "isn't at the bottom"
-    // because the safe-area gap left a band of canvas-bg below the
-    // pill. iOS still draws the home-indicator gesture line over the
-    // pill's bottom edge; that's fine, the pill is glass.
-    <div className="shrink-0 px-3 pt-2">
+    // Safe-area-bottom lives on the OUTER wrapper so the
+    // `<ContextUsageBadge />` (rendered after the pill) can sit
+    // ABOVE the home-indicator zone. The user wanted the % context
+    // line back BELOW the input on phone — keeping the badge there
+    // means the wrapper has to host the safe-area pad, not the pill
+    // itself. The pill's internal padding goes back to the original
+    // even py-2.5 so desktop and mobile look identical.
+    <div
+      className="shrink-0 px-3 pt-2"
+      style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
+    >
       <div className={`mx-auto ${hasContent ? "md:max-w-6xl" : "md:max-w-5xl"}`}>
-        {/* ContextUsageBadge moved ABOVE the pill so the composer is
-            the bottom-most visible element. */}
-        <ContextUsageBadge usage={contextUsage} />
-
         {/* Refined liquid-glass composer pill — single-recipe `.lg-bubble`
             (clean backdrop-blur + 1 px hairline + inset highlight + drop
             shadow). The text passing under it reads as cleanly frosted
@@ -257,10 +255,7 @@ export function ChatInput({
             hasContent ? "-translate-y-1" : ""
           }`}
         >
-          <div
-            className="flex flex-col px-3 pt-2.5"
-            style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 10px)" }}
-          >
+          <div className="flex flex-col px-3 py-2.5">
             <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
             <textarea
@@ -317,6 +312,12 @@ export function ChatInput({
             />
           </div>
         </div>
+
+        {/* Context % indicator stays UNDER the pill — small grey text
+            with the running context utilisation. The user explicitly
+            asked for it to be below the input on phone (and PC), so
+            it's rendered after the pill in flex-flow. */}
+        <ContextUsageBadge usage={contextUsage} />
       </div>
       <MentionPopover
         ref={popoverRef}

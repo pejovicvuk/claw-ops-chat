@@ -234,25 +234,33 @@ export function ChatInput({
   const voiceDisabled = status === "disconnected" || status === "connecting";
 
   return (
-    <div
-      className="shrink-0 px-3 py-2"
-      style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
-    >
+    // The OUTER wrapper no longer carries `paddingBottom: env(safe-area-
+    // inset-bottom)`. That padding is now pushed INSIDE the pill (see
+    // the `style` on the inner content div below) so the `.lg-bubble`
+    // itself extends all the way to the bottom of the screen — the
+    // user's complaint was that the input "isn't at the bottom"
+    // because the safe-area gap left a band of canvas-bg below the
+    // pill. iOS still draws the home-indicator gesture line over the
+    // pill's bottom edge; that's fine, the pill is glass.
+    <div className="shrink-0 px-3 pt-2">
       <div className={`mx-auto ${hasContent ? "md:max-w-6xl" : "md:max-w-5xl"}`}>
+        {/* ContextUsageBadge moved ABOVE the pill so the composer is
+            the bottom-most visible element. */}
+        <ContextUsageBadge usage={contextUsage} />
+
         {/* Refined liquid-glass composer pill — single-recipe `.lg-bubble`
             (clean backdrop-blur + 1 px hairline + inset highlight + drop
-            shadow). Replaces the older four-layer `.lg-pill` with its
-            SVG displacement filter, which warped any chat text scrolling
-            behind the floating composer into a "wavy" gimmicky look. Now
-            that the composer is `position: absolute` on every viewport,
-            the text passing under it reads as cleanly frosted glass —
-            same shape as the floating top bubbles. */}
+            shadow). The text passing under it reads as cleanly frosted
+            glass, the same shape as the floating top bubbles. */}
         <div
           className={`lg-bubble rounded-[24px] transition-transform duration-300 ease-out ${
             hasContent ? "-translate-y-1" : ""
           }`}
         >
-          <div className="flex flex-col px-3 py-2.5">
+          <div
+            className="flex flex-col px-3 pt-2.5"
+            style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 10px)" }}
+          >
             <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
             <textarea
@@ -309,8 +317,6 @@ export function ChatInput({
             />
           </div>
         </div>
-
-        <ContextUsageBadge usage={contextUsage} />
       </div>
       <MentionPopover
         ref={popoverRef}

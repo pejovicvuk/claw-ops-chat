@@ -172,8 +172,13 @@ html:not(.dark) {
   position: relative;
   isolation: isolate;
   background: rgba(255, 255, 255, 0.06);
-  backdrop-filter: blur(24px) saturate(180%);
-  -webkit-backdrop-filter: blur(24px) saturate(180%);
+  /* Higher blur radius (40 px vs the original 24 px) frosts the chat
+     text passing under the composer more aggressively, so the pill
+     reads as a heavier piece of glass instead of barely-tinted clear
+     plastic. saturate(200%) keeps the colour pop in the reflected
+     content from washing out under the heavy blur. */
+  backdrop-filter: blur(40px) saturate(200%);
+  -webkit-backdrop-filter: blur(40px) saturate(200%);
   border: 1px solid rgba(255, 255, 255, 0.14);
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.22),
@@ -237,29 +242,11 @@ html:not(.dark) .lg-bubble:focus-within {
   -webkit-mask-image: linear-gradient(to bottom, black 0%, black 65%, transparent 100%);
 }
 
-.scroll-fade-bottom {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  /* Tall enough that the masked-out region clears the floating
-     composer pill and the visible blur band falls JUST above the
-     composer's top edge — that's where chat text passes under and
-     gets frosted. The composer renders on top (z-10 vs the scrim's
-     z-5) so the overlap is invisible. */
-  height: 220px;
-  pointer-events: none;
-  z-index: 5;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  background: linear-gradient(
-    to top,
-    color-mix(in srgb, var(--canvas-bg) 60%, transparent) 0%,
-    transparent 100%
-  );
-  mask-image: linear-gradient(to top, black 0%, black 70%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to top, black 0%, black 70%, transparent 100%);
-}
+/* `.scroll-fade-bottom` was retired: the user wanted the only frosted
+ * surface in that band to be the composer pill itself, not a separate
+ * scrim above it. The composer's own `.lg-bubble` blur now does the
+ * frosting work — chat text passes UNDER the pill and gets frosted by
+ * the pill's `backdrop-filter`. */
 
 /* ── Overlay Surface ── */
 

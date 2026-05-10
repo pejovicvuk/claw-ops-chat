@@ -44,6 +44,7 @@ handles HTTP (Next.js) and WebSocket (Claude streaming) on a single port.
 | `src/lib/apiClient.ts`       | JWT token management, auto-refresh                                 |
 | `src/lib/types.ts`           | Shared TypeScript interfaces                                       |
 | `src/lib/audit/`             | Audit log writer, reader, retention, scrubbing (see section below) |
+| `src/lib/memory/`            | Cross-session memory: global injector + SDK auto-memory glue       |
 | `next.config.ts`             | basePath=/chat, standalone output, CSP headers                     |
 | `Dockerfile`                 | Multi-stage build (deps -> builder -> runner on node:24-alpine)    |
 | `docker-compose.yml`         | Production deployment with volume mounts                           |
@@ -159,6 +160,30 @@ become `<redacted>`. **Never import `process.env` inside
 once at boot and every 6 hours thereafter via node-cron (scheduled in
 `server.ts`). Manual purge available from the UI (bulk by `olderThan`
 timestamp + optional category filter).
+
+## Memory
+
+Cross-session knowledge. Two scopes:
+
+- **Global** — `/root/.memory/global/<file>.md` (override base with
+  `MEMORY_ROOT`). Concatenated into the system-prompt append on every
+  turn by `getGlobalMemoryAppend()` in `src/lib/memory/global-injector.ts`,
+  alongside the existing "Agent rules" block.
+- **Per-project** — `~/.claude/projects/<sanitized-cwd>/memory/`. Owned by
+  the Claude Agent SDK's auto-memory feature (`autoMemoryEnabled` +
+  `autoDreamEnabled`); the model reads/writes via the SDK's built-in
+  memory protocol. We surface the directory in the UI but never write to
+  it on the model's behalf.
+
+Server boot patches `~/.claude/settings.json` once (idempotent) to enable
+both flags. `settingSources` includes `'user'` so the SDK picks them up.
+The model emits `system/memory_recall` events when memories are surfaced
+into a turn — the SessionManager forwards these as `memory_recall`
+messages over the WebSocket.
+
+Caps: 100 KB per file, 10 MB per scope. Enforced server-side in
+`writeMemoryFile()`. UI lives at **Settings → Memory** with global
+editing and per-project drill-in.
 
 ## Chat previews
 

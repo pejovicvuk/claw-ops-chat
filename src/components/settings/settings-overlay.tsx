@@ -25,6 +25,8 @@ import { SettingsAgentSkillsPage } from "./pages/settings-agent-skills-page";
 import { SettingsAgentSubagentsPage } from "./pages/settings-agent-subagents-page";
 import { SettingsNotificationsPage } from "./pages/settings-notifications-page";
 import { SettingsVoicePage } from "./pages/settings-voice-page";
+import { SettingsMemoryPage } from "./pages/settings-memory-page";
+import { SettingsMemoryProjectPage } from "./pages/settings-memory-project-page";
 import { SettingsMonitoringPage } from "@/components/monitoring/settings-monitoring-page";
 
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
@@ -49,7 +51,8 @@ type PageKey =
   | "terminal"
   | "notifications"
   | "voice"
-  | "monitoring";
+  | "monitoring"
+  | "memory";
 
 interface PageInfo {
   /** Display title in the overlay header. */
@@ -81,7 +84,15 @@ const PAGES: Record<PageKey, PageInfo> = {
   notifications: { title: "Notifications", parent: "main" },
   voice: { title: "Voice input", parent: "main" },
   monitoring: { title: "Monitoring", parent: "main", wide: true },
+  memory: { title: "Memory", parent: "main" },
 };
+
+/**
+ * Settings URL strings of the form `memory/<projectSlug>` are valid drill-ins
+ * to a per-project memory page; everything before the first slash maps to
+ * an entry in `PAGES`. The slug is project-validated server-side.
+ */
+const MEMORY_PROJECT_PREFIX = "memory/";
 
 /**
  * Parse the current settings page from the URL param value.
@@ -99,8 +110,16 @@ function parsePage(raw: string | null): PageKey | null {
     return "connections/atlassian";
   }
   if (raw in PAGES) return raw as PageKey;
+  // Dynamic per-project memory drill-in: still rendered by the Memory page.
+  if (raw.startsWith(MEMORY_PROJECT_PREFIX)) return "memory";
   // Unknown page → fall back to main (rather than close).
   return "main";
+}
+
+/** Extract the project slug from a `memory/<slug>` URL value. */
+function parseMemoryProjectSlug(raw: string | null): string | null {
+  if (raw === null || !raw.startsWith(MEMORY_PROJECT_PREFIX)) return null;
+  return raw.slice(MEMORY_PROJECT_PREFIX.length);
 }
 
 /**
@@ -109,7 +128,9 @@ function parsePage(raw: string | null): PageKey | null {
  */
 export function SettingsOverlay() {
   const { params, setParam } = useUrlState();
-  const page = parsePage(params.get("settings"));
+  const rawPage = params.get("settings");
+  const page = parsePage(rawPage);
+  const memoryProjectSlug = parseMemoryProjectSlug(rawPage);
   const open = page !== null;
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
@@ -119,9 +140,15 @@ export function SettingsOverlay() {
 
   const goBack = useCallback(() => {
     if (!page) return;
+    // Drill-back from a per-project memory page goes to the Memory landing,
+    // not all the way to Settings → Main.
+    if (memoryProjectSlug) {
+      setParam("settings", "memory");
+      return;
+    }
     const parent = PAGES[page].parent;
     setParam("settings", parent ?? null);
-  }, [page, setParam]);
+  }, [memoryProjectSlug, page, setParam]);
 
   // Escape key dismissal + focus entry point on open.
   useEffect(() => {
@@ -148,7 +175,10 @@ export function SettingsOverlay() {
   if (!open || !page) return null;
 
   const info = PAGES[page];
-  const hasBack = info.parent !== null;
+  // The Memory landing's parent is "main"; drill-in adds a logical layer
+  // back to "memory" but the static `info.parent` doesn't capture that, so
+  // hasBack must also be true when we're on a project drill-in.
+  const hasBack = info.parent !== null || memoryProjectSlug !== null;
   const wide = info.wide === true;
   const modalClasses = wide
     ? "animate-modal-in flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(800px,90vh)] sm:w-[min(960px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl"
@@ -216,6 +246,12 @@ export function SettingsOverlay() {
           {page === "notifications" && <SettingsNotificationsPage />}
           {page === "voice" && <SettingsVoicePage />}
           {page === "monitoring" && <SettingsMonitoringPage />}
+          {page === "memory" &&
+            (memoryProjectSlug ? (
+              <SettingsMemoryProjectPage slug={memoryProjectSlug} />
+            ) : (
+              <SettingsMemoryPage />
+            ))}
         </div>
 
         {/* Footer — only on main page */}

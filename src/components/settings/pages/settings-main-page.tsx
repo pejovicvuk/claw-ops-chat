@@ -7,6 +7,7 @@ import {
   FiBell,
   FiChevronRight,
   FiCpu,
+  FiDatabase,
   FiLink,
   FiMail,
   FiMic,
@@ -77,6 +78,26 @@ export function SettingsMainPage() {
             <p className="text-[13px] font-medium text-canvas-fg">Agent</p>
             <p className="mt-0.5 text-[11px] text-canvas-muted">
               System prompt, rules, skills, and subagents
+            </p>
+          </div>
+          <FiChevronRight size={14} className="shrink-0 text-canvas-muted" />
+        </button>
+      </SettingsSection>
+
+      {/* Memory — global + per-project notes Claude reads across sessions */}
+      <SettingsSection title="Memory" description="Cross-session notes Claude reads at every turn">
+        <button
+          type="button"
+          onClick={() => setParam("settings", "memory")}
+          className="flex w-full items-center gap-3 rounded-xl border border-canvas-border bg-canvas-bg px-4 py-3 text-left transition-colors hover:bg-canvas-surface-hover"
+        >
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-canvas-surface text-canvas-fg">
+            <FiDatabase size={15} />
+          </span>
+          <div className="min-w-0 flex-1">
+            <p className="text-[13px] font-medium text-canvas-fg">Manage memory</p>
+            <p className="mt-0.5 text-[11px] text-canvas-muted">
+              Global facts plus per-project memory the agent reads and writes
             </p>
           </div>
           <FiChevronRight size={14} className="shrink-0 text-canvas-muted" />

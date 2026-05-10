@@ -9,6 +9,7 @@ import {
   FiChevronRight,
   FiCheck,
   FiX,
+  FiDatabase,
 } from "react-icons/fi";
 import type { ChatMessage } from "@/lib/types";
 import { detectFilePaths } from "@/lib/detect-file-paths";
@@ -27,6 +28,49 @@ export function preloadMarkdown() {
 function MarkdownFallback({ text }: { text: string }) {
   return (
     <pre className="whitespace-pre-wrap text-[14px] leading-relaxed text-canvas-fg">{text}</pre>
+  );
+}
+
+/**
+ * Centered inline marker rendered when the SDK auto-memory supervisor
+ * pulls one or more notes into the current turn. Mirrors the "Recalled
+ * from memory" attachment the Claude CLI shows. Click to expand the path
+ * list (kept collapsed by default to avoid bloating the timeline).
+ */
+function MemoryRecallPill({ message }: { message: ChatMessage }) {
+  const [open, setOpen] = useState(false);
+  const paths = message.memoryRecallPaths ?? [];
+  if (paths.length === 0) return null;
+  const label =
+    message.memoryRecallMode === "synthesize"
+      ? "Recalled from memory (synthesized)"
+      : "Recalled from memory";
+  return (
+    <div className="flex justify-center px-4 py-1.5">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex max-w-full flex-col items-center gap-1 rounded-md bg-accent/10 px-3 py-1.5 text-[12px] text-canvas-muted transition-colors hover:bg-accent/15 hover:text-canvas-fg"
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-1.5">
+          <FiDatabase size={11} />
+          <span>
+            {label} · {paths.length} {paths.length === 1 ? "file" : "files"}
+          </span>
+          {open ? <FiChevronDown size={11} /> : <FiChevronRight size={11} />}
+        </span>
+        {open && (
+          <ul className="mt-0.5 max-w-full space-y-0.5 text-left font-mono text-[10px] leading-snug text-canvas-muted">
+            {paths.map((path) => (
+              <li key={path} className="truncate">
+                {path}
+              </li>
+            ))}
+          </ul>
+        )}
+      </button>
+    </div>
   );
 }
 
@@ -168,6 +212,10 @@ export const MessageBubble = memo(function MessageBubble({
         </span>
       </div>
     );
+  }
+
+  if (message.type === "memory_recall") {
+    return <MemoryRecallPill message={message} />;
   }
 
   if (message.role === "user") {

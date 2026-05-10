@@ -50,6 +50,9 @@ import type { CronRunOutcome } from "./src/lib/reports/runner";
 import { ReportScheduler } from "./src/lib/reports/scheduler";
 import { setScheduler } from "./src/lib/reports/scheduler-singleton";
 import { ensureProjectsTree } from "./src/lib/projects/paths";
+import { ensureMemoryTree } from "./src/lib/memory/paths";
+import { getGlobalMemoryAppend } from "./src/lib/memory/global-injector";
+import { ensureSdkAutoMemoryEnabled } from "./src/lib/memory/sdk-settings";
 import { setSessionManager } from "./src/lib/reports/session-manager-singleton";
 import { setChatSendHandle } from "./src/lib/chat-send-singleton";
 import { getAuditWriter } from "./src/lib/audit/writer";
@@ -1221,6 +1224,10 @@ class SessionManager {
     // + rules) apply on the very next message — matching the loadMcpServers
     // pattern below. Always returns a string; never throws.
     const customAppend = await getCustomAppendForSdk();
+    // Pull global memory into the system prompt on every turn. Per-project
+    // memory is handled by the SDK's autoMemoryEnabled feature (see boot
+    // section); this covers the cross-project, always-on tier.
+    const globalMemoryAppend = await getGlobalMemoryAppend();
     const modeAppend =
       session.permissionMode === "plan"
         ? "You are currently in PLAN MODE. Do not run shell commands, " +
@@ -1232,7 +1239,9 @@ class SessionManager {
             "pre-approved; proceed without asking for permission for those " +
             "tools. Shell commands still require explicit approval."
           : "";
-    const combinedAppend = [customAppend, modeAppend].filter(Boolean).join("\n\n");
+    const combinedAppend = [customAppend, globalMemoryAppend, modeAppend]
+      .filter(Boolean)
+      .join("\n\n");
 
     const queryOptions: Record<string, unknown> = {
       // Prefer the original cwd from JSONL (for resume to find the session file).
@@ -1526,7 +1535,11 @@ class SessionManager {
       // Load CLAUDE.md + .claude/agents/ + .claude/skills/ from the session's
       // working directory so subagents and skills configured via Settings →
       // Agent apply natively (rules are baked into the append above).
-      settingSources: ["project"] as const,
+      // 'user' is also loaded so the SDK picks up `autoMemoryEnabled` /
+      // `autoDreamEnabled` from `~/.claude/settings.json` (see
+      // ensureSdkAutoMemoryEnabled at boot) — that's how per-project memory
+      // is turned on without us having to thread it per-call.
+      settingSources: ["user", "project"] as const,
       // Always seed the SDK's env with the parent process's full env
       // (so PATH / HOME / locale / NODE_OPTIONS / all the usual chain
       // reach through to the Claude CLI subprocess and the MCP servers
@@ -1692,6 +1705,19 @@ class SessionManager {
           this.broadcast(session, {
             type: "compact_boundary",
             trigger: (msg as Record<string, unknown>).compact_metadata,
+          });
+          continue;
+        }
+
+        // Memory recall — SDK's autoMemoryEnabled supervisor surfaced one
+        // or more files into this turn. Broadcast so the UI can render a
+        // "Recalled from memory" marker. UI rendering is additive; older
+        // clients just ignore the unknown type.
+        if (msg.type === "system" && msg.subtype === "memory_recall") {
+          this.broadcast(session, {
+            type: "memory_recall",
+            mode: (msg as Record<string, unknown>).mode,
+            memories: (msg as Record<string, unknown>).memories,
           });
           continue;
         }
@@ -2785,6 +2811,20 @@ setChatSendHandle({
     await ensureProjectsTree();
   } catch (err) {
     console.warn(`!! Could not init projects tree: ${(err as Error).message}`);
+  }
+})();
+
+// Memory subsystem boot:
+//   - ensure /root/.memory/global exists for the global-memory injector
+//   - patch ~/.claude/settings.json so the Agent SDK's autoMemoryEnabled +
+//     autoDreamEnabled flags are on (settingSources includes 'user' so the
+//     SDK actually sees these on every query)
+(async () => {
+  try {
+    await ensureMemoryTree();
+    await ensureSdkAutoMemoryEnabled();
+  } catch (err) {
+    console.warn(`!! Could not init memory subsystem: ${(err as Error).message}`);
   }
 })();
 

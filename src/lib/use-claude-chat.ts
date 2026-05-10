@@ -260,6 +260,30 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         return;
       }
 
+      if (type === "memory_recall") {
+        // SDK auto-memory supervisor pulled one or more notes into this turn.
+        // Render an inline pill so the user can tell what informed the answer.
+        const memories = (evt.memories as Array<{ path?: string }> | undefined) ?? [];
+        const paths = memories
+          .map((m) => (typeof m?.path === "string" ? m.path : null))
+          .filter((p): p is string => p !== null);
+        if (paths.length === 0) return;
+        const mode = evt.mode === "synthesize" ? "synthesize" : "select";
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "system" as const,
+            type: "memory_recall" as const,
+            content: "",
+            timestamp: Date.now(),
+            memoryRecallPaths: paths,
+            memoryRecallMode: mode,
+          },
+        ]);
+        return;
+      }
+
       if (type === "status") {
         const s = evt.status as string;
         if (s === "awaiting_permission") setStatus("awaiting_permission");

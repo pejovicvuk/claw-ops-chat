@@ -15,7 +15,7 @@
   --user-bubble-fg: #ffffff;
   --glass-bg: rgba(255, 255, 255, 0.55);
   --glass-border: rgba(255, 255, 255, 0.35);
-  --glass-blur: 20px;
+  --glass-blur: 28px;
   /* Monitoring status palette — WCAG-AA on canvas-bg. */
   --mon-healthy: #16a34a;
   --mon-warning: #d97706;
@@ -41,7 +41,7 @@
   --user-bubble-fg: #f0f0f0;
   --glass-bg: rgba(30, 30, 30, 0.55);
   --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-blur: 20px;
+  --glass-blur: 28px;
   --mon-healthy: #22c55e;
   --mon-warning: #f59e0b;
   --mon-critical: #ef4444;
@@ -120,27 +120,41 @@ html:not(.dark) {
   border: 1px solid var(--canvas-border);
 }
 
-/* ── Glassmorphism ── */
+/* ── Glassmorphism ──
+ * `saturate(180%)` boosts the colour pop coming through the blur so the
+ * pill reads as honest "frosted glass" rather than washed-out grey, and
+ * the `inset 0 1px 0` on `.glass-input` simulates the specular highlight
+ * you'd see along the top edge of a real piece of glass — the same
+ * trick Apple uses for its liquid-glass surfaces. */
 
 .glass {
   background: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border: 1px solid var(--glass-border);
 }
 
 .glass-input {
   background-color: var(--glass-bg);
-  backdrop-filter: blur(var(--glass-blur));
-  -webkit-backdrop-filter: blur(var(--glass-blur));
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
   border: 1px solid var(--glass-border);
-  box-shadow: 0 2px 16px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 2px 16px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+.dark .glass-input {
+  box-shadow:
+    0 2px 16px rgba(0, 0, 0, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 /* Focus-within swaps the glass bg to a more opaque value. Both the base
    and focused values are explicit colors (not var()) so the browser can
-   interpolate smoothly. Tailwind's transition-all on the element picks up
-   background-color, max-width, transform, padding, and box-shadow. */
+   interpolate smoothly. The transition list on the element scopes which
+   properties animate (transform, box-shadow, bg, border) — padding /
+   max-width are deliberately NOT in the list so internal layout stays
+   rock-steady when the user clicks into the composer. */
 .glass-input:focus-within {
   background-color: rgba(255, 255, 255, 0.88);
   border-color: rgba(255, 255, 255, 0.6);

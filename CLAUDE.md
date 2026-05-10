@@ -163,27 +163,47 @@ timestamp + optional category filter).
 
 ## Memory
 
-Cross-session knowledge. Two scopes:
+Cross-session knowledge. Three flavours, all in one Settings page.
 
-- **Global** — `/root/.memory/global/<file>.md` (override base with
+- **Global memory** — `/root/.memory/global/<file>.md` (override base with
   `MEMORY_ROOT`). Concatenated into the system-prompt append on every
-  turn by `getGlobalMemoryAppend()` in `src/lib/memory/global-injector.ts`,
-  alongside the existing "Agent rules" block.
-- **Per-project** — `~/.claude/projects/<sanitized-cwd>/memory/`. Owned by
-  the Claude Agent SDK's auto-memory feature (`autoMemoryEnabled` +
-  `autoDreamEnabled`); the model reads/writes via the SDK's built-in
-  memory protocol. We surface the directory in the UI but never write to
-  it on the model's behalf.
+  turn by `getGlobalMemoryAppend()` in `src/lib/memory/global-injector.ts`.
+  As of Phase 2, this also absorbs the legacy "Agent → System prompt" and
+  "Agent → Rules" content (migrated at boot to `instructions.md` and
+  `rules/<name>.md` under the same root).
+- **Auto-collected memory** — `/root/.memory/global/auto.md`. A single
+  file, ~5 KB cap, populated by a post-session Haiku consolidator
+  (`src/lib/memory/consolidator.ts`) that extracts stable user-level
+  facts from the chat transcript ~60s after the last turn. Per-session
+  debounce, `audit.session({type: "memory_consolidate"})` log entry per
+  pass, off-switch via `AUTO_GLOBAL_MEMORY=0` env or the Settings toggle
+  (persisted to `/root/.memory/auto-config.json`). The runner uses the
+  Agent SDK in one-shot mode (`tools: [], settingSources: [], maxTurns: 1`)
+  so it piggybacks on the existing `~/.claude/.credentials.json` auth.
+- **Per-project memory** — `~/.claude/projects/<sanitized-cwd>/memory/`.
+  Owned by the Claude Agent SDK's auto-memory feature
+  (`autoMemoryEnabled` + `autoDreamEnabled`); the model reads/writes via
+  the SDK's built-in memory protocol. We surface the directory in the UI
+  but never write to it on the model's behalf.
 
 Server boot patches `~/.claude/settings.json` once (idempotent) to enable
-both flags. `settingSources` includes `'user'` so the SDK picks them up.
-The model emits `system/memory_recall` events when memories are surfaced
-into a turn — the SessionManager forwards these as `memory_recall`
-messages over the WebSocket.
+both SDK flags, ensures `/root/.memory/global/`, and runs the legacy
+agent-config migration. `settingSources` includes `'user'` so the SDK
+picks the memory flags up. The model emits `system/memory_recall` events
+when memories are surfaced into a turn — the SessionManager forwards
+these as `memory_recall` messages over the WebSocket.
 
-Caps: 100 KB per file, 10 MB per scope. Enforced server-side in
-`writeMemoryFile()`. UI lives at **Settings → Memory** with global
-editing and per-project drill-in.
+Caps: 100 KB per file (curated), 5 KB total for `auto.md`, 10 MB total
+per scope. Enforced server-side in `writeMemoryFile()` and
+`auto-store.ts`. UI lives at **Settings → Memory** with global editing,
+per-project drill-in, and an Auto-collected section showing the
+consolidator's current state and a "Regenerate now" button.
+
+The legacy `/api/agent-config/{system-prompt,rules}` HTTP routes still
+work for one release window: their backends were swapped to read/write
+from `/root/.memory/global/` via `src/lib/agent-config-legacy-adapter.ts`
+and they emit a `Deprecation: true` header. Removal is scheduled
+alongside `getCustomAppendForSdk()` (now a no-op).
 
 ## Chat previews
 

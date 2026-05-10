@@ -6,6 +6,7 @@ import { FiChevronRight, FiDatabase, FiFolder, FiLoader } from "react-icons/fi";
 import { authFetch } from "@/lib/auth";
 import { useUrlState } from "@/lib/use-url-state";
 
+import { AutoMemorySection } from "../auto-memory-section";
 import { MarkdownFileEditor } from "../markdown-file-editor";
 import { SettingsSection } from "../settings-section";
 
@@ -108,7 +109,8 @@ export function SettingsMemoryPage() {
             <FiDatabase size={12} className="mt-0.5 shrink-0 text-canvas-muted" />
             <span>
               <strong className="text-canvas-fg">Global memory</strong> is loaded into Claude&apos;s
-              system prompt at every turn, in every project. Edit it below.
+              system prompt at every turn, in every project. Use it for durable facts and
+              instructions you want Claude to know across sessions.
             </span>
           </p>
           <p className="flex items-start gap-2">
@@ -119,8 +121,18 @@ export function SettingsMemoryPage() {
               project&apos;s working directory. You can also browse and edit those files manually.
             </span>
           </p>
-          <p className="text-[11px]">Caps: 100 KB per file, 10 MB per scope.</p>
+          <p className="text-[11px]">
+            Caps: 100 KB per file, 10 MB per scope. For deployable capabilities (Skills, Subagents),
+            see Settings → Agent.
+          </p>
         </div>
+      </SettingsSection>
+
+      <SettingsSection
+        title="Auto-collected"
+        description="Stable user-level facts the consolidator learns from chats"
+      >
+        <AutoMemorySection />
       </SettingsSection>
 
       <SettingsSection title="Global memory" description="Markdown files loaded into every chat">

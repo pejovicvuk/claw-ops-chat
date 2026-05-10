@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { useEffect, useState } from "react";
-import { FiBookOpen, FiChevronRight, FiCommand, FiMessageSquare, FiUsers } from "react-icons/fi";
+import { FiChevronRight, FiCommand, FiUsers } from "react-icons/fi";
 import { authFetch } from "@/lib/auth";
 import { useUrlState } from "@/lib/use-url-state";
 import { SettingsSection } from "../settings-section";
@@ -10,21 +10,18 @@ import { SettingsSection } from "../settings-section";
 const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "/chat";
 
 interface Counts {
-  systemPrompt: boolean;
-  rules: number | null;
   subagents: number | null;
   skills: number | null;
 }
 
 /**
- * "Agent behavior" hub. Four link-cards — one per configurable surface —
- * each showing a short description and the current count so the user
- * can see at a glance what's already configured.
+ * "Agent behavior" hub. Phase 2 of the Memory feature moved System
+ * Prompt + Rules into Settings → Memory; this page now hosts only the
+ * deployable capabilities (Skills, Subagents). The whole page leaves
+ * Settings entirely in the future Agents-sidebar PR.
  */
 export function SettingsAgentPage() {
   const [counts, setCounts] = useState<Counts>({
-    systemPrompt: false,
-    rules: null,
     subagents: null,
     skills: null,
   });
@@ -33,31 +30,19 @@ export function SettingsAgentPage() {
     let cancelled = false;
     void (async () => {
       const calls = await Promise.allSettled([
-        authFetch(`${BASE}/api/agent-config/system-prompt`),
-        authFetch(`${BASE}/api/agent-config/rules`),
         authFetch(`${BASE}/api/agent-config/subagents`),
         authFetch(`${BASE}/api/agent-config/skills`),
       ]);
       const next: Counts = {
-        systemPrompt: false,
-        rules: null,
         subagents: null,
         skills: null,
       };
       if (calls[0].status === "fulfilled" && calls[0].value.ok) {
-        const data = (await calls[0].value.json()) as { prompt?: string };
-        next.systemPrompt = Boolean(data.prompt && data.prompt.trim().length > 0);
+        const data = (await calls[0].value.json()) as { items?: unknown[] };
+        next.subagents = Array.isArray(data.items) ? data.items.length : 0;
       }
       if (calls[1].status === "fulfilled" && calls[1].value.ok) {
         const data = (await calls[1].value.json()) as { items?: unknown[] };
-        next.rules = Array.isArray(data.items) ? data.items.length : 0;
-      }
-      if (calls[2].status === "fulfilled" && calls[2].value.ok) {
-        const data = (await calls[2].value.json()) as { items?: unknown[] };
-        next.subagents = Array.isArray(data.items) ? data.items.length : 0;
-      }
-      if (calls[3].status === "fulfilled" && calls[3].value.ok) {
-        const data = (await calls[3].value.json()) as { items?: unknown[] };
         next.skills = Array.isArray(data.items) ? data.items.length : 0;
       }
       if (!cancelled) setCounts(next);
@@ -71,21 +56,9 @@ export function SettingsAgentPage() {
     <div className="space-y-4">
       <SettingsSection
         title="Agent"
-        description="Configure how Claude behaves in every session on this device"
+        description="Deployable capabilities Claude invokes when relevant"
       >
         <div className="space-y-2">
-          <HubRow
-            icon={<FiMessageSquare size={15} />}
-            title="System prompt"
-            subtitle={counts.systemPrompt ? "Custom instructions active" : "No custom prompt"}
-            target="agent/system-prompt"
-          />
-          <HubRow
-            icon={<FiBookOpen size={15} />}
-            title="Rules"
-            subtitle={formatCount(counts.rules, "rule", "rules")}
-            target="agent/rules"
-          />
           <HubRow
             icon={<FiCommand size={15} />}
             title="Skills"
@@ -102,10 +75,10 @@ export function SettingsAgentPage() {
       </SettingsSection>
 
       <p className="px-1 text-[10px] leading-relaxed text-canvas-muted">
-        Rules and the system prompt are appended to Claude&apos;s built-in system prompt on every
-        turn. Skills and subagents live under{" "}
+        Skills and subagents live under{" "}
         <code className="rounded bg-canvas-surface px-1 py-0.5">.claude/</code> and are loaded
-        natively by the Claude Agent SDK.
+        natively by the Claude Agent SDK. For text Claude reads on every turn (instructions, durable
+        facts), see <strong>Settings → Memory</strong>.
       </p>
     </div>
   );

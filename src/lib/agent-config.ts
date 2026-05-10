@@ -311,39 +311,18 @@ export async function deleteSkill(name: string): Promise<void> {
 /* ---------------------------------------------------------------- */
 
 /**
- * Build the string that server.ts should hand to the SDK as the
- * system-prompt `append`. Combines the user's custom prompt with the
- * concatenated contents of all rule files, so both take effect on the
- * next Claude turn. Never throws — returns "" on any I/O error.
+ * Build the string that server.ts hands the SDK as the system-prompt
+ * `append`. Used to combine the legacy custom prompt + rule files; as
+ * of Phase 2 of the Memory feature, both have been absorbed into
+ * `/root/.memory/global/` and surfaced by `getGlobalMemoryAppend()` in
+ * `src/lib/memory/global-injector.ts`.
+ *
+ * Kept as a no-op so the call site in `server.ts:1223` doesn't churn
+ * during the transition. Slated for removal alongside the legacy
+ * `/api/agent-config/{system-prompt,rules}` routes in a follow-up PR.
  */
 export async function getCustomAppendForSdk(): Promise<string> {
-  const parts: string[] = [];
-  try {
-    const { prompt } = await loadSystemPromptAppend();
-    if (prompt.trim().length > 0) {
-      parts.push(prompt.trim());
-    }
-  } catch {
-    /* ignore */
-  }
-  try {
-    const rules = await listRules();
-    if (rules.length > 0) {
-      const blocks: string[] = ["# Project Rules"];
-      for (const rule of rules) {
-        try {
-          const { content } = await readRule(rule.name);
-          blocks.push(`## ${rule.name}\n\n${content.trim()}`);
-        } catch {
-          /* skip */
-        }
-      }
-      parts.push(blocks.join("\n\n"));
-    }
-  } catch {
-    /* ignore */
-  }
-  return parts.join("\n\n");
+  return "";
 }
 
 /* ---------------------------------------------------------------- */

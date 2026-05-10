@@ -1,15 +1,29 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import {
-  AgentConfigError,
-  deleteSystemPromptAppend,
-  loadSystemPromptAppend,
-  saveSystemPromptAppend,
-} from "@/lib/agent-config";
+  DEPRECATION_HEADER,
+  LegacyAdapterError,
+  deleteLegacyInstructions,
+  loadLegacyInstructions,
+  saveLegacyInstructions,
+} from "@/lib/agent-config-legacy-adapter";
+
+/**
+ * **Deprecated.** This route now reads from `/root/.memory/global/instructions.md`
+ * via the legacy adapter. New callers should use `/api/memory/global` instead.
+ * Slated for removal alongside `getCustomAppendForSdk()` in a follow-up PR.
+ */
+
+function withDeprecation(res: Response): Response {
+  for (const [k, v] of Object.entries(DEPRECATION_HEADER)) {
+    res.headers.set(k, v);
+  }
+  return res;
+}
 
 export async function GET(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
-  const record = await loadSystemPromptAppend();
-  return Response.json(record);
+  const record = await loadLegacyInstructions();
+  return withDeprecation(Response.json(record));
 }
 
 export async function POST(request: Request): Promise<Response> {
@@ -18,24 +32,24 @@ export async function POST(request: Request): Promise<Response> {
   try {
     body = (await request.json()) as { prompt?: unknown };
   } catch {
-    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+    return withDeprecation(Response.json({ error: "Invalid JSON body" }, { status: 400 }));
   }
   if (typeof body.prompt !== "string") {
-    return Response.json({ error: "prompt must be a string" }, { status: 400 });
+    return withDeprecation(Response.json({ error: "prompt must be a string" }, { status: 400 }));
   }
   try {
-    await saveSystemPromptAppend(body.prompt);
+    await saveLegacyInstructions(body.prompt);
   } catch (err) {
-    if (err instanceof AgentConfigError) {
-      return Response.json({ error: err.message }, { status: err.status });
+    if (err instanceof LegacyAdapterError) {
+      return withDeprecation(Response.json({ error: err.message }, { status: err.status }));
     }
-    return Response.json({ error: "Failed to save prompt" }, { status: 500 });
+    return withDeprecation(Response.json({ error: "Failed to save prompt" }, { status: 500 }));
   }
-  return Response.json({ ok: true });
+  return withDeprecation(Response.json({ ok: true }));
 }
 
 export async function DELETE(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
-  await deleteSystemPromptAppend();
-  return Response.json({ ok: true });
+  await deleteLegacyInstructions();
+  return withDeprecation(Response.json({ ok: true }));
 }

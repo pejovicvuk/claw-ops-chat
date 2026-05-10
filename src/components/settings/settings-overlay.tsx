@@ -19,8 +19,6 @@ import { SettingsNotionPage } from "./pages/settings-notion-page";
 import { SettingsTrelloPage } from "./pages/settings-trello-page";
 import { SettingsTerminalPage } from "./pages/settings-terminal-page";
 import { SettingsAgentPage } from "./pages/settings-agent-page";
-import { SettingsAgentSystemPromptPage } from "./pages/settings-agent-system-prompt-page";
-import { SettingsAgentRulesPage } from "./pages/settings-agent-rules-page";
 import { SettingsAgentSkillsPage } from "./pages/settings-agent-skills-page";
 import { SettingsAgentSubagentsPage } from "./pages/settings-agent-subagents-page";
 import { SettingsNotificationsPage } from "./pages/settings-notifications-page";
@@ -44,8 +42,6 @@ type PageKey =
   | "connections/notion"
   | "connections/trello"
   | "agent"
-  | "agent/system-prompt"
-  | "agent/rules"
   | "agent/skills"
   | "agent/subagents"
   | "terminal"
@@ -76,8 +72,6 @@ const PAGES: Record<PageKey, PageInfo> = {
   "connections/notion": { title: "Notion", parent: "connections" },
   "connections/trello": { title: "Trello", parent: "connections" },
   agent: { title: "Agent", parent: "main" },
-  "agent/system-prompt": { title: "System prompt", parent: "agent" },
-  "agent/rules": { title: "Rules", parent: "agent" },
   "agent/skills": { title: "Skills", parent: "agent" },
   "agent/subagents": { title: "Subagents", parent: "agent" },
   terminal: { title: "Terminal", parent: "main", wide: true },
@@ -108,6 +102,12 @@ function parsePage(raw: string | null): PageKey | null {
   // Back-compat: Bitbucket and Jira sub-pages were unified into Atlassian.
   if (raw === "connections/bitbucket" || raw === "connections/jira") {
     return "connections/atlassian";
+  }
+  // Back-compat: Phase 2 of Memory absorbed the System Prompt + Rules sub-pages.
+  // Their content was migrated into /root/.memory/global/ and is now editable
+  // from the Memory page.
+  if (raw === "agent/system-prompt" || raw === "agent/rules") {
+    return "memory";
   }
   if (raw in PAGES) return raw as PageKey;
   // Dynamic per-project memory drill-in: still rendered by the Memory page.
@@ -238,8 +238,6 @@ export function SettingsOverlay() {
           {page === "connections/notion" && <SettingsNotionPage />}
           {page === "connections/trello" && <SettingsTrelloPage />}
           {page === "agent" && <SettingsAgentPage />}
-          {page === "agent/system-prompt" && <SettingsAgentSystemPromptPage />}
-          {page === "agent/rules" && <SettingsAgentRulesPage />}
           {page === "agent/skills" && <SettingsAgentSkillsPage />}
           {page === "agent/subagents" && <SettingsAgentSubagentsPage />}
           {page === "terminal" && <SettingsTerminalPage />}

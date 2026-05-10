@@ -220,31 +220,15 @@ describe("skills CRUD", () => {
 });
 
 describe("getCustomAppendForSdk", () => {
-  it("returns empty string when nothing is configured", async () => {
+  // Phase 2: legacy system-prompt + rules content has been migrated into
+  // /root/.memory/global/ and is now surfaced by getGlobalMemoryAppend()
+  // in src/lib/memory/global-injector.ts. This function is intentionally
+  // a no-op — kept only so the call site in server.ts doesn't churn.
+  it("always returns an empty string", async () => {
     expect(await getCustomAppendForSdk()).toBe("");
-  });
-
-  it("returns just the system prompt when no rules exist", async () => {
     await saveSystemPromptAppend("Be kind.");
-    expect(await getCustomAppendForSdk()).toBe("Be kind.");
-  });
-
-  it("concatenates prompt + rules with headers", async () => {
-    await saveSystemPromptAppend("Top-level instructions.");
     await createRule("tone", "Be formal.");
-    await createRule("length", "Be brief.");
-    const combined = await getCustomAppendForSdk();
-    expect(combined).toContain("Top-level instructions.");
-    expect(combined).toContain("# Project Rules");
-    expect(combined).toContain("## length");
-    expect(combined).toContain("## tone");
-    expect(combined).toContain("Be formal.");
-    expect(combined).toContain("Be brief.");
-  });
-
-  it("never throws even if dirs are missing", async () => {
-    rmSync(workDir, { recursive: true, force: true });
-    await expect(getCustomAppendForSdk()).resolves.toBeTypeOf("string");
+    expect(await getCustomAppendForSdk()).toBe("");
   });
 });
 

@@ -834,63 +834,15 @@ export function ChatView({
               and can't be content-visibility-skipped or overflow-clipped
               the way the old in-scroller floating pill could. */}
 
-          {/* Liquid-glass scroll-to-bottom button. Same four-layer
-              recipe as the composer pill (filter + overlay + specular
-              + content). Shows whenever the user is scrolled up; click
-              → smooth-scroll to bottom + reset unread.
-              Position is layout-aware:
-              - Mobile: composer sits in-flow below the messages area,
-                so `bottom-3` puts the button just above the composer's
-                top edge. `right-4` keeps it within thumb reach.
-              - Desktop: composer is absolute-positioned over the
-                bottom ~120-140 px of the messages area. `md:bottom-40`
-                (160 px) gives a clean gap above the pill in every
-                state (rest, focus, has-content, with-context-badge).
-              The badge sits in an outer wrapper so it can poke past
-              the lg-pill's overflow:hidden corner-clip. */}
-          {isScrolledUp && (
-            <div
-              className="animate-msg-in absolute bottom-3 right-4 z-20 h-9 w-9 md:bottom-40 md:left-1/2 md:right-auto md:-translate-x-1/2"
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-                  setUnreadCount(0);
-                }}
-                aria-label={
-                  unreadCount > 0
-                    ? `Scroll to bottom — ${unreadCount} new ${unreadCount === 1 ? "message" : "messages"}`
-                    : "Scroll to bottom"
-                }
-                title="Scroll to bottom"
-                className="lg-pill flex h-full w-full items-center justify-center rounded-full text-canvas-fg transition-transform duration-150 hover:scale-105 active:scale-95"
-              >
-                <span className="lg-filter" aria-hidden="true" />
-                <span className="lg-overlay" aria-hidden="true" />
-                <span className="lg-specular" aria-hidden="true" />
-                <span className="lg-content flex h-full w-full items-center justify-center">
-                  <FiArrowDown size={16} />
-                </span>
-              </button>
-              {unreadCount > 0 && (
-                <span
-                  className="pointer-events-none absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none text-white"
-                  style={{ backgroundColor: "var(--accent)" }}
-                  aria-hidden="true"
-                >
-                  {unreadCount > 99 ? "99+" : unreadCount}
-                </span>
-              )}
-            </div>
-          )}
+          {/* Scroll-to-bottom button moved out of the messages area —
+              see the composer wrapper below. */}
         </div>
 
         <SetupGuard forceShow={setupRequired}>
           <div
             className={
               isMobile
-                ? ""
+                ? "relative"
                 : "pointer-events-none absolute inset-x-0 bottom-0 z-10 [&_*]:pointer-events-auto"
             }
           >
@@ -911,6 +863,52 @@ export function ChatView({
               setModel={setModel}
               contextUsage={contextUsage}
             />
+
+            {/* Liquid-glass scroll-to-bottom button. Lives INSIDE the
+                composer wrapper so its position automatically follows
+                the composer's height: the wrapper anchors to bottom: 0
+                and grows upward as ChatInput's natural height changes
+                (textarea auto-grow, attachments, context badge), and
+                `-top-14` keeps the button a fixed gap above the
+                wrapper's top edge — i.e. above the pill — regardless of
+                state. Mobile renders the same way (right-aligned), since
+                the mobile wrapper is now `relative`.
+                The badge sits in an outer wrapper so it can poke past
+                the lg-pill's overflow:hidden corner-clip. */}
+            {isScrolledUp && (
+              <div className="animate-msg-in pointer-events-auto absolute -top-14 right-4 z-20 h-9 w-9 md:left-1/2 md:right-auto md:-translate-x-1/2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+                    setUnreadCount(0);
+                  }}
+                  aria-label={
+                    unreadCount > 0
+                      ? `Scroll to bottom — ${unreadCount} new ${unreadCount === 1 ? "message" : "messages"}`
+                      : "Scroll to bottom"
+                  }
+                  title="Scroll to bottom"
+                  className="lg-pill flex h-full w-full items-center justify-center rounded-full text-canvas-fg transition-transform duration-150 hover:scale-105 active:scale-95"
+                >
+                  <span className="lg-filter" aria-hidden="true" />
+                  <span className="lg-overlay" aria-hidden="true" />
+                  <span className="lg-specular" aria-hidden="true" />
+                  <span className="lg-content flex h-full w-full items-center justify-center">
+                    <FiArrowDown size={16} />
+                  </span>
+                </button>
+                {unreadCount > 0 && (
+                  <span
+                    className="pointer-events-none absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none text-white"
+                    style={{ backgroundColor: "var(--accent)" }}
+                    aria-hidden="true"
+                  >
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </span>
+                )}
+              </div>
+            )}
           </div>
         </SetupGuard>
       </div>

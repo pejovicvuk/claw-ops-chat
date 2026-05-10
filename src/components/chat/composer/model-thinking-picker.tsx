@@ -26,6 +26,15 @@ interface ModelThinkingPickerProps {
   contextUsage: ContextUsage | null;
   /** When true, render an icon-only compact button (mobile). */
   compact?: boolean;
+  /**
+   * Visual variant.
+   *  - `"pill"` (default): rounded-full button with a tinted background.
+   *    Used inside the composer toolbar.
+   *  - `"top"`: containerless, two-line text-only label
+   *    (`{model} ▾` over `{effort}`) for the floating mobile top chrome.
+   *    Same popover; only the trigger styling differs.
+   */
+  variant?: "pill" | "top";
 }
 
 /**
@@ -47,6 +56,7 @@ export function ModelThinkingPicker({
   setEffort,
   contextUsage,
   compact,
+  variant = "pill",
 }: ModelThinkingPickerProps): ReactNode {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -74,25 +84,46 @@ export function ModelThinkingPicker({
 
   return (
     <div ref={wrapperRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-label={`Model: ${pillModelLabel}, Thinking: ${effortLabel}`}
-        aria-expanded={open}
-        aria-haspopup="menu"
-        className={`btn-press flex items-center gap-1.5 rounded-full bg-canvas-surface-hover/60 text-canvas-fg transition-colors duration-150 hover:bg-canvas-surface-hover ${
-          compact ? "h-8 px-2.5 text-[12px]" : "h-8 px-3 text-[12px] font-medium"
-        }`}
-      >
-        <span>{pillModelLabel}</span>
-        <span className="text-canvas-muted">{effortLabel}</span>
-        <FiChevronDown size={12} className="text-canvas-muted" />
-      </button>
+      {variant === "top" ? (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-label={`Model: ${pillModelLabel}, Thinking: ${effortLabel}`}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          className="btn-press flex flex-col items-center text-canvas-fg"
+        >
+          <span className="flex items-center gap-1 text-[15px] font-semibold leading-tight">
+            {pillModelLabel}
+            <FiChevronDown size={14} className="text-canvas-muted" />
+          </span>
+          <span className="text-[11px] leading-tight text-canvas-muted">{effortLabel}</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-label={`Model: ${pillModelLabel}, Thinking: ${effortLabel}`}
+          aria-expanded={open}
+          aria-haspopup="menu"
+          className={`btn-press flex items-center gap-1.5 rounded-full bg-canvas-surface-hover/60 text-canvas-fg transition-colors duration-150 hover:bg-canvas-surface-hover ${
+            compact ? "h-8 px-2.5 text-[12px]" : "h-8 px-3 text-[12px] font-medium"
+          }`}
+        >
+          <span>{pillModelLabel}</span>
+          <span className="text-canvas-muted">{effortLabel}</span>
+          <FiChevronDown size={12} className="text-canvas-muted" />
+        </button>
+      )}
 
       {open && (
         <div
           role="menu"
-          className="animate-modal-in absolute bottom-full right-0 z-50 mb-2 w-[300px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl"
+          className={`animate-modal-in absolute z-50 w-[300px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl ${
+            variant === "top"
+              ? "left-1/2 top-full mt-2 -translate-x-1/2"
+              : "bottom-full right-0 mb-2"
+          }`}
         >
           <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-canvas-muted">
             Model

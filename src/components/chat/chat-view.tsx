@@ -709,7 +709,7 @@ export function ChatView({
             ) : (
               <SessionCwdProvider value={sessionCwd}>
                 <ChatFilesProvider sessionId={sessionId}>
-                  <div className={isMobile ? "pt-3 pb-24" : "mx-auto w-full max-w-6xl py-3 pb-32"}>
+                  <div className={isMobile ? "pt-3 pb-12" : "mx-auto w-full max-w-6xl py-3 pb-32"}>
                     {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
                     {sortedMessages.map((msg, idx) => {
                       // Staggered enter animation for first-load history only —

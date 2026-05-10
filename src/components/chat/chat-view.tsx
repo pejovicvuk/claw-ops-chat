@@ -797,7 +797,7 @@ export function ChatView({
                             <circle className="core" cx="120" cy="100" r="14" />
                           </g>
                         </svg>
-                        <span className="text-accent text-[12px] font-medium">
+                        <span className="text-accent text-[14px] font-medium">
                           {status === "tool_running" && activeTool
                             ? `Running ${activeTool.name}...`
                             : `${thinkingVerb}...`}

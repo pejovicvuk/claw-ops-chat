@@ -171,6 +171,12 @@ async function defaultLlm(systemPrompt: string, userMessage: string): Promise<st
       settingSources: [],
       maxTurns: 1,
       cwd: tmpdir(),
+      // Critical: without this the SDK writes the consolidator's session
+      // to ~/.claude/projects/<sanitized-cwd>/<sessionId>.jsonl, which the
+      // sidebar's session list then surfaces as a "chat" titled with the
+      // literal `EXISTING_MEMORY: …` prompt. We never want to resume the
+      // consolidator pass — it's a one-shot — so disable persistence.
+      persistSession: false,
     } as Parameters<typeof query>[0]["options"],
   });
 

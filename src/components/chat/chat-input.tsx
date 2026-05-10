@@ -234,15 +234,17 @@ export function ChatInput({
   const voiceDisabled = status === "disconnected" || status === "connecting";
 
   return (
-    // The OUTER wrapper has NO bottom padding — the pill itself extends
-    // all the way to the screen bottom (iOS draws the home-indicator
-    // gesture line over the pill's bottom edge; the pill is glass).
-    // `<ContextUsageBadge />` lives INSIDE the pill, below the toolbar,
-    // so the user gets it "below the input" while the pill stays
-    // pinned to the very bottom of the screen. Safe-area-bottom is
-    // applied on the inner content's `paddingBottom` so the badge
-    // text clears the home-indicator zone.
-    <div className="shrink-0 px-3 pt-2">
+    // The OUTER wrapper carries safe-area-inset-bottom so the BADGE
+    // (rendered below the pill) clears the home-indicator zone. The
+    // pill itself is NOT flush with the screen bottom — there's
+    // intentional space below it where chat content can show through
+    // and fade out via `.scroll-fade-bottom` (mirroring the top scrim).
+    // Pill internal padding goes back to a uniform py-2.5 so desktop
+    // and mobile look identical inside.
+    <div
+      className="shrink-0 px-3 pt-2"
+      style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 8px)" }}
+    >
       <div className={`mx-auto ${hasContent ? "md:max-w-6xl" : "md:max-w-5xl"}`}>
         {/* Refined liquid-glass composer pill — single-recipe `.lg-bubble`
             (clean backdrop-blur + 1 px hairline + inset highlight + drop
@@ -253,10 +255,7 @@ export function ChatInput({
             hasContent ? "-translate-y-1" : ""
           }`}
         >
-          <div
-            className="flex flex-col px-3 pt-2.5"
-            style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 10px)" }}
-          >
+          <div className="flex flex-col px-3 py-2.5">
             <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
             <textarea
@@ -311,16 +310,14 @@ export function ChatInput({
               onStop={onStop}
               isMobile={isMobile}
             />
-
-            {/* Context % indicator lives INSIDE the pill, below the
-                toolbar. Keeps the user's "below the input" placement
-                while letting the pill itself extend to the screen
-                bottom — the previous outside-the-pill layout left
-                visible canvas-bg space below the pill (badge offset
-                + safe-area), which the user wanted gone. */}
-            <ContextUsageBadge usage={contextUsage} />
           </div>
         </div>
+
+        {/* Context % indicator OUTSIDE the pill, below it. The user
+            wants the pill floating with visible space below — chat
+            content scrolls into that space and fades through the
+            `.scroll-fade-bottom` scrim, mirroring the top edge. */}
+        <ContextUsageBadge usage={contextUsage} />
       </div>
       <MentionPopover
         ref={popoverRef}

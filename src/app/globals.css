@@ -268,11 +268,50 @@ html:not(.dark) .lg-bubble:focus-within {
   );
 }
 
-/* `.scroll-fade-bottom` was retired: the user wanted the only frosted
- * surface in that band to be the composer pill itself, not a separate
- * scrim above it. The composer's own `.lg-bubble` blur now does the
- * frosting work — chat text passes UNDER the pill and gets frosted by
- * the pill's `backdrop-filter`. */
+/* `.scroll-fade-bottom` mirrors `.scroll-fade-top` at the bottom edge
+ * of the screen: chat text scrolling DOWN past the floating composer
+ * gets gradually frosted, then fades out near the screen bottom —
+ * same shape as the iOS-app reference the user shared (pill floating,
+ * chat visible above AND below it, both ends fading into blur).
+ *
+ * Intentionally LESS aggressive than the top scrim: shorter (120 px
+ * vs the top's 140 px) and a simpler 4-stop mask, because the bottom
+ * fade only has to mediate the chat-end transition, not the iOS
+ * status-bar legibility problem the top scrim solves.
+ */
+.scroll-fade-bottom {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 120px;
+  pointer-events: none;
+  z-index: 5;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--canvas-bg) 55%, transparent) 0%,
+    color-mix(in srgb, var(--canvas-bg) 25%, transparent) 50%,
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to top,
+    black 0%,
+    black 35%,
+    rgba(0, 0, 0, 0.5) 65%,
+    rgba(0, 0, 0, 0.18) 85%,
+    transparent 100%
+  );
+  -webkit-mask-image: linear-gradient(
+    to top,
+    black 0%,
+    black 35%,
+    rgba(0, 0, 0, 0.5) 65%,
+    rgba(0, 0, 0, 0.18) 85%,
+    transparent 100%
+  );
+}
 
 /* ── Overlay Surface ── */
 

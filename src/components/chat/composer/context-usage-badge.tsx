@@ -31,13 +31,13 @@ export function ContextUsageBadge({ usage }: ContextUsageBadgeProps): ReactNode 
   return (
     <div className="mt-1.5 flex justify-center">
       <span
-        className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[11px] text-canvas-muted"
+        className="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[12px] text-canvas-fg/80"
         title={`${formatTokens(usage.used)} of ${formatTokens(usage.max)} tokens`}
       >
-        <span className="font-medium" style={color ? { color } : undefined}>
+        <span className="font-semibold" style={color ? { color } : undefined}>
           {pct}% context
         </span>
-        <span className="text-canvas-muted/70">
+        <span className="text-canvas-fg/55">
           · {formatTokens(usage.used)} / {formatTokens(usage.max)}
         </span>
       </span>

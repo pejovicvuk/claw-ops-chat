@@ -709,7 +709,7 @@ export function ChatView({
             ) : (
               <SessionCwdProvider value={sessionCwd}>
                 <ChatFilesProvider sessionId={sessionId}>
-                  <div className={isMobile ? "pt-3 pb-12" : "mx-auto w-full max-w-6xl py-3 pb-32"}>
+                  <div className={isMobile ? "pt-3 pb-2" : "mx-auto w-full max-w-6xl py-3 pb-32"}>
                     {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
                     {sortedMessages.map((msg, idx) => {
                       // Staggered enter animation for first-load history only —
@@ -831,6 +831,15 @@ export function ChatView({
               </SessionCwdProvider>
             )}
           </div>
+
+          {/* Bottom blur scrim — mirrors `.scroll-fade-top`. Chat text
+              scrolling DOWN past the floating composer gets gradually
+              frosted and fades out near the screen bottom, exactly the
+              way the top edge fades under the iOS status bar. Only on
+              mobile + headerless (the floating-composer surface);
+              desktop keeps its existing layout where the composer
+              already overlays a `pb-32` chat scroll area. */}
+          {isMobile && headerless && <div className="scroll-fade-bottom" aria-hidden="true" />}
 
           {/* Awaiting-input awareness lives in <ApprovalBanner /> above
               the scroll container — it covers permission, plan, AND ask,

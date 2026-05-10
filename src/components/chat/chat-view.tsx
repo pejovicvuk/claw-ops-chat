@@ -709,7 +709,7 @@ export function ChatView({
             ) : (
               <SessionCwdProvider value={sessionCwd}>
                 <ChatFilesProvider sessionId={sessionId}>
-                  <div className={isMobile ? "py-3" : "mx-auto w-full max-w-6xl py-3 pb-32"}>
+                  <div className={isMobile ? "pt-3 pb-40" : "mx-auto w-full max-w-6xl py-3 pb-32"}>
                     {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
                     {sortedMessages.map((msg, idx) => {
                       // Staggered enter animation for first-load history only —
@@ -851,13 +851,17 @@ export function ChatView({
         </div>
 
         <SetupGuard forceShow={setupRequired}>
-          <div
-            className={
-              isMobile
-                ? "relative"
-                : "pointer-events-none absolute inset-x-0 bottom-0 z-10 [&_*]:pointer-events-auto"
-            }
-          >
+          {/* Composer floats over the chat on EVERY viewport now: the
+              outer wrapper is `pointer-events: none` so taps fall through
+              to the messages behind it, and only the actual ChatInput
+              chrome captures input via the `[&_*]:pointer-events-auto`
+              child selector. With this in place, chat content scrolls
+              underneath the composer pill and the `.scroll-fade-bottom`
+              scrim frosts the band where text passes under it — same
+              shape Anthropic's iOS app uses. The previous `relative`
+              treatment on mobile pinned the composer in flex flow, so
+              messages physically couldn't scroll behind it. */}
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 [&_*]:pointer-events-auto">
             <ChatInput
               status={status}
               onSend={sendMessage}

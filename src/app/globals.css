@@ -193,6 +193,17 @@ html:not(.dark) .lg-bubble {
     0 8px 24px rgba(0, 0, 0, 0.4),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
 }
+/* Subtle "wake up" affordance when the composer textarea is focused —
+   replaces the old `.lg-pill:focus-within > .lg-overlay` swap. */
+.lg-bubble:focus-within {
+  background: rgba(255, 255, 255, 0.1);
+}
+html:not(.dark) .lg-bubble:focus-within {
+  background: rgba(255, 255, 255, 0.78);
+}
+.dark .lg-bubble:focus-within {
+  background: rgba(255, 255, 255, 0.07);
+}
 
 /* ── Scroll fade scrims ──
  *
@@ -231,7 +242,12 @@ html:not(.dark) .lg-bubble {
   left: 0;
   right: 0;
   bottom: 0;
-  height: 96px;
+  /* Tall enough that the masked-out region clears the floating
+     composer pill and the visible blur band falls JUST above the
+     composer's top edge — that's where chat text passes under and
+     gets frosted. The composer renders on top (z-10 vs the scrim's
+     z-5) so the overlap is invisible. */
+  height: 220px;
   pointer-events: none;
   z-index: 5;
   backdrop-filter: blur(14px);
@@ -241,8 +257,8 @@ html:not(.dark) .lg-bubble {
     color-mix(in srgb, var(--canvas-bg) 60%, transparent) 0%,
     transparent 100%
   );
-  mask-image: linear-gradient(to top, black 0%, black 60%, transparent 100%);
-  -webkit-mask-image: linear-gradient(to top, black 0%, black 60%, transparent 100%);
+  mask-image: linear-gradient(to top, black 0%, black 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to top, black 0%, black 70%, transparent 100%);
 }
 
 /* ── Overlay Surface ── */

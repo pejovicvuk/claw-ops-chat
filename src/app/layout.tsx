@@ -71,6 +71,38 @@ export default function RootLayout({
         */}
       </head>
       <body className={`${inter.variable} antialiased`}>
+        {/*
+          SVG filter referenced by the `.lg-filter` layer of the liquid-
+          glass pill (composer + scroll-to-bottom button). Stays mounted
+          for the lifetime of the document so `filter: url(#lg-dist)` is
+          always resolvable. Hidden via `display: none` on the <svg>; the
+          <filter> child still works because filters are referenced, not
+          rendered.
+        */}
+        <svg
+          aria-hidden="true"
+          style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}
+        >
+          <defs>
+            <filter id="lg-dist" x="0%" y="0%" width="100%" height="100%">
+              <feTurbulence
+                type="fractalNoise"
+                baseFrequency="0.008 0.008"
+                numOctaves={2}
+                seed={92}
+                result="noise"
+              />
+              <feGaussianBlur in="noise" stdDeviation={2} result="blurred" />
+              <feDisplacementMap
+                in="SourceGraphic"
+                in2="blurred"
+                scale={18}
+                xChannelSelector="R"
+                yChannelSelector="G"
+              />
+            </filter>
+          </defs>
+        </svg>
         <Providers>{children}</Providers>
       </body>
     </html>

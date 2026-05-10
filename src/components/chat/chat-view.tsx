@@ -597,7 +597,7 @@ export function ChatView({
             there too. */}
         {headerless && (
           <div
-            className="flex shrink-0 items-center gap-2 border-b border-canvas-border px-3 py-1.5"
+            className="flex shrink-0 items-center gap-2 px-3 py-1.5"
             style={{
               paddingTop: "max(env(safe-area-inset-top, 0px), 6px)",
             }}
@@ -834,44 +834,55 @@ export function ChatView({
               and can't be content-visibility-skipped or overflow-clipped
               the way the old in-scroller floating pill could. */}
 
-          {/* Liquid-glass scroll-to-bottom button. Shows whenever the
-              user is scrolled up. Click → smooth-scroll + reset unread.
+          {/* Liquid-glass scroll-to-bottom button. Same four-layer
+              recipe as the composer pill (filter + overlay + specular
+              + content). Shows whenever the user is scrolled up; click
+              → smooth-scroll to bottom + reset unread.
               Position is layout-aware:
               - Mobile: composer sits in-flow below the messages area,
                 so `bottom-3` puts the button just above the composer's
                 top edge. `right-4` keeps it within thumb reach.
-              - Desktop: the composer is absolute-positioned over the
-                bottom ~110-130 px of the messages area, so we bump the
-                button up to `md:bottom-28` (112 px) so it clears the
-                composer pill instead of overlapping it. `md:left-1/2`
-                centres it above the composer.
-              `z-20` puts it above the composer wrapper's z-10. */}
+              - Desktop: composer is absolute-positioned over the
+                bottom ~120-140 px of the messages area. `md:bottom-40`
+                (160 px) gives a clean gap above the pill in every
+                state (rest, focus, has-content, with-context-badge).
+              The badge sits in an outer wrapper so it can poke past
+              the lg-pill's overflow:hidden corner-clip. */}
           {isScrolledUp && (
-            <button
-              type="button"
-              onClick={() => {
-                bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-                setUnreadCount(0);
-              }}
-              aria-label={
-                unreadCount > 0
-                  ? `Scroll to bottom — ${unreadCount} new ${unreadCount === 1 ? "message" : "messages"}`
-                  : "Scroll to bottom"
-              }
-              title="Scroll to bottom"
-              className="glass animate-msg-in absolute bottom-3 right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full text-canvas-fg shadow-lg transition-transform duration-150 hover:scale-105 active:scale-95 md:bottom-28 md:left-1/2 md:right-auto md:-translate-x-1/2"
+            <div
+              className="animate-msg-in absolute bottom-3 right-4 z-20 h-9 w-9 md:bottom-40 md:left-1/2 md:right-auto md:-translate-x-1/2"
             >
-              <FiArrowDown size={16} />
+              <button
+                type="button"
+                onClick={() => {
+                  bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+                  setUnreadCount(0);
+                }}
+                aria-label={
+                  unreadCount > 0
+                    ? `Scroll to bottom — ${unreadCount} new ${unreadCount === 1 ? "message" : "messages"}`
+                    : "Scroll to bottom"
+                }
+                title="Scroll to bottom"
+                className="lg-pill flex h-full w-full items-center justify-center rounded-full text-canvas-fg transition-transform duration-150 hover:scale-105 active:scale-95"
+              >
+                <span className="lg-filter" aria-hidden="true" />
+                <span className="lg-overlay" aria-hidden="true" />
+                <span className="lg-specular" aria-hidden="true" />
+                <span className="lg-content flex h-full w-full items-center justify-center">
+                  <FiArrowDown size={16} />
+                </span>
+              </button>
               {unreadCount > 0 && (
                 <span
-                  className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none text-white"
+                  className="pointer-events-none absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none text-white"
                   style={{ backgroundColor: "var(--accent)" }}
                   aria-hidden="true"
                 >
                   {unreadCount > 99 ? "99+" : unreadCount}
                 </span>
               )}
-            </button>
+            </div>
           )}
         </div>
 

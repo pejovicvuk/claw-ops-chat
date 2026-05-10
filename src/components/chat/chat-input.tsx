@@ -241,76 +241,77 @@ export function ChatInput({
       <div
         className={`mx-auto ${hasContent ? "md:max-w-6xl" : "md:max-w-5xl"}`}
       >
-        {/* `px-3 py-2.5` is constant across rest / focus / has-content
-            so internal layout never reflows when the user clicks into
-            the composer. Without that, the pill used to widen and lift
-            on focus, sliding the `+` button ~64px left mid-click and
-            causing the click-miss the user reported. The transition is
-            now scoped to transform / box-shadow / bg / border — the
-            only properties that legitimately change between states.
-            Each elevated shadow includes the inset top highlight so
-            Tailwind's override doesn't drop the liquid-glass specular. */}
+        {/* Liquid-glass composer pill — four-layer recipe (filter +
+            overlay + specular + content). Padding + width are constant
+            across rest / focus / has-content so internal layout never
+            reflows when the user clicks in (the click-miss the user
+            previously reported). The transition is scoped to transform
+            only; bg/border-color shifts are handled by CSS rules on
+            `.lg-overlay` / `.lg-specular` so they animate independently. */}
         <div
-          className={`glass-input flex flex-col rounded-[24px] px-3 py-2.5 transition-[transform,box-shadow,background-color,border-color] duration-300 ease-out ${
-            hasContent
-              ? "-translate-y-1 shadow-[0_12px_40px_rgba(0,0,0,0.14),inset_0_1px_0_rgba(255,255,255,0.45)]"
-              : "focus-within:shadow-[0_12px_40px_rgba(0,0,0,0.10),inset_0_1px_0_rgba(255,255,255,0.45)]"
+          className={`lg-pill rounded-[24px] transition-transform duration-300 ease-out ${
+            hasContent ? "-translate-y-1" : ""
           }`}
         >
-          <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
+          <span className="lg-filter" aria-hidden="true" />
+          <span className="lg-overlay" aria-hidden="true" />
+          <span className="lg-specular" aria-hidden="true" />
+          <div className="lg-content flex flex-col px-3 py-2.5">
+            <AttachmentRow attachments={attachments} onRemove={onRemoveAttachment} />
 
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              setCaret(e.target.selectionStart);
-              setMentionDismissed(null);
-              handleInput();
-            }}
-            onSelect={syncCaret}
-            onClick={syncCaret}
-            onKeyUp={syncCaret}
-            onKeyDown={handleKeyDown}
-            onDragOver={preventDefault}
-            onDrop={preventDefault}
-            placeholder={
-              status === "idle"
-                ? "Message Claude..."
-                : status === "connecting"
-                  ? "Connecting..."
-                  : status === "disconnected"
-                    ? "Disconnected"
-                    : "Claude is working..."
-            }
-            disabled={status === "disconnected" || status === "connecting"}
-            rows={1}
-            className={`w-full resize-none bg-transparent px-1 py-1 text-[15px] leading-normal text-canvas-fg placeholder:text-canvas-muted/50 focus:outline-none disabled:opacity-50 ${
-              isRecording ? "hidden" : ""
-            }`}
-            style={{ fontSize: "16px" }}
-          />
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={(e) => {
+                setText(e.target.value);
+                setCaret(e.target.selectionStart);
+                setMentionDismissed(null);
+                handleInput();
+              }}
+              onSelect={syncCaret}
+              onClick={syncCaret}
+              onKeyUp={syncCaret}
+              onKeyDown={handleKeyDown}
+              onDragOver={preventDefault}
+              onDrop={preventDefault}
+              placeholder={
+                status === "idle"
+                  ? "Message Claude..."
+                  : status === "connecting"
+                    ? "Connecting..."
+                    : status === "disconnected"
+                      ? "Disconnected"
+                      : "Claude is working..."
+              }
+              disabled={status === "disconnected" || status === "connecting"}
+              rows={1}
+              className={`w-full resize-none bg-transparent px-1 py-1 text-[15px] leading-normal text-canvas-fg placeholder:text-canvas-muted/50 focus:outline-none disabled:opacity-50 ${
+                isRecording ? "hidden" : ""
+              }`}
+              style={{ fontSize: "16px" }}
+            />
 
-          <ComposerToolbar
-            fileInputRef={fileInputRef}
-            onFileInputChange={handleFileInput}
-            permissionMode={permissionMode}
-            setPermissionMode={setPermissionMode}
-            model={model}
-            setModel={setModel}
-            effort={effort}
-            setEffort={setEffort}
-            contextUsage={contextUsage}
-            voiceDisabled={voiceDisabled}
-            onTranscribed={handleTranscribed}
-            onRecordingChange={setIsRecording}
-            isActive={isActive}
-            canSend={canSend}
-            hasPendingUpload={hasPendingUpload}
-            onSend={handleSend}
-            onStop={onStop}
-            isMobile={isMobile}
-          />
+            <ComposerToolbar
+              fileInputRef={fileInputRef}
+              onFileInputChange={handleFileInput}
+              permissionMode={permissionMode}
+              setPermissionMode={setPermissionMode}
+              model={model}
+              setModel={setModel}
+              effort={effort}
+              setEffort={setEffort}
+              contextUsage={contextUsage}
+              voiceDisabled={voiceDisabled}
+              onTranscribed={handleTranscribed}
+              onRecordingChange={setIsRecording}
+              isActive={isActive}
+              canSend={canSend}
+              hasPendingUpload={hasPendingUpload}
+              onSend={handleSend}
+              onStop={onStop}
+              isMobile={isMobile}
+            />
+          </div>
         </div>
 
         <ContextUsageBadge usage={contextUsage} />

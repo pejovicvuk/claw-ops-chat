@@ -2,9 +2,7 @@
 
 import { FiMenu, FiPlus, FiFolder } from "react-icons/fi";
 import type { ActiveToolInfo, ClaudeStatus } from "@/lib/types";
-import type { ContextUsage } from "@/lib/use-claude-chat";
 import { Z_INDEX } from "@/lib/z-index";
-import { ModelThinkingPicker } from "./composer/model-thinking-picker";
 import { HeaderIndicators } from "./header-indicators";
 
 interface MobileTopChromeProps {
@@ -14,11 +12,6 @@ interface MobileTopChromeProps {
   status: ClaudeStatus;
   activeTool: ActiveToolInfo | null;
   reconnect: () => void;
-  model: string | null;
-  setModel: (next: string | null) => void;
-  effort: string | null;
-  setEffort: (next: string | null) => void;
-  contextUsage: ContextUsage | null;
 }
 
 /**
@@ -28,15 +21,20 @@ interface MobileTopChromeProps {
  * BENEATH them with a `.scroll-fade-top` blur scrim mediating
  * legibility against the iOS status bar:
  *
- *   [☰]   {Model ▾ / Effort + status·rings}   [📁] [+]
+ *   [☰]      ● ◯ ◯       [📁] [+]
  *
  * - `[☰]` = sessions glass bubble.
- * - The center stack is the existing `<ModelThinkingPicker variant="top" />`
- *   with the existing `<HeaderIndicators />` cluster directly below — same
- *   popovers and rate-limit polling, just relocated.
+ * - The center hosts the existing `<HeaderIndicators />` cluster
+ *   (status dot + 5-hour ring + Weekly ring) so connection / rate-limit
+ *   state stays visible without occupying its own bar.
  * - `[📁]` = files glass bubble.
  * - `[+]` = new-chat — accent-filled badge so it reads as the primary
  *   create action, mirroring the Anthropic iOS app.
+ *
+ * The model + thinking picker lives in the COMPOSER toolbar, not here
+ * — it was briefly hoisted to the center but the user wanted it back
+ * down with attach / mode / send so the composer reads as a single
+ * cohesive control bar instead of two scattered surfaces.
  *
  * The companion `.scroll-fade-top` overlay is rendered separately by
  * the parent `<ChatView />` (kept outside this component so the same
@@ -50,15 +48,10 @@ export function MobileTopChrome({
   status,
   activeTool,
   reconnect,
-  model,
-  setModel,
-  effort,
-  setEffort,
-  contextUsage,
 }: MobileTopChromeProps) {
   return (
     <div
-      className="fixed left-0 right-0 flex items-start justify-between gap-2 px-3"
+      className="fixed left-0 right-0 flex items-center justify-between gap-2 px-3"
       style={{
         top: "max(env(safe-area-inset-top, 0px), 8px)",
         zIndex: Z_INDEX.HEADER,
@@ -73,15 +66,7 @@ export function MobileTopChrome({
         <FiMenu size={16} />
       </button>
 
-      <div className="flex min-w-0 flex-col items-center gap-1 pt-0.5">
-        <ModelThinkingPicker
-          variant="top"
-          model={model}
-          setModel={setModel}
-          effort={effort}
-          setEffort={setEffort}
-          contextUsage={contextUsage}
-        />
+      <div className="flex min-w-0 items-center justify-center">
         <HeaderIndicators status={status} activeTool={activeTool} reconnect={reconnect} />
       </div>
 

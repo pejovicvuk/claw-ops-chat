@@ -207,13 +207,16 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const userScrolledUpRef = useRef(false);
-  // "↓ N new messages" pill state. Counts arrivals while the user is
-  // scrolled up so they don't miss that Claude finished. Coarse-grained
-  // — bumps only on `messages.length` increments, so streaming text into
-  // an existing assistant bubble doesn't tick wildly. Tool_use,
-  // tool_result, and a fresh assistant chunk each create a new array
-  // entry → +1 each. infoMessages (Shift+Tab banners) are user-driven
-  // and intentionally excluded.
+  // Mirrors `userScrolledUpRef` as React state so the glass
+  // scroll-to-bottom button can subscribe to it. Both update together
+  // in handleScroll. The ref stays for non-render logic that doesn't
+  // need to trigger re-renders (e.g. the auto-scroll suppression).
+  const [isScrolledUp, setIsScrolledUp] = useState(false);
+  // Unread arrival counter — kept around so the auto-scroll bookkeeping
+  // below has the right "did anything actually arrive?" signal even
+  // though the visible button no longer shows the count. Coarse-grained:
+  // bumps only on `messages.length` increments, so streaming text into
+  // an existing assistant bubble doesn't tick wildly.
   const [unreadCount, setUnreadCount] = useState(0);
   const prevMessagesLengthRef = useRef(0);
   // Stagger first-load history messages only; new streaming messages animate
@@ -509,9 +512,9 @@ export function ChatView({
     if (!el) return;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
     userScrolledUpRef.current = !atBottom;
-    // Auto-dismiss the unread pill once the user manually scrolls back
-    // into the at-bottom band — they've caught up, the pill would just
-    // linger.
+    setIsScrolledUp(!atBottom);
+    // Auto-dismiss the unread bookkeeping once the user manually scrolls
+    // back into the at-bottom band — they've caught up.
     if (atBottom) setUnreadCount(0);
   };
 
@@ -831,23 +834,38 @@ export function ChatView({
               and can't be content-visibility-skipped or overflow-clipped
               the way the old in-scroller floating pill could. */}
 
-          {/* "↓ N new messages" pill — appears only when the user is
-            scrolled up AND content has arrived since they scrolled up.
-            Click → smooth-scroll to bottom and reset the count. */}
-          {unreadCount > 0 && (
+          {/* Liquid-glass scroll-to-bottom button. Shows whenever the
+              user is scrolled up (regardless of whether new messages
+              arrived). Centered above the input on desktop, right-
+              aligned on mobile so it sits within thumb reach without
+              colliding with the centered composer.
+              `bottom-3` keeps it just above the composer's top edge;
+              `z-20` sits above the messages but below modals. */}
+          {isScrolledUp && (
             <button
               type="button"
               onClick={() => {
                 bottomRef.current?.scrollIntoView({ behavior: "smooth" });
                 setUnreadCount(0);
               }}
-              className="animate-msg-in absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 items-center gap-1.5 rounded-full border border-accent/40 bg-canvas-bg/95 px-3 py-1.5 text-[11px] font-medium shadow-lg backdrop-blur"
-              style={{ color: "var(--accent)" }}
+              aria-label={
+                unreadCount > 0
+                  ? `Scroll to bottom — ${unreadCount} new ${unreadCount === 1 ? "message" : "messages"}`
+                  : "Scroll to bottom"
+              }
+              title="Scroll to bottom"
+              className="glass animate-msg-in absolute bottom-3 right-4 z-20 flex h-9 w-9 items-center justify-center rounded-full text-canvas-fg shadow-lg transition-transform duration-150 hover:scale-105 active:scale-95 md:left-1/2 md:right-auto md:-translate-x-1/2"
             >
-              <FiArrowDown size={11} />
-              <span>
-                {unreadCount} new {unreadCount === 1 ? "message" : "messages"}
-              </span>
+              <FiArrowDown size={16} />
+              {unreadCount > 0 && (
+                <span
+                  className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9px] font-semibold leading-none text-white"
+                  style={{ backgroundColor: "var(--accent)" }}
+                  aria-hidden="true"
+                >
+                  {unreadCount > 99 ? "99+" : unreadCount}
+                </span>
+              )}
             </button>
           )}
         </div>

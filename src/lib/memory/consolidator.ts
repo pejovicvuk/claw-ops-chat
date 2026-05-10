@@ -1,11 +1,12 @@
 import { existsSync } from "fs";
-import { readFile } from "fs/promises";
-import { tmpdir } from "os";
+import { readFile, rm } from "fs/promises";
+import { join } from "path";
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
 import { applyDiff, readAutoMemory, writeAutoMemory, type AutoMemoryDiff } from "./auto-store";
 import { loadAutoMemoryConfig, updateAutoMemoryConfig } from "./auto-config";
+import { consolidatorClaudeProjectsDir, consolidatorCwd, ensureConsolidatorCwd } from "./paths";
 
 /**
  * Post-session consolidator. After a chat session goes idle, run a
@@ -162,6 +163,11 @@ async function defaultLlm(systemPrompt: string, userMessage: string): Promise<st
   // One-shot, non-agentic. Auth piggybacks on the existing Claude CLI
   // credentials at ~/.claude/.credentials.json so we don't need a
   // separate ANTHROPIC_API_KEY.
+  //
+  // Pinned cwd (instead of tmpdir()) so the SDK's per-cwd projects
+  // directory is deterministic — we can find and delete the stub
+  // session file the SDK writes regardless of `persistSession: false`.
+  await ensureConsolidatorCwd();
   const stream = query({
     prompt: userMessage,
     options: {
@@ -170,26 +176,41 @@ async function defaultLlm(systemPrompt: string, userMessage: string): Promise<st
       tools: [],
       settingSources: [],
       maxTurns: 1,
-      cwd: tmpdir(),
-      // Critical: without this the SDK writes the consolidator's session
-      // to ~/.claude/projects/<sanitized-cwd>/<sessionId>.jsonl, which the
-      // sidebar's session list then surfaces as a "chat" titled with the
-      // literal `EXISTING_MEMORY: …` prompt. We never want to resume the
-      // consolidator pass — it's a one-shot — so disable persistence.
+      cwd: consolidatorCwd(),
+      // Best-effort suppression. The SDK still creates an empty stub
+      // file in some cases, so the post-run cleanup below is the real
+      // guarantee.
       persistSession: false,
     } as Parameters<typeof query>[0]["options"],
   });
 
   let text = "";
-  for await (const msg of stream) {
-    const m = msg as Record<string, unknown>;
-    if (m.type !== "assistant") continue;
-    const message = m.message as { content?: unknown } | undefined;
-    if (!Array.isArray(message?.content)) continue;
-    for (const block of message.content as Array<{ type?: string; text?: string }>) {
-      if (block.type === "text" && typeof block.text === "string") {
-        text += block.text;
+  let sdkSessionId: string | null = null;
+  try {
+    for await (const msg of stream) {
+      const m = msg as Record<string, unknown>;
+      if (m.type === "system" && m.subtype === "init" && typeof m.session_id === "string") {
+        sdkSessionId = m.session_id;
+        continue;
       }
+      if (m.type !== "assistant") continue;
+      const message = m.message as { content?: unknown } | undefined;
+      if (!Array.isArray(message?.content)) continue;
+      for (const block of message.content as Array<{ type?: string; text?: string }>) {
+        if (block.type === "text" && typeof block.text === "string") {
+          text += block.text;
+        }
+      }
+    }
+  } finally {
+    // Whatever happened, scrub the consolidator's stub session so it
+    // doesn't appear in the chat sidebar's "Recents" list. The SDK
+    // sometimes creates the file before honoring `persistSession`, and
+    // the listing route at `/api/sessions` enumerates every JSONL under
+    // `~/.claude/projects/`.
+    if (sdkSessionId) {
+      const stubPath = join(consolidatorClaudeProjectsDir(), `${sdkSessionId}.jsonl`);
+      await rm(stubPath, { force: true }).catch(() => {});
     }
   }
   return text;

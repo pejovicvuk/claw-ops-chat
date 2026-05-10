@@ -46,6 +46,40 @@ export function autoMemoryConfigPath(): string {
   return join(MEMORY_ROOT, "auto-config.json");
 }
 
+/**
+ * Stable cwd handed to the consolidator's one-shot `query()` call.
+ * Pinning it (instead of using `tmpdir()`) means the sanitized path
+ * the SDK derives from it is deterministic and platform-independent,
+ * which lets us:
+ *   1. Reliably delete the consolidator's stub session file after each
+ *      run (the SDK still creates one even with `persistSession: false`).
+ *   2. Sweep the same directory clean at server boot to clear orphans
+ *      from crashes or pre-fix runs.
+ *
+ * Hidden under `/root/.memory/.consolidator-cwd/` so the file browser
+ * doesn't surface it and Claude never reads it as a project.
+ */
+export function consolidatorCwd(): string {
+  return join(MEMORY_ROOT, ".consolidator-cwd");
+}
+
+/**
+ * `~/.claude/projects/<sanitized(consolidatorCwd)>/` — where the SDK
+ * writes the consolidator's stub session JSONLs. We delete inside this
+ * dir on every run + at boot.
+ */
+export function consolidatorClaudeProjectsDir(): string {
+  return join(homedir(), ".claude", "projects", sanitizeCwdForClaude(consolidatorCwd()));
+}
+
+/** Create the consolidator cwd if missing. Called once at boot. */
+export async function ensureConsolidatorCwd(): Promise<void> {
+  const dir = consolidatorCwd();
+  if (!existsSync(dir)) {
+    await mkdir(dir, { recursive: true });
+  }
+}
+
 /** Directory holding global memory `.md` files. */
 export function globalMemoryDir(): string {
   return join(MEMORY_ROOT, "global");

@@ -237,6 +237,18 @@ html:not(.dark) .lg-bubble:focus-within {
 .dark .lg-bubble:focus-within {
   background: rgba(0, 0, 0, 0.32);
 }
+/* Desktop pumps the blur radius so the composer pill reads as the
+   same "frosted glass" weight users see in the iOS PWA. WebKit on iOS
+   applies a perceptually stronger backdrop-filter for a given pixel
+   radius, and the desktop viewport is much larger, so the shared 32 px
+   value lands as visibly weaker on PC. Bumping to 56 px at md+ matches
+   the iOS look without ballooning the mobile blur. */
+@media (min-width: 768px) {
+  .lg-bubble {
+    backdrop-filter: blur(56px) saturate(180%);
+    -webkit-backdrop-filter: blur(56px) saturate(180%);
+  }
+}
 
 /* ── Scroll fade scrims ──
  *

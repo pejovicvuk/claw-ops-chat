@@ -1,6 +1,5 @@
 import { existsSync } from "fs";
 import { readFile, rm } from "fs/promises";
-import { join } from "path";
 
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
@@ -185,14 +184,9 @@ async function defaultLlm(systemPrompt: string, userMessage: string): Promise<st
   });
 
   let text = "";
-  let sdkSessionId: string | null = null;
   try {
     for await (const msg of stream) {
       const m = msg as Record<string, unknown>;
-      if (m.type === "system" && m.subtype === "init" && typeof m.session_id === "string") {
-        sdkSessionId = m.session_id;
-        continue;
-      }
       if (m.type !== "assistant") continue;
       const message = m.message as { content?: unknown } | undefined;
       if (!Array.isArray(message?.content)) continue;
@@ -203,15 +197,13 @@ async function defaultLlm(systemPrompt: string, userMessage: string): Promise<st
       }
     }
   } finally {
-    // Whatever happened, scrub the consolidator's stub session so it
-    // doesn't appear in the chat sidebar's "Recents" list. The SDK
-    // sometimes creates the file before honoring `persistSession`, and
-    // the listing route at `/api/sessions` enumerates every JSONL under
-    // `~/.claude/projects/`.
-    if (sdkSessionId) {
-      const stubPath = join(consolidatorClaudeProjectsDir(), `${sdkSessionId}.jsonl`);
-      await rm(stubPath, { force: true }).catch(() => {});
-    }
+    // Whatever happened, scrub the consolidator's stub project dir so
+    // it doesn't appear in the chat sidebar. The SDK sometimes creates
+    // a stub JSONL before honoring `persistSession`, and may also drop
+    // sidecar artifacts. Removing the whole directory is safe — nothing
+    // else writes here. Belt-and-braces alongside the session-listing
+    // filter in `/api/sessions*`.
+    await rm(consolidatorClaudeProjectsDir(), { recursive: true, force: true }).catch(() => {});
   }
   return text;
 }

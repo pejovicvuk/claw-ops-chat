@@ -2,6 +2,7 @@ import { readdir, readFile, stat } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { consolidatorProjectDirName } from "@/lib/memory/paths";
 
 interface SessionEntry {
   sessionId: string;
@@ -27,11 +28,18 @@ export async function GET(request: Request) {
 
   const projectsDir = join(homedir(), ".claude", "projects");
   const sessions: SessionEntry[] = [];
+  // The auto-memory consolidator runs a one-shot SDK query against a
+  // pinned cwd; the SDK drops a stub JSONL into this project dir while
+  // the call is in flight. Skip it so the sidebar never shows an
+  // empty "New conversation" row racing with the consolidator's
+  // post-run cleanup.
+  const skipDir = consolidatorProjectDirName();
 
   try {
     const projectDirs = await readdir(projectsDir).catch(() => [] as string[]);
 
     for (const projDir of projectDirs) {
+      if (projDir === skipDir) continue;
       const projPath = join(projectsDir, projDir);
       const projStat = await stat(projPath).catch(() => null);
       if (!projStat?.isDirectory()) continue;

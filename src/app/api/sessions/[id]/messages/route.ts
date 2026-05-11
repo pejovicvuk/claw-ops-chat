@@ -3,6 +3,7 @@ import { join } from "path";
 import { homedir } from "os";
 import { extractSession, unauthorized } from "@/lib/auth-server";
 import { withAudit } from "@/lib/audit/api-wrap";
+import { consolidatorProjectDirName } from "@/lib/memory/paths";
 import {
   snapshotFromAssistantUsage,
   DEFAULT_CONTEXT_WINDOW,
@@ -57,11 +58,15 @@ async function getHandler(request: Request, { params }: RouteCtx): Promise<Respo
   const cwdRef: { value: string | null } = { value: null };
 
   try {
-    // Find the session file across all project directories
+    // Find the session file across all project directories. Skip the
+    // consolidator's stub project dir so a stale stub JSONL from the
+    // auto-memory subsystem can't satisfy a sessionId lookup.
     const projectDirs = await readdir(projectsDir).catch(() => [] as string[]);
+    const skipDir = consolidatorProjectDirName();
     let sessionFile: string | null = null;
 
     for (const projDir of projectDirs) {
+      if (projDir === skipDir) continue;
       const candidate = join(projectsDir, projDir, `${sessionId}.jsonl`);
       const s = await stat(candidate).catch(() => null);
       if (s?.isFile()) {

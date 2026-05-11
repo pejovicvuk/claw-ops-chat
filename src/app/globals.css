@@ -237,16 +237,34 @@ html:not(.dark) .lg-bubble:focus-within {
 .dark .lg-bubble:focus-within {
   background: rgba(0, 0, 0, 0.32);
 }
-/* Desktop pumps the blur radius so the composer pill reads as the
-   same "frosted glass" weight users see in the iOS PWA. WebKit on iOS
-   applies a perceptually stronger backdrop-filter for a given pixel
-   radius, and the desktop viewport is much larger, so the shared 32 px
-   value lands as visibly weaker on PC. Bumping to 56 px at md+ matches
-   the iOS look without ballooning the mobile blur. */
+/* Desktop pumps both the blur radius AND the background opacity so the
+   composer pill reads as the same "frosted glass" weight users see in
+   the iOS PWA. Two reasons the previous 32 px shared value landed weak
+   on PC:
+     1. WebKit on iOS applies a perceptually stronger backdrop-filter
+        for a given pixel radius (and renders on a smaller viewport).
+     2. Desktop Chrome / Firefox effectively clamp backdrop-filter blur
+        intensity — bumping the radius alone hit diminishing returns,
+        so chat text scrolling under the pill still read sharply.
+   Combined fix: 64 px blur + bump the background tint up so the pill
+   stays clearly "frosted" even if the browser is cheaping out on the
+   GPU blur. Focus-state bg bumped proportionally. */
 @media (min-width: 768px) {
   .lg-bubble {
-    backdrop-filter: blur(56px) saturate(180%);
-    -webkit-backdrop-filter: blur(56px) saturate(180%);
+    backdrop-filter: blur(64px) saturate(190%);
+    -webkit-backdrop-filter: blur(64px) saturate(190%);
+  }
+  html:not(.dark) .lg-bubble {
+    background: rgba(40, 40, 40, 0.22);
+  }
+  .dark .lg-bubble {
+    background: rgba(0, 0, 0, 0.5);
+  }
+  html:not(.dark) .lg-bubble:focus-within {
+    background: rgba(40, 40, 40, 0.28);
+  }
+  .dark .lg-bubble:focus-within {
+    background: rgba(0, 0, 0, 0.58);
   }
 }
 

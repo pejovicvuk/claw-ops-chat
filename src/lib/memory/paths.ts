@@ -97,11 +97,17 @@ export function globalMemoryDir(): string {
 
 /**
  * Sanitize a cwd into the directory-name shape the Claude Agent SDK uses
- * for both transcripts and auto-memory: every `/` becomes `-`. Confirmed
- * against `/root/.claude/projects/-root-projects-test-claw-ops-chat/`.
+ * for both transcripts and auto-memory: every non-`[A-Za-z0-9-]` char
+ * becomes `-`. Verified against live install:
+ *   /root/projects/test/claw-ops-chat → -root-projects-test-claw-ops-chat
+ *   /root/.memory/.consolidator-cwd   → -root--memory--consolidator-cwd
+ * The earlier `/`-only replacement missed dot-prefixed segments, which
+ * broke the consolidator's boot sweep + per-run cleanup (they pointed
+ * at a directory that never existed under that name), letting stub
+ * JSONLs accumulate indefinitely.
  */
 export function sanitizeCwdForClaude(cwd: string): string {
-  return cwd.replace(/\//g, "-");
+  return cwd.replace(/[^A-Za-z0-9-]/g, "-");
 }
 
 /** Where the SDK writes auto-memory for a given cwd. */

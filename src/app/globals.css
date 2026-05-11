@@ -327,6 +327,52 @@ html:not(.dark) .lg-bubble:focus-within {
   );
 }
 
+/* Desktop overrides for the composer fade.
+ *
+ * Why this exists: backdrop-filter on desktop Chrome / Firefox renders
+ * dramatically weaker than iOS Safari's implementation — to the point
+ * where chat text passes through the composer pill almost unblurred no
+ * matter how high we crank the radius. The visual the user wants is
+ * "chat text fades into the composer band as you scroll up." On iOS
+ * the gpu blur does most of that work; on desktop we have to deliver
+ * the same effect through gradient opacity instead, which is browser-
+ * independent.
+ *
+ * Changes:
+ *   - `.scroll-fade-bottom`: taller (120 → 160 px) and a much heavier
+ *     gradient — the bottom 50 % of the scrim is mostly canvas-bg, so
+ *     chat text approaching the pill visibly fades into the page color
+ *     even if backdrop-filter is doing nothing.
+ *   - `.lg-bubble`: bumped bg opacity so the pill itself obscures
+ *     anything directly behind it. iOS keeps the original translucent
+ *     glass — desktop accepts a slightly more opaque pill in exchange
+ *     for actually hiding scrolled-up content. */
+@media (min-width: 768px) {
+  .scroll-fade-bottom {
+    height: 160px;
+    background: linear-gradient(
+      to top,
+      var(--canvas-bg) 0%,
+      color-mix(in srgb, var(--canvas-bg) 88%, transparent) 30%,
+      color-mix(in srgb, var(--canvas-bg) 55%, transparent) 60%,
+      color-mix(in srgb, var(--canvas-bg) 20%, transparent) 85%,
+      transparent 100%
+    );
+  }
+  html:not(.dark) .lg-bubble {
+    background: rgba(40, 40, 40, 0.18);
+  }
+  .dark .lg-bubble {
+    background: rgba(0, 0, 0, 0.5);
+  }
+  html:not(.dark) .lg-bubble:focus-within {
+    background: rgba(40, 40, 40, 0.24);
+  }
+  .dark .lg-bubble:focus-within {
+    background: rgba(0, 0, 0, 0.58);
+  }
+}
+
 /* ── Overlay Surface ── */
 
 .surface-overlay {

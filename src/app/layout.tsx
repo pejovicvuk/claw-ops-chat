@@ -86,43 +86,20 @@ export default function RootLayout({
       </head>
       <body className={`${inter.variable} antialiased`}>
         {/*
-          SVG filter referenced by the `.lg-filter` layer of the liquid-
-          glass pill (composer + scroll-to-bottom button). Stays mounted
-          for the lifetime of the document so `filter: url(#lg-dist)` is
-          always resolvable. Hidden via `display: none` on the <svg>; the
-          <filter> child still works because filters are referenced, not
-          rendered.
+          SVG goo filter referenced by the .thinking-loader. The big
+          alpha multiplier in the colour-matrix maps a soft Gaussian
+          halo into a hard binary edge, so two nearby circles fuse into
+          one organic blob (L02 "Liquid Metal" recipe). Stays mounted
+          for the lifetime of the document so `filter: url(#thinking-goo)`
+          is always resolvable. Hidden via inline style on the <svg>;
+          the <filter> child still works because filters are referenced,
+          not rendered.
         */}
         <svg
           aria-hidden="true"
           style={{ position: "absolute", width: 0, height: 0, overflow: "hidden" }}
         >
           <defs>
-            <filter id="lg-dist" x="0%" y="0%" width="100%" height="100%">
-              <feTurbulence
-                type="fractalNoise"
-                baseFrequency="0.008 0.008"
-                numOctaves={2}
-                seed={92}
-                result="noise"
-              />
-              <feGaussianBlur in="noise" stdDeviation={2} result="blurred" />
-              <feDisplacementMap
-                in="SourceGraphic"
-                in2="blurred"
-                scale={18}
-                xChannelSelector="R"
-                yChannelSelector="G"
-              />
-            </filter>
-            {/*
-              Goo filter referenced by the .thinking-loader SVG. The big
-              alpha multiplier in the colour-matrix is the trick: it
-              maps a soft Gaussian halo into a hard binary edge, so two
-              nearby circles fuse into one organic blob. Pulled from the
-              L02 "Liquid Metal" recipe in the loader sampler the user
-              shared.
-            */}
             <filter id="thinking-goo">
               <feGaussianBlur in="SourceGraphic" stdDeviation={10} result="blur" />
               <feColorMatrix

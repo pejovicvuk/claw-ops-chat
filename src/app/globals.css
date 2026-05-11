@@ -16,13 +16,6 @@
   --glass-bg: rgba(255, 255, 255, 0.55);
   --glass-border: rgba(255, 255, 255, 0.35);
   --glass-blur: 28px;
-  /* Liquid-glass tokens — used by the multi-layer .lg-pill structure
-     (composer + scroll-to-bottom button). The bg-color is intentionally
-     low-opacity so the displacement filter behind it is still visible. */
-  --lg-bg-color: rgba(255, 255, 255, 0.22);
-  --lg-bg-color-focus: rgba(255, 255, 255, 0.42);
-  --lg-highlight: rgba(255, 255, 255, 0.75);
-  --lg-shadow: 0 6px 6px rgba(0, 0, 0, 0.18), 0 0 20px rgba(0, 0, 0, 0.08);
   /* Monitoring status palette — WCAG-AA on canvas-bg. */
   --mon-healthy: #16a34a;
   --mon-warning: #d97706;
@@ -49,10 +42,6 @@
   --glass-bg: rgba(30, 30, 30, 0.55);
   --glass-border: rgba(255, 255, 255, 0.08);
   --glass-blur: 28px;
-  --lg-bg-color: rgba(50, 50, 50, 0.32);
-  --lg-bg-color-focus: rgba(60, 60, 60, 0.55);
-  --lg-highlight: rgba(255, 255, 255, 0.22);
-  --lg-shadow: 0 6px 8px rgba(0, 0, 0, 0.4), 0 0 24px rgba(0, 0, 0, 0.18);
   --mon-healthy: #22c55e;
   --mon-warning: #f59e0b;
   --mon-critical: #ef4444;
@@ -180,10 +169,10 @@ html:not(.dark) {
 /* ── Refined liquid-glass bubble ──
  *
  * Used by the floating mobile chrome (sessions / files / new-chat
- * bubbles + the scroll-to-bottom button). Pure backdrop-filter blur +
- * 1 px hairline + soft inner highlight + drop shadow. Matches the
- * Anthropic iOS app's bubble treatment: clean and "premium-feeling"
- * instead of the gimmicky SVG-displacement ripple `.lg-pill` uses.
+ * bubbles), the composer pill, and the scroll-to-bottom button. Pure
+ * backdrop-filter blur + 1 px hairline + soft inner highlight + drop
+ * shadow. Matches the Anthropic iOS app's bubble treatment: clean and
+ * "premium-feeling".
  *
  *   - Background is a near-transparent white tint so the blur reads as
  *     real glass and the canvas-bg below colours through.
@@ -419,86 +408,6 @@ html:not(.dark) .lg-bubble:focus-within {
 .dark .glass-input:focus-within {
   background-color: rgba(40, 40, 40, 0.88);
   border-color: rgba(255, 255, 255, 0.14);
-}
-
-/* ── Liquid Glass (multi-layer) ──
- *
- * A four-layer recipe that mirrors Apple's Liquid Glass treatment:
- *
- *   z=0  .lg-filter    blurred backdrop, distorted by the SVG #lg-dist
- *                      filter for the watery refraction look
- *   z=1  .lg-overlay   tint layer (var(--lg-bg-color))
- *   z=2  .lg-specular  inset highlight along the top + edges, as if
- *                      light is catching the curve of a real glass pill
- *   z=3  .lg-content   actual content (text, buttons), unaffected by
- *                      the displacement filter
- *
- * The SVG filter lives in src/app/layout.tsx so the `url(#lg-dist)`
- * reference is always resolvable, even on the very first paint.
- *
- * Composer pill + scroll-to-bottom button both use this stack — that's
- * why the layers are exposed as separate classes instead of pseudo-
- * elements: pseudos can only do two layers, this needs three.
- */
-.lg-pill {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  background: transparent;
-  box-shadow: var(--lg-shadow);
-}
-
-.lg-filter {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
-  filter: url(#lg-dist);
-  isolation: isolate;
-  pointer-events: none;
-  border-radius: inherit;
-}
-
-.lg-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  background: var(--lg-bg-color);
-  pointer-events: none;
-  border-radius: inherit;
-  transition: background 220ms ease-out;
-}
-
-.lg-specular {
-  position: absolute;
-  inset: 0;
-  z-index: 2;
-  border-radius: inherit;
-  pointer-events: none;
-  box-shadow:
-    inset 1px 1px 0 var(--lg-highlight),
-    inset 0 0 6px var(--lg-highlight);
-  transition: box-shadow 220ms ease-out;
-}
-
-.lg-content {
-  position: relative;
-  z-index: 3;
-}
-
-/* On focus, the overlay swaps to a more saturated alpha and the
-   specular catches a touch more light — the same "wake up" feeling
-   the old .glass-input:focus-within rule produced, but without
-   forcing the bg to nearly opaque (which would kill the displacement
-   effect that's the whole point of liquid glass). */
-.lg-pill:focus-within > .lg-overlay {
-  background: var(--lg-bg-color-focus);
-}
-.lg-pill:focus-within > .lg-specular {
-  box-shadow:
-    inset 1px 1px 0 var(--lg-highlight),
-    inset 0 0 10px var(--lg-highlight);
 }
 
 /* "Liquid metal" thinking loader. Three orange blobs orbit a white

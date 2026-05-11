@@ -889,8 +889,9 @@ export function ChatView({
                 wrapper's top edge — i.e. above the pill — regardless of
                 state. Mobile renders the same way (right-aligned), since
                 the mobile wrapper is now `relative`.
-                The badge sits in an outer wrapper so it can poke past
-                the lg-pill's overflow:hidden corner-clip. */}
+                The badge sits in an outer wrapper as a sibling of the
+                button so its negative `-right-1 -top-1` offsets can
+                poke past the button's bounds. */}
             {isScrolledUp && (
               <div className="animate-msg-in pointer-events-auto absolute -top-14 right-4 z-20 h-9 w-9 md:left-1/2 md:right-auto md:-translate-x-1/2">
                 <button
@@ -905,14 +906,9 @@ export function ChatView({
                       : "Scroll to bottom"
                   }
                   title="Scroll to bottom"
-                  className="lg-pill flex h-full w-full items-center justify-center rounded-full text-canvas-fg transition-transform duration-150 hover:scale-105 active:scale-95"
+                  className="lg-bubble flex h-full w-full items-center justify-center rounded-full text-canvas-fg transition-transform duration-150 hover:scale-105 active:scale-95"
                 >
-                  <span className="lg-filter" aria-hidden="true" />
-                  <span className="lg-overlay" aria-hidden="true" />
-                  <span className="lg-specular" aria-hidden="true" />
-                  <span className="lg-content flex h-full w-full items-center justify-center">
-                    <FiArrowDown size={16} />
-                  </span>
+                  <FiArrowDown size={16} />
                 </button>
                 {unreadCount > 0 && (
                   <span

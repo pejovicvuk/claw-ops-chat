@@ -72,6 +72,16 @@ export function consolidatorClaudeProjectsDir(): string {
   return join(homedir(), ".claude", "projects", sanitizeCwdForClaude(consolidatorCwd()));
 }
 
+/**
+ * Basename of `consolidatorClaudeProjectsDir()` — the single segment
+ * the `/api/sessions*` routes compare against when walking
+ * `~/.claude/projects/` so the consolidator's transient stub session
+ * never appears in the sidebar as an empty "New conversation".
+ */
+export function consolidatorProjectDirName(): string {
+  return sanitizeCwdForClaude(consolidatorCwd());
+}
+
 /** Create the consolidator cwd if missing. Called once at boot. */
 export async function ensureConsolidatorCwd(): Promise<void> {
   const dir = consolidatorCwd();

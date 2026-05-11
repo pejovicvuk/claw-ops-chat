@@ -2,6 +2,7 @@ import { readdir, stat, unlink } from "fs/promises";
 import { join } from "path";
 import { homedir } from "os";
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { consolidatorProjectDirName } from "@/lib/memory/paths";
 import { deleteSessionFile } from "@/lib/session-persistence";
 import { clearSessionStatus } from "@/lib/session-status-store";
 
@@ -47,9 +48,13 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
   //    encoded-cwd ourselves — that encoding lives in the SDK and isn't
   //    public API.
   let removedJsonl = 0;
+  // Skip the consolidator's stub project dir — its JSONLs are
+  // owned by the auto-memory subsystem, not by user chats.
+  const skipDir = consolidatorProjectDirName();
   try {
     const projDirs = await readdir(PROJECTS_DIR).catch(() => [] as string[]);
     for (const projDir of projDirs) {
+      if (projDir === skipDir) continue;
       const projPath = join(PROJECTS_DIR, projDir);
       const s = await stat(projPath).catch(() => null);
       if (!s?.isDirectory()) continue;

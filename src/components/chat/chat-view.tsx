@@ -835,11 +835,15 @@ export function ChatView({
           {/* Bottom blur scrim — mirrors `.scroll-fade-top`. Chat text
               scrolling DOWN past the floating composer gets gradually
               frosted and fades out near the screen bottom, exactly the
-              way the top edge fades under the iOS status bar. Only on
-              mobile + headerless (the floating-composer surface);
-              desktop keeps its existing layout where the composer
-              already overlays a `pb-32` chat scroll area. */}
-          {isMobile && headerless && <div className="scroll-fade-bottom" aria-hidden="true" />}
+              way the top edge fades under the iOS status bar.
+              Rendered on EVERY viewport in headerless (floating-
+              composer) mode: the composer's own backdrop-filter alone
+              isn't enough on desktop because Chrome / Firefox render
+              backdrop-filter much weaker than iOS Safari, and the
+              scrim's gradient-masked blur is what actually fades chat
+              content into illegibility before it reaches the pill —
+              that's the iOS-PWA effect the user dialled in. */}
+          {headerless && <div className="scroll-fade-bottom" aria-hidden="true" />}
 
           {/* Awaiting-input awareness lives in <ApprovalBanner /> above
               the scroll container — it covers permission, plan, AND ask,

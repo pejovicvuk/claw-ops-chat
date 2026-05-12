@@ -1035,6 +1035,21 @@ html:not(.dark) .lg-bubble:focus-within {
   transform: translateX(2px);
 }
 
+/* ── Hover transition utility ──
+ * Drop-in for any surface that toggles `hover:bg-canvas-surface-hover`
+ * (and usually `hover:text-canvas-fg`). Keeps all hovers across the app
+ * tuned to the same dur/ease pair — replaces hand-rolled
+ * `transition-colors duration-150` lines and the implicit "snap" on
+ * elements that forgot the transition. Composes with `btn-press` cleanly:
+ * btn-press handles the active scale, `tx-surface` handles the colour
+ * tween. */
+.tx-surface {
+  transition:
+    background-color var(--dur-fast) var(--ease-std),
+    color var(--dur-fast) var(--ease-std),
+    border-color var(--dur-fast) var(--ease-std);
+}
+
 .focus-ring {
   transition: box-shadow var(--dur-fast) ease;
   outline: none;

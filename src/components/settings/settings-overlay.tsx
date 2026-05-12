@@ -212,7 +212,7 @@ export function SettingsOverlay() {
                 type="button"
                 onClick={goBack}
                 aria-label="Back"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                className="tx-surface flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
               >
                 <FiArrowLeft size={14} />
               </button>
@@ -228,7 +228,7 @@ export function SettingsOverlay() {
             type="button"
             onClick={close}
             aria-label="Close settings"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+            className="tx-surface flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
           >
             <FiX size={16} />
           </button>
@@ -279,7 +279,7 @@ export function SettingsOverlay() {
             <button
               type="button"
               onClick={handleLogout}
-              className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/15"
+              className="tx-surface flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-500 hover:bg-red-500/15"
             >
               <FiLogOut size={13} />
               Log out

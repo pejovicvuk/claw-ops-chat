@@ -70,7 +70,7 @@ export function BulkDeleteDialog({
             type="button"
             onClick={onClose}
             aria-label="Close dialog"
-            className="ml-auto flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+            className="tx-surface ml-auto flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
           >
             <FiX size={14} />
           </button>

@@ -220,16 +220,24 @@ html:not(.dark) {
   -webkit-backdrop-filter: blur(32px) saturate(175%);
   background: rgba(0, 0, 0, 0.12);
   border: 1px solid rgba(255, 255, 255, 0.14);
+  /* Three-layer shadow stack: drop shadow + top specular + bottom
+     underside. The underside (negative-Y inset) is the 2026 refinement
+     — it darkens the bottom 1 px of the surface so the panel reads as
+     an object with thickness rather than a flat translucent layer.
+     The top specular is also pulled up a few opacity points so the
+     "lit from above" feel reads more clearly against the underside. */
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
 }
 html:not(.dark) .lg-bubble {
   background: rgba(40, 40, 40, 0.12);
   border-color: rgba(0, 0, 0, 0.08);
   box-shadow:
     0 6px 20px rgba(0, 0, 0, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.08);
 }
 .dark .lg-bubble {
   /* Lightened from the previous 0.38 black tint (per user: "make it a
@@ -240,7 +248,8 @@ html:not(.dark) .lg-bubble {
   border-color: rgba(255, 255, 255, 0.1);
   box-shadow:
     0 8px 24px rgba(0, 0, 0, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+    inset 0 1px 0 rgba(255, 255, 255, 0.16),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.32);
 }
 /* Subtle "wake up" affordance when the composer textarea is focused. */
 .lg-bubble:focus-within {
@@ -429,14 +438,16 @@ html:not(.dark) .lg-bubble:focus-within {
   border: 1px solid rgba(0, 0, 0, 0.08);
   box-shadow:
     0 12px 32px rgba(0, 0, 0, 0.18),
-    inset 0 1px 0 rgba(255, 255, 255, 0.65);
+    inset 0 1px 0 rgba(255, 255, 255, 0.7),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.08);
 }
 .dark .lg-menu {
   background: rgba(28, 28, 28, 0.88);
   border-color: rgba(255, 255, 255, 0.08);
   box-shadow:
     0 12px 32px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    inset 0 1px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
 }
 
 /* ── Overlay Surface ── */
@@ -469,12 +480,14 @@ html:not(.dark) .lg-bubble:focus-within {
   border: 1px solid var(--glass-border);
   box-shadow:
     0 2px 16px rgba(0, 0, 0, 0.06),
-    inset 0 1px 0 rgba(255, 255, 255, 0.4);
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.06);
 }
 .dark .glass-input {
   box-shadow:
     0 2px 16px rgba(0, 0, 0, 0.2),
-    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.2);
 }
 
 /* Focus-within swaps the glass bg to a more opaque value. Both the base

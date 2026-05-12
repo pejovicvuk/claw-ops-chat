@@ -272,12 +272,15 @@ export function SessionList({
           <div className="space-y-0.5">
             {sessions.map((session, sessionIndex) => {
               const isActive = session.sessionId === selectedSessionId;
-              // Cascade in the first 8 initial items at 25 ms apart. Items that
+              // Every initial session animates in via animate-empty-in; the
+              // stagger delay grows by 25 ms per row but is capped at 600 ms
+              // so long lists don't drag the cascade out for seconds — rows
+              // beyond index 24 just fire at the same 600 ms mark. Items that
               // weren't in the initial render (new chats, polled additions)
               // skip the animation so the list doesn't restagger on every
               // status update.
               const isInitial = initialSessionIdsRef.current?.has(session.sessionId) === true;
-              const staggerIdx = isInitial && sessionIndex < 8 ? sessionIndex : -1;
+              const staggerIdx = isInitial ? sessionIndex : -1;
               // Prefer the live status from the polling hook; fall back to
               // the legacy `runningSessionIds` boolean so any caller that
               // still populates it (e.g. replayed WS status from a fresh
@@ -303,7 +306,7 @@ export function SessionList({
                   };
               const animatedStyle: React.CSSProperties =
                 staggerIdx >= 0
-                  ? { ...rowStyle, animationDelay: `${staggerIdx * 25}ms` }
+                  ? { ...rowStyle, animationDelay: `${Math.min(staggerIdx * 25, 600)}ms` }
                   : rowStyle;
               return (
                 <button

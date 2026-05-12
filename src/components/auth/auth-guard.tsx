@@ -94,5 +94,13 @@ export function AuthGuard({ children }: AuthGuardProps) {
     return <AppSkeleton />;
   }
 
-  return <>{children}</>;
+  // Wrap the chat tree in a same-origin fade-in so the skeleton → ready
+  // transition reads as a soft handoff instead of a hard cut. Key off `ready`
+  // so the animation only plays on the rising edge — subsequent re-renders
+  // don't re-trigger it.
+  return (
+    <div key="auth-ready" className="animate-subpage-in">
+      {children}
+    </div>
+  );
 }

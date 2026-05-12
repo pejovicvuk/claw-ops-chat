@@ -204,8 +204,16 @@ export function SettingsOverlay() {
       aria-labelledby="settings-title"
     >
       <div className={modalClasses} onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div className="flex shrink-0 items-center justify-between border-b border-canvas-border px-5 py-3.5">
+        {/* Header.
+            `pt-safe-top` reserves env(safe-area-inset-top) on mobile so the
+            back / close buttons clear the iOS status bar + Dynamic Island
+            instead of sitting underneath them — without it the modal is
+            `h-full` on phones and paints edge-to-edge under the status bar,
+            making the buttons unreachable. On desktop / tablet the modal
+            is a centered card with its own margins, so the utility falls
+            back to its 12 px floor (visually indistinguishable from the
+            old py-3.5). */}
+        <div className="pt-safe-top flex shrink-0 items-center justify-between border-b border-canvas-border px-5 pb-3.5">
           <div className="flex min-w-0 items-center gap-2">
             {hasBack ? (
               <button

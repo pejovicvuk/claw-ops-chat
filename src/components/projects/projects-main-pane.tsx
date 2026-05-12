@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { FiArrowLeft } from "react-icons/fi";
+import { FiArrowLeft, FiMessageCircle } from "react-icons/fi";
 import { useUrlState } from "@/lib/use-url-state";
 import { fetchProjects, type ProjectMeta } from "@/lib/projects-api";
 import { useItems } from "@/lib/use-items";
@@ -109,20 +109,28 @@ function ProjectDetail({
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-canvas-bg">
       <header className="pt-safe-top flex shrink-0 items-center gap-2 border-b border-canvas-border px-4 pb-3">
+        {/* Mobile-only sessions toggle. Uses FiMessageCircle so it
+            reads as "open sessions" rather than "back" — the back
+            arrow was previously doing double-duty as the sidebar
+            trigger, which was the source of the "icon says back but
+            it opens sessions" confusion. */}
         {onOpenSessions && (
           <button
             type="button"
             onClick={onOpenSessions}
             className="btn-press flex h-9 w-9 items-center justify-center rounded-lg text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg md:hidden"
-            aria-label="Open sidebar"
+            aria-label="Open sessions"
           >
-            <FiArrowLeft size={16} />
+            <FiMessageCircle size={16} />
           </button>
         )}
+        {/* Real back-to-projects button, visible on every viewport so
+            mobile users have an in-app affordance for "leave this
+            project" without relying on browser back. */}
         <button
           type="button"
           onClick={handleBack}
-          className="btn-press hidden h-9 w-9 items-center justify-center rounded-lg text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg md:flex"
+          className="btn-press flex h-9 w-9 items-center justify-center rounded-lg text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
           aria-label="Back to projects"
           title="Back to projects"
         >

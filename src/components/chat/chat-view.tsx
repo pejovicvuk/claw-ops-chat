@@ -206,6 +206,24 @@ export function ChatView({
   }, [authRequired, setParam]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const composerWrapRef = useRef<HTMLDivElement>(null);
+  // Live composer height (in px). Measured via ResizeObserver so the
+  // messages scroll container can reserve matching bottom padding —
+  // without it the last message ends up under the floating composer pill
+  // and is permanently obscured. Starts at 0; the observer fires once on
+  // mount so this stabilises within a frame.
+  const [composerHeight, setComposerHeight] = useState(0);
+  useEffect(() => {
+    const el = composerWrapRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        setComposerHeight(entry.contentRect.height);
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const userScrolledUpRef = useRef(false);
   // Mirrors `userScrolledUpRef` as React state so the glass
   // scroll-to-bottom button can subscribe to it. Both update together
@@ -710,7 +728,18 @@ export function ChatView({
             ) : (
               <SessionCwdProvider value={sessionCwd}>
                 <ChatFilesProvider sessionId={sessionId}>
-                  <div className={isMobile ? "pt-3 pb-2" : "mx-auto w-full max-w-6xl py-3 pb-32"}>
+                  {/* Bottom padding is computed live from the composer's
+                      measured height + 16 px breathing room. Without this
+                      the last message rests under the floating composer
+                      pill and is invisible. The pill's
+                      safe-area-inset-bottom is already part of the
+                      measurement, so this also adapts when the composer
+                      grows (multi-line text, attachments) or the iOS home
+                      indicator inset changes (rotation). */}
+                  <div
+                    className={isMobile ? "pt-3" : "mx-auto w-full max-w-6xl pt-3"}
+                    style={{ paddingBottom: composerHeight + 16 }}
+                  >
                     {/* eslint-disable-next-line react-hooks/refs -- historyIdsRef is captured once via effect then stable; safe to read during render for first-load stagger delays */}
                     {sortedMessages.map((msg, idx) => {
                       // Staggered enter animation for first-load history only —
@@ -867,7 +896,10 @@ export function ChatView({
               shape Anthropic's iOS app uses. The previous `relative`
               treatment on mobile pinned the composer in flex flow, so
               messages physically couldn't scroll behind it. */}
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 [&_*]:pointer-events-auto">
+          <div
+            ref={composerWrapRef}
+            className="pointer-events-none absolute inset-x-0 bottom-0 z-10 [&_*]:pointer-events-auto"
+          >
             <ChatInput
               status={status}
               onSend={sendMessage}

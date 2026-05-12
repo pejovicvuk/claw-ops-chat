@@ -26,6 +26,32 @@
   --mon-chart-axis: #737373;
   --mon-spark-default: rgba(26, 26, 26, 0.55);
   --mon-area-fill: rgba(232, 85, 58, 0.1);
+
+  /* ── Motion tokens ──
+   * Centralised duration + easing scale so every transition/animation in
+   * the app reads from the same vocabulary. Adopt these in new code; the
+   * existing .animate-* utilities below already reference them.
+   *
+   * Easing
+   *   --ease-out  iOS-native decelerate. Default for entrance + exit moves
+   *               where the element is settling into place.
+   *   --ease-std  Material standard. Use for property tweens (color, bg,
+   *               opacity) where there's no spatial arc.
+   *   --ease-in   Use sparingly for exits that should feel "snapped away"
+   *               rather than gracefully retracting.
+   * Duration scale (kept short so the app reads as fast):
+   *   --dur-instant 80ms   tactile feedback (btn-press)
+   *   --dur-fast    140ms  hover/focus, menus, toasts
+   *   --dur-base    220ms  modals, panels, sub-page swaps
+   *   --dur-slow    320ms  larger spatial moves (sidebar)
+   */
+  --ease-out: var(--ease-out);
+  --ease-std: var(--ease-std);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --dur-instant: 80ms;
+  --dur-fast: 140ms;
+  --dur-base: 220ms;
+  --dur-slow: 320ms;
 }
 
 .dark {
@@ -533,7 +559,7 @@ html:not(.dark) .lg-bubble:focus-within {
   background-clip: text;
   color: var(--canvas-muted);
   -webkit-text-fill-color: transparent;
-  animation: textShimmerMuted 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation: textShimmerMuted 2.6s var(--ease-std) infinite;
 }
 
 /* Empty-state entrance — gentle lift + fade. Applied to greeting, subtitle,
@@ -551,7 +577,7 @@ html:not(.dark) .lg-bubble:focus-within {
 }
 
 .animate-empty-in {
-  animation: emptyFadeIn 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: emptyFadeIn 520ms var(--ease-out) both;
 }
 
 /* Greeting headline: base accent gradient with a white sheen that sweeps
@@ -600,7 +626,7 @@ html:not(.dark) .lg-bubble:focus-within {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: textShimmer 4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  animation: textShimmer 4s var(--ease-std) infinite;
 }
 
 /* ── Scrollbar ── */
@@ -677,7 +703,7 @@ html:not(.dark) .lg-bubble:focus-within {
 }
 
 .animate-modal-in {
-  animation: modalIn 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: modalIn 200ms var(--ease-out) both;
 }
 .animate-modal-out {
   animation: modalOut 150ms ease-in both;
@@ -691,8 +717,8 @@ html:not(.dark) .lg-bubble:focus-within {
   opacity: 0;
   pointer-events: none;
   transition:
-    grid-template-rows 250ms cubic-bezier(0.4, 0, 0.2, 1),
-    opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);
+    grid-template-rows 250ms var(--ease-std),
+    opacity 200ms var(--ease-std);
 }
 .animate-collapse.open {
   grid-template-rows: 1fr;
@@ -782,7 +808,7 @@ html:not(.dark) .lg-bubble:focus-within {
 }
 
 .animate-sidebar-in {
-  animation: sidebarSlideIn 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: sidebarSlideIn var(--dur-slow) cubic-bezier(0.32, 0.72, 0, 1) both;
   will-change: transform;
 }
 
@@ -825,7 +851,7 @@ html:not(.dark) .lg-bubble:focus-within {
 }
 
 .animate-msg-in {
-  animation: messageFadeIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: messageFadeIn 280ms var(--ease-out) both;
   /* Poor-man's virtualization: browser skips rendering off-screen bubbles.
      `auto 160px` lets the browser remember last layout size so scroll-height
      stays accurate. */
@@ -854,7 +880,7 @@ html:not(.dark) .lg-bubble:focus-within {
 
 .transition-sidebar {
   transition:
-    width 200ms cubic-bezier(0.4, 0, 0.2, 1),
+    width 200ms var(--ease-std),
     opacity 150ms ease;
 }
 
@@ -887,7 +913,7 @@ html:not(.dark) .lg-bubble:focus-within {
   }
 }
 .animate-backdrop-in {
-  animation: backdropIn 150ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: backdropIn 150ms var(--ease-out) both;
 }
 .animate-backdrop-out {
   animation: backdropOut 120ms ease-in both;
@@ -916,7 +942,7 @@ html:not(.dark) .lg-bubble:focus-within {
   }
 }
 .animate-menu-in {
-  animation: menuIn 140ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: menuIn var(--dur-fast) var(--ease-out) both;
   transform-origin: top left;
 }
 .animate-menu-out {
@@ -947,7 +973,7 @@ html:not(.dark) .lg-bubble:focus-within {
   }
 }
 .animate-panel-in {
-  animation: panelIn 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: panelIn var(--dur-base) var(--ease-out) both;
 }
 .animate-panel-out {
   animation: panelOut 160ms ease-in both;
@@ -957,7 +983,7 @@ html:not(.dark) .lg-bubble:focus-within {
 
 .btn-press {
   transition:
-    transform 80ms ease-out,
+    transform var(--dur-instant) ease-out,
     background-color 120ms ease;
 }
 .btn-press:active {
@@ -967,14 +993,14 @@ html:not(.dark) .lg-bubble:focus-within {
 .row-hover {
   transition:
     background-color 120ms ease,
-    transform 140ms cubic-bezier(0.16, 1, 0.3, 1);
+    transform var(--dur-fast) var(--ease-out);
 }
 .row-hover:hover {
   transform: translateX(2px);
 }
 
 .focus-ring {
-  transition: box-shadow 140ms ease;
+  transition: box-shadow var(--dur-fast) ease;
   outline: none;
 }
 .focus-ring:focus-visible {
@@ -987,7 +1013,7 @@ html:not(.dark) .lg-bubble:focus-within {
   }
 }
 .animate-spin-once {
-  animation: spinOnce 450ms cubic-bezier(0.4, 0, 0.2, 1);
+  animation: spinOnce 450ms var(--ease-std);
 }
 
 /* ── GitHub-style alerts (`> [!NOTE]` / [!TIP] / [!IMPORTANT] / [!WARNING] / [!CAUTION]) ──

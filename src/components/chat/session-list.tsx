@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   FiAlertTriangle,
   FiFolder,
@@ -97,6 +97,14 @@ export function SessionList({
   // produced duplicates, so it has been removed.
 
   const activeCount = Object.values(statuses).filter((s) => s.status !== "idle").length;
+
+  // Capture the session IDs present in the FIRST non-empty render so the
+  // cascade entrance only plays on that snapshot. Items added later (new
+  // chats, polling updates) just appear without re-cascading the whole list.
+  const initialSessionIdsRef = useRef<Set<string> | null>(null);
+  if (initialSessionIdsRef.current === null && sessions.length > 0) {
+    initialSessionIdsRef.current = new Set(sessions.map((s) => s.sessionId));
+  }
 
   // ─── Context menu state ─────────────────────────────────────────
   //
@@ -262,8 +270,14 @@ export function SessionList({
 
         {!loading && sessions.length > 0 && (
           <div className="space-y-0.5">
-            {sessions.map((session) => {
+            {sessions.map((session, sessionIndex) => {
               const isActive = session.sessionId === selectedSessionId;
+              // Cascade in the first 8 initial items at 25 ms apart. Items that
+              // weren't in the initial render (new chats, polled additions)
+              // skip the animation so the list doesn't restagger on every
+              // status update.
+              const isInitial = initialSessionIdsRef.current?.has(session.sessionId) === true;
+              const staggerIdx = isInitial && sessionIndex < 8 ? sessionIndex : -1;
               // Prefer the live status from the polling hook; fall back to
               // the legacy `runningSessionIds` boolean so any caller that
               // still populates it (e.g. replayed WS status from a fresh
@@ -287,6 +301,10 @@ export function SessionList({
                     borderLeftStyle: "solid",
                     borderLeftColor: "transparent",
                   };
+              const animatedStyle: React.CSSProperties =
+                staggerIdx >= 0
+                  ? { ...rowStyle, animationDelay: `${staggerIdx * 25}ms` }
+                  : rowStyle;
               return (
                 <button
                   key={session.sessionId}
@@ -297,8 +315,8 @@ export function SessionList({
                     isActive
                       ? "bg-canvas-surface-hover text-canvas-fg"
                       : "text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-                  } ${ui?.pulse ? "animate-session-active" : ""}`}
-                  style={rowStyle}
+                  } ${ui?.pulse ? "animate-session-active" : ""} ${staggerIdx >= 0 ? "animate-empty-in" : ""}`}
+                  style={animatedStyle}
                   title={ui?.label}
                 >
                   <div className="min-w-0 flex-1">

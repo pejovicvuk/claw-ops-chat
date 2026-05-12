@@ -13,8 +13,20 @@ interface AuditTableProps {
   onSelect: (event: AuditEvent) => void;
 }
 
+function eventKey(e: AuditEvent): string {
+  return e.id ?? `${e.at}-${e.subject}`;
+}
+
 export function AuditTable({ events, hasMore, loading, onLoadMore, onSelect }: AuditTableProps) {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+
+  // Cascade in the first 8 rows of the FIRST non-empty render only. Events
+  // that stream in via the IntersectionObserver pagination or live polling
+  // don't restagger.
+  const initialIdsRef = useRef<Set<string> | null>(null);
+  if (initialIdsRef.current === null && events.length > 0) {
+    initialIdsRef.current = new Set(events.map(eventKey));
+  }
 
   // IntersectionObserver sentinel — load more as the user scrolls to the
   // bottom. At single-user volumes we don't need full virtualization;
@@ -45,13 +57,12 @@ export function AuditTable({ events, hasMore, loading, onLoadMore, onSelect }: A
   return (
     <div className="overflow-hidden rounded-lg border border-canvas-border bg-canvas-bg">
       <div className="max-h-[420px] overflow-y-auto">
-        {events.map((event) => (
-          <AuditRow
-            key={event.id ?? `${event.at}-${event.subject}`}
-            event={event}
-            onSelect={onSelect}
-          />
-        ))}
+        {events.map((event, eventIndex) => {
+          const key = eventKey(event);
+          const isInitial = initialIdsRef.current?.has(key) === true;
+          const staggerIdx = isInitial && eventIndex < 8 ? eventIndex : -1;
+          return <AuditRow key={key} event={event} onSelect={onSelect} staggerIndex={staggerIdx} />;
+        })}
         {hasMore && (
           <div ref={sentinelRef} className="flex items-center justify-center py-3">
             <FiLoader size={12} className="animate-spin text-canvas-muted" />

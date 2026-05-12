@@ -190,7 +190,7 @@ export const MentionPopover = forwardRef<MentionPopoverHandle, MentionPopoverPro
         return;
       }
       const r = el.getBoundingClientRect();
-       
+
       setPos({
         left: r.left,
         bottom: Math.max(8, window.innerHeight - r.top + 8),
@@ -281,7 +281,7 @@ export const MentionPopover = forwardRef<MentionPopoverHandle, MentionPopoverPro
         role="listbox"
         aria-label="File suggestions"
         style={{ left: pos.left, bottom: pos.bottom, width: pos.width, position: "fixed" }}
-        className="z-50 overflow-hidden rounded-xl border border-canvas-border bg-canvas-bg shadow-xl"
+        className="lg-menu z-50 overflow-hidden rounded-xl"
       >
         <PopoverHeader mode={mode} dirPart={dirPart} workspace={workspace} />
         {filtered.length === 0 ? (

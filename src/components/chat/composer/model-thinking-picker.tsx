@@ -92,7 +92,7 @@ export function ModelThinkingPicker({
       {open && (
         <div
           role="menu"
-          className="animate-modal-in absolute bottom-full right-0 z-50 mb-2 w-[300px] rounded-xl border border-canvas-border bg-canvas-bg p-2 shadow-xl"
+          className="lg-menu animate-modal-in absolute bottom-full right-0 z-50 mb-2 w-[300px] rounded-xl p-2"
         >
           <p className="px-2 pb-1 pt-1 text-[10px] font-medium uppercase tracking-wider text-canvas-muted">
             Model

@@ -67,7 +67,7 @@ export function ModePicker({ value, onChange, compact }: ModePickerProps): React
       {open && (
         <div
           role="menu"
-          className="animate-modal-in absolute bottom-full left-0 z-50 mb-2 w-[260px] rounded-xl border border-canvas-border bg-canvas-bg py-1 shadow-xl"
+          className="lg-menu animate-modal-in absolute bottom-full left-0 z-50 mb-2 w-[260px] rounded-xl py-1"
         >
           {MODE_OPTIONS.map((opt) => {
             const isActive = opt.value === value;

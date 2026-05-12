@@ -500,29 +500,45 @@ export function ChatView({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, infoMessages]);
 
-  // On chat switch, snap-jump to the bottom of the new chat once history
-  // finishes loading. Two reasons this needs its own effect rather than
-  // leaning on the message-change scroll above:
-  //   1. `userScrolledUpRef` is preserved across sessions — if the user
-  //      had scrolled up in the previous chat, the message-change effect
-  //      would silently skip the auto-scroll on the new one. We wipe the
-  //      lock here on every sessionId change.
-  //   2. Smooth-scrolling across a wholesale message replacement looks
-  //      janky; an instant `behavior: "auto"` jump fits the cross-fade
-  //      transition that `setInitialMessages` produces. The rAF defers
-  //      the call until the freshly-loaded messages have committed to
-  //      the DOM so `scrollHeight` reflects them.
+  // On chat switch, snap to the bottom of the new chat once history has
+  // loaded. One rAF is enough for React to commit messages, but NOT for
+  // content that sizes asynchronously after layout: images without
+  // reserved dimensions, lazy Shiki swap, link unfurls, file-stat, PDF
+  // iframes, cold-start composer measurement. Each of those grows the
+  // document *below* the snap point, leaving the user above the true
+  // bottom by however much content materialised after the rAF.
+  //
+  // Fix: snap once, then re-snap on every reflow of the inner content
+  // container for a short grace window. Gated on userScrolledUpRef so
+  // it never fights a deliberate user scroll, and capped at 3 s so the
+  // smooth follow-along in the message-change effect above takes back
+  // over once content has settled.
   useEffect(() => {
     userScrolledUpRef.current = false;
-    // Drop any unread count carried over from the previous chat — the
-    // new chat is about to be snap-jumped to bottom, so a stale "N new
-    // messages" pill from another session would be misleading.
     setUnreadCount(0);
     if (loadingHistory) return;
-    const id = requestAnimationFrame(() => {
-      bottomRef.current?.scrollIntoView({ behavior: "auto" });
-    });
-    return () => cancelAnimationFrame(id);
+
+    const scroller = scrollRef.current;
+    if (!scroller) return;
+
+    const snap = () => {
+      if (userScrolledUpRef.current) return;
+      scroller.scrollTop = scroller.scrollHeight;
+    };
+
+    const raf = requestAnimationFrame(snap);
+
+    const inner = scroller.firstElementChild;
+    const ro = inner ? new ResizeObserver(snap) : null;
+    if (inner && ro) ro.observe(inner, { box: "border-box" });
+
+    const stop = window.setTimeout(() => ro?.disconnect(), 3000);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      ro?.disconnect();
+      window.clearTimeout(stop);
+    };
   }, [sessionId, loadingHistory]);
 
   const handleScroll = () => {

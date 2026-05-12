@@ -47,8 +47,8 @@ export function CanvasToolbar({
 }: CanvasToolbarProps) {
   return (
     <header
-      className="relative flex shrink-0 items-center gap-3 border-b border-canvas-border bg-canvas-bg px-3"
-      style={{ height: TOOLBAR_H }}
+      className="pt-safe-top relative flex shrink-0 items-center gap-3 border-b border-canvas-border bg-canvas-bg px-3 pb-2"
+      style={{ minHeight: TOOLBAR_H }}
     >
       <div className="flex shrink-0 items-center gap-2">
         {onOpenSessions && (

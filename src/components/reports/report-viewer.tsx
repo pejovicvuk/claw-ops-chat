@@ -102,7 +102,7 @@ export function ReportViewer({ runId, onOpenSessions }: ReportViewerProps) {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-canvas-bg">
-      <header className="flex shrink-0 items-center justify-between border-b border-canvas-border px-4 py-3">
+      <header className="pt-safe-top flex shrink-0 items-center justify-between border-b border-canvas-border px-4 pb-3">
         <div className="flex min-w-0 items-center gap-2">
           <button
             type="button"

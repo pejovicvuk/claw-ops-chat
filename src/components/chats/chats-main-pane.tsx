@@ -53,7 +53,7 @@ export function ChatsMainPane({
           mobile drawer auto-closes on nav and there's no other way to
           reach the chat surface from this page on a phone. */}
       {onOpenSessions && (
-        <header className="flex h-12 shrink-0 items-center border-b border-canvas-border px-3 md:hidden">
+        <header className="pt-safe-top flex shrink-0 items-center border-b border-canvas-border px-3 pb-2 md:hidden">
           <button
             type="button"
             onClick={onOpenSessions}

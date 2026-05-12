@@ -1093,6 +1093,17 @@ html:not(.dark) .lg-bubble:focus-within {
   transform: translateX(2px);
 }
 
+/* ── iOS safe-area utility ──
+ * Apply to page-level <header> elements on the mobile sub-page views so the
+ * back / sidebar buttons clear the iOS status bar + dynamic island instead
+ * of sitting underneath them. On non-iOS (or any platform where the inset is
+ * 0), this resolves to the static 12 px floor so layouts don't suddenly
+ * collapse padding. Pair with `pb-3` (or your usual bottom padding) — this
+ * utility only sets top. */
+.pt-safe-top {
+  padding-top: max(env(safe-area-inset-top, 0px), 12px);
+}
+
 /* ── Hover transition utility ──
  * Drop-in for any surface that toggles `hover:bg-canvas-surface-hover`
  * (and usually `hover:text-canvas-fg`). Keeps all hovers across the app

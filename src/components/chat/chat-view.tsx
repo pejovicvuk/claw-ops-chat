@@ -897,7 +897,7 @@ export function ChatView({
                 button so its negative `-right-1 -top-1` offsets can
                 poke past the button's bounds. */}
             {isScrolledUp && (
-              <div className="animate-msg-in pointer-events-auto absolute -top-14 right-4 z-20 h-9 w-9 md:left-1/2 md:right-auto md:-translate-x-1/2">
+              <div className="animate-msg-in pointer-events-auto absolute -top-14 right-4 z-20 h-9 w-9 [content-visibility:visible] md:left-1/2 md:right-auto md:-translate-x-1/2">
                 <button
                   type="button"
                   onClick={() => {

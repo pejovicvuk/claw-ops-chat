@@ -45,8 +45,8 @@
    *   --dur-base    220ms  modals, panels, sub-page swaps
    *   --dur-slow    320ms  larger spatial moves (sidebar)
    */
-  --ease-out: var(--ease-out);
-  --ease-std: var(--ease-std);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-std: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-in: cubic-bezier(0.4, 0, 1, 1);
   --dur-instant: 80ms;
   --dur-fast: 140ms;

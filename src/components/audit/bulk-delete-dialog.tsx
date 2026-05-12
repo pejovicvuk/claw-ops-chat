@@ -11,6 +11,8 @@ interface BulkDeleteDialogProps {
   category?: AuditCategory;
   onClose: () => void;
   onDone: (result: { deleted: string[]; bytesFreed: number }) => void;
+  /** Drives enter/exit animation classes — supplied by a parent useExitAnimation. */
+  animationState?: "entering" | "open" | "exiting";
 }
 
 const PRESET_DAYS = [30, 14, 7, 1];
@@ -20,7 +22,9 @@ export function BulkDeleteDialog({
   category,
   onClose,
   onDone,
+  animationState = "open",
 }: BulkDeleteDialogProps) {
+  const exiting = animationState === "exiting";
   const [days, setDays] = useState<number>(30);
   const [confirmText, setConfirmText] = useState("");
   const [loading, setLoading] = useState(false);
@@ -50,12 +54,12 @@ export function BulkDeleteDialog({
 
   return (
     <div
-      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4"
+      className={`fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4 ${exiting ? "animate-backdrop-out" : "animate-backdrop-in"}`}
       onClick={onClose}
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="animate-modal-in w-full max-w-md rounded-xl border border-canvas-border bg-canvas-bg p-5 shadow-2xl"
+        className={`w-full max-w-md rounded-xl border border-canvas-border bg-canvas-bg p-5 shadow-2xl ${exiting ? "animate-modal-out" : "animate-modal-in"}`}
       >
         <div className="mb-4 flex items-center gap-2">
           <FiAlertTriangle size={16} className="text-red-500" />
@@ -66,7 +70,7 @@ export function BulkDeleteDialog({
             type="button"
             onClick={onClose}
             aria-label="Close dialog"
-            className="ml-auto flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+            className="tx-surface ml-auto flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
           >
             <FiX size={14} />
           </button>

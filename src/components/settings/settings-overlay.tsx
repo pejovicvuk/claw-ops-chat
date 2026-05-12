@@ -5,6 +5,7 @@ import { FiSettings, FiX, FiLogOut, FiArrowLeft } from "react-icons/fi";
 import { authFetch, clearAuth } from "@/lib/auth";
 import { clearAccessToken } from "@/lib/apiClient";
 import { useUrlState } from "@/lib/use-url-state";
+import { useExitAnimation } from "@/lib/use-exit-animation";
 import { Z_INDEX } from "@/lib/z-index";
 import { SettingsMainPage } from "./pages/settings-main-page";
 import { SettingsConnectionsPage } from "./pages/settings-connections-page";
@@ -132,6 +133,14 @@ export function SettingsOverlay() {
   const page = parsePage(rawPage);
   const memoryProjectSlug = parseMemoryProjectSlug(rawPage);
   const open = page !== null;
+  const { mounted, state } = useExitAnimation(open, 200);
+  const exiting = state === "exiting";
+  // While exiting the URL has already lost ?settings=, so `page` flips to null
+  // — keep the last seen page around so we can render the same content during
+  // the exit animation rather than blanking the modal mid-fade.
+  const lastPageRef = useRef<PageKey | null>(page);
+  if (page !== null) lastPageRef.current = page;
+  const renderPage = page ?? lastPageRef.current;
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const close = useCallback(() => {
@@ -172,21 +181,22 @@ export function SettingsOverlay() {
     window.location.href = `${BASE}/login`;
   }, []);
 
-  if (!open || !page) return null;
+  if (!mounted || !renderPage) return null;
 
-  const info = PAGES[page];
+  const info = PAGES[renderPage];
   // The Memory landing's parent is "main"; drill-in adds a logical layer
   // back to "memory" but the static `info.parent` doesn't capture that, so
   // hasBack must also be true when we're on a project drill-in.
   const hasBack = info.parent !== null || memoryProjectSlug !== null;
   const wide = info.wide === true;
+  const modalEnter = exiting ? "animate-modal-out" : "animate-modal-in";
   const modalClasses = wide
-    ? "animate-modal-in flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(800px,90vh)] sm:w-[min(960px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl"
-    : "animate-modal-in flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(640px,85vh)] sm:w-[min(760px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl";
+    ? `${modalEnter} flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(800px,90vh)] sm:w-[min(960px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl`
+    : `${modalEnter} flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(640px,85vh)] sm:w-[min(760px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl`;
 
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[6px] sm:p-6"
+      className={`fixed inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[6px] sm:p-6 ${exiting ? "animate-backdrop-out" : "animate-backdrop-in"}`}
       style={{ zIndex: Z_INDEX.MODAL }}
       onClick={close}
       role="dialog"
@@ -202,7 +212,7 @@ export function SettingsOverlay() {
                 type="button"
                 onClick={goBack}
                 aria-label="Back"
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                className="tx-surface flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
               >
                 <FiArrowLeft size={14} />
               </button>
@@ -218,33 +228,41 @@ export function SettingsOverlay() {
             type="button"
             onClick={close}
             aria-label="Close settings"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+            className="tx-surface flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
           >
             <FiX size={16} />
           </button>
         </div>
 
-        {/* Page content */}
-        <div className="flex-1 overflow-y-auto px-5 py-5">
-          {page === "main" && <SettingsMainPage />}
-          {page === "connections" && <SettingsConnectionsPage />}
-          {page === "connections/claude" && <SettingsClaudePage />}
-          {page === "connections/google" && <SettingsGooglePage />}
-          {page === "connections/microsoft" && <SettingsMicrosoftPage />}
-          {page === "connections/github" && <SettingsGithubPage />}
-          {page === "connections/atlassian" && <SettingsAtlassianPage />}
-          {page === "connections/slack" && <SettingsSlackPage />}
-          {page === "connections/linear" && <SettingsLinearPage />}
-          {page === "connections/notion" && <SettingsNotionPage />}
-          {page === "connections/trello" && <SettingsTrelloPage />}
-          {page === "agent" && <SettingsAgentPage />}
-          {page === "agent/skills" && <SettingsAgentSkillsPage />}
-          {page === "agent/subagents" && <SettingsAgentSubagentsPage />}
-          {page === "terminal" && <SettingsTerminalPage />}
-          {page === "notifications" && <SettingsNotificationsPage />}
-          {page === "voice" && <SettingsVoicePage />}
-          {page === "monitoring" && <SettingsMonitoringPage />}
-          {page === "memory" &&
+        {/* Page content. Keyed by renderPage (+ memoryProjectSlug for the
+            per-project drill-in) so React fully remounts the subtree on
+            navigation — that replays animate-subpage-in for a soft opacity
+            cross-fade instead of a hard content swap. Settings pages are
+            lightweight and use cached fetches, so remount cost is
+            negligible. */}
+        <div
+          key={`${renderPage}${memoryProjectSlug ? `:${memoryProjectSlug}` : ""}`}
+          className="animate-subpage-in flex-1 overflow-y-auto px-5 py-5"
+        >
+          {renderPage === "main" && <SettingsMainPage />}
+          {renderPage === "connections" && <SettingsConnectionsPage />}
+          {renderPage === "connections/claude" && <SettingsClaudePage />}
+          {renderPage === "connections/google" && <SettingsGooglePage />}
+          {renderPage === "connections/microsoft" && <SettingsMicrosoftPage />}
+          {renderPage === "connections/github" && <SettingsGithubPage />}
+          {renderPage === "connections/atlassian" && <SettingsAtlassianPage />}
+          {renderPage === "connections/slack" && <SettingsSlackPage />}
+          {renderPage === "connections/linear" && <SettingsLinearPage />}
+          {renderPage === "connections/notion" && <SettingsNotionPage />}
+          {renderPage === "connections/trello" && <SettingsTrelloPage />}
+          {renderPage === "agent" && <SettingsAgentPage />}
+          {renderPage === "agent/skills" && <SettingsAgentSkillsPage />}
+          {renderPage === "agent/subagents" && <SettingsAgentSubagentsPage />}
+          {renderPage === "terminal" && <SettingsTerminalPage />}
+          {renderPage === "notifications" && <SettingsNotificationsPage />}
+          {renderPage === "voice" && <SettingsVoicePage />}
+          {renderPage === "monitoring" && <SettingsMonitoringPage />}
+          {renderPage === "memory" &&
             (memoryProjectSlug ? (
               <SettingsMemoryProjectPage slug={memoryProjectSlug} />
             ) : (
@@ -253,7 +271,7 @@ export function SettingsOverlay() {
         </div>
 
         {/* Footer — only on main page */}
-        {page === "main" && (
+        {renderPage === "main" && (
           <div
             className="flex shrink-0 items-center justify-end border-t border-canvas-border px-5 py-3"
             style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 12px)" }}
@@ -261,7 +279,7 @@ export function SettingsOverlay() {
             <button
               type="button"
               onClick={handleLogout}
-              className="flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-500 transition-colors hover:bg-red-500/15"
+              className="tx-surface flex items-center gap-1.5 rounded-lg bg-red-500/10 px-3 py-2 text-[12px] font-medium text-red-500 hover:bg-red-500/15"
             >
               <FiLogOut size={13} />
               Log out

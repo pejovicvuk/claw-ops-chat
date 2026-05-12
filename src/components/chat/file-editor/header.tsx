@@ -233,7 +233,7 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             onClick={() => onReveal()}
             title={`Reveal in browser (${parentPath})`}
             aria-label="Reveal in file browser"
-            className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
+            className="tx-surface flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
           >
             <FiCornerUpLeft size={12} />
           </button>
@@ -245,7 +245,7 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             title={wrap ? "Disable line wrap" : "Enable line wrap"}
             aria-label={wrap ? "Disable line wrap" : "Enable line wrap"}
             aria-pressed={wrap}
-            className={`flex h-7 w-7 items-center justify-center rounded hover:bg-canvas-surface-hover sm:h-6 sm:w-6 ${
+            className={`tx-surface flex h-7 w-7 items-center justify-center rounded hover:bg-canvas-surface-hover sm:h-6 sm:w-6 ${
               wrap ? "text-accent" : "text-canvas-muted hover:text-canvas-fg"
             }`}
           >
@@ -258,7 +258,7 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             onClick={onCopyAll}
             title="Copy all"
             aria-label="Copy entire file content"
-            className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
+            className="tx-surface flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
           >
             {copyAllOk ? <FiCheck size={12} /> : <FiCopy size={12} />}
           </button>
@@ -270,7 +270,7 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             disabled={downloadInFlight}
             title="Download"
             aria-label="Download file"
-            className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-50 sm:h-6 sm:w-6"
+            className="tx-surface flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-50 sm:h-6 sm:w-6"
           >
             <FiDownload size={12} />
           </button>
@@ -301,7 +301,7 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
           disabled={saving || !dirty}
           title="Save (Ctrl/Cmd+S)"
           aria-label="Save"
-          className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40 sm:h-6 sm:w-6"
+          className="tx-surface flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40 sm:h-6 sm:w-6"
         >
           <FiSave size={12} />
         </button>
@@ -311,7 +311,7 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             onClick={onMinimize}
             title="Minimize"
             aria-label="Minimize"
-            className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
+            className="tx-surface flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
           >
             <FiMinus size={12} />
           </button>
@@ -322,7 +322,7 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
             onClick={onToggleMaximize}
             title={maximized ? "Restore" : "Maximize"}
             aria-label={maximized ? "Restore" : "Maximize"}
-            className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
+            className="tx-surface flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
           >
             {maximized ? <FiMinimize2 size={11} /> : <FiMaximize2 size={11} />}
           </button>
@@ -332,7 +332,7 @@ export const EditorHeader = forwardRef<HTMLDivElement, HeaderProps>(function Edi
           onClick={onClose}
           title="Close"
           aria-label="Close"
-          className="flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
+          className="tx-surface flex h-7 w-7 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg sm:h-6 sm:w-6"
         >
           <FiX size={12} />
         </button>

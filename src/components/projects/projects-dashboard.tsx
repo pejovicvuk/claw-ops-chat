@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { FiArrowLeft, FiPlus, FiRefreshCw } from "react-icons/fi";
 import { useUrlState } from "@/lib/use-url-state";
 import { useProjects } from "@/lib/use-projects";
+import { useExitAnimation } from "@/lib/use-exit-animation";
 import { deleteProjectApi, type ProjectMeta } from "@/lib/projects-api";
 import { ProjectCard } from "./project-card";
 import { ProjectsEmptyState } from "./projects-empty-state";
@@ -22,6 +23,7 @@ export function ProjectsDashboard({ onOpenSessions }: ProjectsDashboardProps) {
   const { params, setParam } = useUrlState();
   const { projects, loading, refresh } = useProjects();
   const isNew = params.get("newProject") === "1";
+  const { mounted: newModalMounted, state: newModalAnim } = useExitAnimation(isNew, 200);
 
   const closeModal = useCallback(() => {
     setParam("newProject", null);
@@ -134,7 +136,13 @@ export function ProjectsDashboard({ onOpenSessions }: ProjectsDashboardProps) {
         )}
       </div>
 
-      {isNew && <NewProjectModal onClose={closeModal} onCreated={handleCreated} />}
+      {newModalMounted && (
+        <NewProjectModal
+          onClose={closeModal}
+          onCreated={handleCreated}
+          animationState={newModalAnim}
+        />
+      )}
     </div>
   );
 }

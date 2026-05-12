@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FiAlertTriangle, FiDownload, FiRefreshCw, FiTrash2 } from "react-icons/fi";
 import { AuditDetailDrawer } from "@/components/audit/audit-detail-drawer";
 import { AuditFilterBar } from "@/components/audit/audit-filter-bar";
@@ -9,6 +9,7 @@ import { AuditTable } from "@/components/audit/audit-table";
 import { BulkDeleteDialog } from "@/components/audit/bulk-delete-dialog";
 import type { AuditEvent, AuditFilter } from "@/lib/audit/types";
 import { exportAuditEvents, useAuditEvents, useAuditStats } from "@/lib/use-audit";
+import { useExitAnimation } from "@/lib/use-exit-animation";
 import { useMonContext } from "../monitoring-context";
 import { CollapsibleBlock } from "../primitives/collapsible-block";
 
@@ -24,6 +25,9 @@ export function AuditLiveSection() {
   const [filter, setFilter] = useState<AuditFilter>({ limit: 100 });
   const [selected, setSelected] = useState<AuditEvent | null>(null);
   const [dialog, setDialog] = useState<null | { nuke: boolean }>(null);
+  const lastDialogRef = useRef<{ nuke: boolean } | null>(null);
+  if (dialog) lastDialogRef.current = dialog;
+  const { mounted: dialogMounted, state: dialogAnim } = useExitAnimation(dialog !== null, 200);
   const [autoRefreshSec, setAutoRefreshSec] = useState<number | null>(10);
 
   const { events, hasMore, loading, error, loadMore, refresh } = useAuditEvents(filter);
@@ -80,10 +84,7 @@ export function AuditLiveSection() {
       </CollapsibleBlock>
 
       {/* Live tail + filter + table */}
-      <CollapsibleBlock
-        title="Events"
-        description="Filter, search, and inspect recorded activity"
-      >
+      <CollapsibleBlock title="Events" description="Filter, search, and inspect recorded activity">
         <div className="space-y-3">
           <AuditFilterBar
             filter={filter}
@@ -158,11 +159,12 @@ export function AuditLiveSection() {
       </CollapsibleBlock>
 
       {selected ? <AuditDetailDrawer event={selected} onClose={() => setSelected(null)} /> : null}
-      {dialog ? (
+      {dialogMounted && lastDialogRef.current ? (
         <BulkDeleteDialog
-          nuke={dialog.nuke}
+          nuke={lastDialogRef.current.nuke}
           onClose={() => setDialog(null)}
           onDone={onDialogDone}
+          animationState={dialogAnim}
         />
       ) : null}
     </div>

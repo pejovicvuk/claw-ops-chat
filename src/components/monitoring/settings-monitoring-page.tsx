@@ -48,7 +48,7 @@ function MonitoringPageInner() {
       <MonitoringSidebar statuses={statuses} badges={badges} />
       <div className="flex min-h-0 flex-1 flex-col">
         <MonitoringToolbar />
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div key={tab} className="animate-subpage-in min-h-0 flex-1 overflow-y-auto">
           {tab === "overview" && <OverviewSection />}
           {tab === "health" && <HealthSection />}
           {tab === "system" && <SystemSection />}

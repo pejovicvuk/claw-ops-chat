@@ -6,6 +6,8 @@ import type { AuditEvent, AuditSeverity } from "@/lib/audit/types";
 interface AuditRowProps {
   event: AuditEvent;
   onSelect: (event: AuditEvent) => void;
+  /** When >= 0, cascades the row in with animate-empty-in delayed by index * 25 ms. */
+  staggerIndex?: number;
 }
 
 function formatRelativeTime(atMs: number): string {
@@ -34,12 +36,16 @@ function categoryPillClass(cat: AuditEvent["category"]): string {
   return "bg-green-500/10 text-green-500";
 }
 
-export function AuditRow({ event, onSelect }: AuditRowProps) {
+export function AuditRow({ event, onSelect, staggerIndex = -1 }: AuditRowProps) {
+  const animClass = staggerIndex >= 0 ? "animate-empty-in" : "";
+  const animStyle: React.CSSProperties | undefined =
+    staggerIndex >= 0 ? { animationDelay: `${staggerIndex * 25}ms` } : undefined;
   return (
     <button
       type="button"
       onClick={() => onSelect(event)}
-      className="flex w-full items-center gap-3 border-b border-canvas-border px-3 py-2 text-left transition-colors hover:bg-canvas-surface-hover"
+      style={animStyle}
+      className={`flex w-full items-center gap-3 border-b border-canvas-border px-3 py-2 text-left transition-colors hover:bg-canvas-surface-hover ${animClass}`}
     >
       <span
         title={formatAbsolute(event.at)}

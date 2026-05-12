@@ -150,6 +150,7 @@ export function ChatView({
     messages,
     status,
     activeTool,
+    streamingAssistantId,
     claudeSessionId,
     sendMessage,
     stopGeneration,
@@ -775,6 +776,7 @@ export function ChatView({
                           <MessageBubble
                             message={msg}
                             isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
+                            isStreaming={msg.id === streamingAssistantId}
                             siblingToolUse={
                               msg.type === "tool_result" && msg.toolCallId
                                 ? toolUseByCallId.get(msg.toolCallId)
@@ -899,7 +901,7 @@ export function ChatView({
             {isScrolledUp && (
               <div
                 className="pointer-events-auto absolute -top-14 right-4 z-20 h-9 w-9 md:left-1/2 md:right-auto md:-translate-x-1/2"
-                style={{ animation: "messageFadeIn 280ms cubic-bezier(0.16, 1, 0.3, 1) both" }}
+                style={{ animation: "messageFadeIn 280ms var(--ease-out) both" }}
               >
                 <button
                   type="button"

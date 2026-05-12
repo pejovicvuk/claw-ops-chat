@@ -170,6 +170,8 @@ export function splitForBoxDrawing(text: string): Array<{ type: "text" | "box"; 
 interface MessageBubbleProps {
   message: ChatMessage;
   isLatestToolUse?: boolean;
+  /** True when this is the assistant text message currently being streamed in. */
+  isStreaming?: boolean;
   /** The matching tool_use message (by toolCallId) — only set when message.type === "tool_result". */
   siblingToolUse?: ChatMessage;
   onPermissionRespond?: (
@@ -189,6 +191,7 @@ interface MessageBubbleProps {
 export const MessageBubble = memo(function MessageBubble({
   message,
   isLatestToolUse,
+  isStreaming,
   siblingToolUse,
   onPermissionRespond,
   onQuestionRespond,
@@ -260,7 +263,7 @@ export const MessageBubble = memo(function MessageBubble({
     <div className="flex justify-start px-4 py-1.5">
       <div className="min-w-0 max-w-[90%]">
         {message.content ? (
-          <AssistantTextContent content={message.content} />
+          <AssistantTextContent content={message.content} isStreaming={isStreaming} />
         ) : (
           <span className="inline-block h-4 w-0.5 animate-pulse bg-gray-400" />
         )}
@@ -269,13 +272,27 @@ export const MessageBubble = memo(function MessageBubble({
   );
 });
 
-function AssistantTextContent({ content }: { content: string }) {
+function AssistantTextContent({
+  content,
+  isStreaming,
+}: {
+  content: string;
+  isStreaming?: boolean;
+}) {
   const text = typeof content === "string" ? content : String(content ?? "");
+  // Tail caret while the WS is still streaming text_deltas into this
+  // message. Rendered as a sibling of the markdown output — sits just after
+  // the last paragraph; the blink keyframe lives in globals.css.
+  const caret = isStreaming ? <span className="streaming-caret" aria-hidden="true" /> : null;
+
   if (!hasBoxDrawing(text)) {
     return (
-      <Suspense fallback={<MarkdownFallback text={text} />}>
-        <MarkdownRenderer text={text} />
-      </Suspense>
+      <>
+        <Suspense fallback={<MarkdownFallback text={text} />}>
+          <MarkdownRenderer text={text} />
+        </Suspense>
+        {caret}
+      </>
     );
   }
 
@@ -287,9 +304,12 @@ function AssistantTextContent({ content }: { content: string }) {
   // `code`/`pre` overrides) instead of being torn apart segment-by-segment.
   if (segments.length === 1 && segments[0].type === "text") {
     return (
-      <Suspense fallback={<MarkdownFallback text={text} />}>
-        <MarkdownRenderer text={text} />
-      </Suspense>
+      <>
+        <Suspense fallback={<MarkdownFallback text={text} />}>
+          <MarkdownRenderer text={text} />
+        </Suspense>
+        {caret}
+      </>
     );
   }
 
@@ -311,6 +331,7 @@ function AssistantTextContent({ content }: { content: string }) {
           </Suspense>
         ),
       )}
+      {caret}
     </>
   );
 }

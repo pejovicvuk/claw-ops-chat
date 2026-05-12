@@ -8,6 +8,8 @@ interface BranchCheckoutConfirmProps {
   sessions: SessionBranchSnapshot[];
   onConfirm: () => void;
   onCancel: () => void;
+  /** Drives enter/exit animation classes — supplied by a parent useExitAnimation. */
+  animationState?: "entering" | "open" | "exiting";
 }
 
 /**
@@ -20,14 +22,16 @@ export function BranchCheckoutConfirm({
   sessions,
   onConfirm,
   onCancel,
+  animationState = "open",
 }: BranchCheckoutConfirmProps) {
+  const exiting = animationState === "exiting";
   return (
     <div
-      className="fixed inset-0 z-[9998] flex animate-fade-in items-center justify-center bg-black/40 backdrop-blur-[2px]"
+      className={`fixed inset-0 z-[9998] flex items-center justify-center bg-black/40 backdrop-blur-[2px] ${exiting ? "animate-backdrop-out" : "animate-backdrop-in"}`}
       onClick={onCancel}
     >
       <div
-        className="mx-4 w-full max-w-sm animate-modal-in rounded-xl border border-canvas-border bg-canvas-bg p-5 shadow-2xl"
+        className={`mx-4 w-full max-w-sm rounded-xl border border-canvas-border bg-canvas-bg p-5 shadow-2xl ${exiting ? "animate-modal-out" : "animate-modal-in"}`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-label="Confirm branch checkout"

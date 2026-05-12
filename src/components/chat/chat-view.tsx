@@ -910,7 +910,7 @@ export function ChatView({
                       : "Scroll to bottom"
                   }
                   title="Scroll to bottom"
-                  className="lg-bubble flex h-full w-full items-center justify-center rounded-full text-canvas-fg transition-transform duration-150 hover:scale-105 active:scale-95"
+                  className="lg-bubble flex h-full w-full items-center justify-center overflow-hidden rounded-full text-canvas-fg transition-transform duration-150 hover:scale-105 active:scale-95"
                 >
                   <FiArrowDown size={16} />
                 </button>

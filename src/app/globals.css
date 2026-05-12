@@ -747,36 +747,48 @@ html:not(.dark) .lg-bubble:focus-within {
   animation: sheetSlideUp 250ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
-/* ── Session sidebar slide-in (mobile) ── */
-
+/* ── Session sidebar slide (mobile) ──
+ *
+ * Pure translateX — no opacity wobble. The old keyframes interpolated
+ * opacity 0.8 → 1 alongside the slide, which read as a subtle "fade-in
+ * to focus" but in practice felt like a glitch against the backdrop fade
+ * (the drawer is fully offscreen at translateX(-100%) anyway, so the
+ * opacity move is invisible until it isn't). Same curve in and out — the
+ * iOS-native "natural" decel that pairs cleanly with the backdrop
+ * crossfade. Out is slightly faster so a dismiss feels snappy without
+ * the entrance feeling sluggish in comparison.
+ *
+ * `will-change: transform` promotes the layer to its own compositor
+ * tile, which is what keeps the 60fps slide smooth on lower-end phones
+ * — without it Safari occasionally rasterizes inline content mid-slide
+ * and the right edge of the drawer judders.
+ */
 @keyframes sidebarSlideIn {
   from {
     transform: translateX(-100%);
-    opacity: 0.8;
   }
   to {
     transform: translateX(0);
-    opacity: 1;
   }
 }
 
 @keyframes sidebarSlideOut {
   from {
     transform: translateX(0);
-    opacity: 1;
   }
   to {
     transform: translateX(-100%);
-    opacity: 0.8;
   }
 }
 
 .animate-sidebar-in {
-  animation: sidebarSlideIn 300ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  animation: sidebarSlideIn 320ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  will-change: transform;
 }
 
 .animate-sidebar-out {
-  animation: sidebarSlideOut 250ms cubic-bezier(0.4, 0, 0.2, 1) both;
+  animation: sidebarSlideOut 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
+  will-change: transform;
 }
 
 /* ── File panel fill ── */

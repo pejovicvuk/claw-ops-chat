@@ -234,8 +234,16 @@ export function SettingsOverlay() {
           </button>
         </div>
 
-        {/* Page content */}
-        <div className="flex-1 overflow-y-auto px-5 py-5">
+        {/* Page content. Keyed by renderPage (+ memoryProjectSlug for the
+            per-project drill-in) so React fully remounts the subtree on
+            navigation — that replays animate-subpage-in for a soft opacity
+            cross-fade instead of a hard content swap. Settings pages are
+            lightweight and use cached fetches, so remount cost is
+            negligible. */}
+        <div
+          key={`${renderPage}${memoryProjectSlug ? `:${memoryProjectSlug}` : ""}`}
+          className="animate-subpage-in flex-1 overflow-y-auto px-5 py-5"
+        >
           {renderPage === "main" && <SettingsMainPage />}
           {renderPage === "connections" && <SettingsConnectionsPage />}
           {renderPage === "connections/claude" && <SettingsClaudePage />}

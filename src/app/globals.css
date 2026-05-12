@@ -679,6 +679,26 @@ html:not(.dark) .lg-bubble:focus-within {
   }
 }
 
+/* ── Sub-page cross-fade ──
+ * Tiny opacity-only entrance for swapping content INSIDE an already-open
+ * surface (e.g. settings sub-page navigation). Deliberately smaller than
+ * animate-modal-in / animate-empty-in — there's no spatial move, the
+ * surrounding frame stays put, only the contents fade. Used by keying the
+ * wrapper div on the page identifier so React remounts the subtree and the
+ * animation replays naturally. */
+@keyframes subpageFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.animate-subpage-in {
+  animation: subpageFadeIn var(--dur-fast) var(--ease-out) both;
+}
+
 /* ── Modal animations ── */
 
 @keyframes modalIn {

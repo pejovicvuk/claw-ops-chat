@@ -142,6 +142,8 @@ export function Sidebar({
           onDeleteSession={onDeleteSession}
           hideHeader
           hideFooter
+          maxItems={30}
+          onShowAll={() => handleNavigate("chats")}
         />
       </div>
 

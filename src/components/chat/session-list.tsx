@@ -66,6 +66,16 @@ interface SessionListProps {
    * fresh chat. Optional — when absent the context-menu item hides.
    */
   onDeleteSession?: (sessionId: string) => Promise<void>;
+  /**
+   * Cap the number of rows rendered. When set and `sessions.length` exceeds
+   * this, only the first `maxItems` rows render and an "All chats" footer
+   * row is appended (provided `onShowAll` is also supplied). Used by the
+   * sidebar so the recents list doesn't grow indefinitely — full search
+   * lives on the Chats page.
+   */
+  maxItems?: number;
+  /** Click handler for the "All chats" footer row. */
+  onShowAll?: () => void;
 }
 
 interface ContextMenuState {
@@ -86,10 +96,18 @@ export function SessionList({
   hideHeader = false,
   hideFooter = false,
   onDeleteSession,
+  maxItems,
+  onShowAll,
 }: SessionListProps) {
   const { setParam } = useUrlState();
   const openSettings = () => setParam("settings", "main");
   const statuses = useSessionStatuses();
+  // Truncate the rendered list when a max is supplied AND the cap is
+  // actually exceeded — otherwise the existing slice is a no-op. The
+  // "All chats" footer row is rendered after the loop when overflow is
+  // detected, so the user has an in-app affordance to see the full list.
+  const overflow = maxItems !== undefined && sessions.length > maxItems;
+  const visibleSessions = overflow ? sessions.slice(0, maxItems) : sessions;
   // Desktop notifications for awaiting_permission / awaiting_input now
   // come from the server via Web Push (and the in-app NotificationListener
   // toast when the tab is focused). The previous transition-based
@@ -270,7 +288,7 @@ export function SessionList({
 
         {!loading && sessions.length > 0 && (
           <div className="space-y-0.5">
-            {sessions.map((session, sessionIndex) => {
+            {visibleSessions.map((session, sessionIndex) => {
               const isActive = session.sessionId === selectedSessionId;
               // Every initial session animates in via animate-empty-in; the
               // stagger delay grows by 25 ms per row but is capped at 600 ms
@@ -333,6 +351,22 @@ export function SessionList({
                 </button>
               );
             })}
+            {overflow && onShowAll && (
+              <button
+                type="button"
+                onClick={onShowAll}
+                className="row-hover focus-ring flex w-full items-center justify-between gap-2 rounded-lg pl-2.5 pr-3 py-2 text-left text-canvas-muted transition-colors hover:bg-canvas-surface-hover hover:text-canvas-fg"
+                style={{
+                  borderLeftWidth: 4,
+                  borderLeftStyle: "solid",
+                  borderLeftColor: "transparent",
+                }}
+                aria-label={`All chats (${sessions.length})`}
+              >
+                <span className="text-[13px] font-medium">All chats</span>
+                <span className="text-[11px] text-canvas-muted">{sessions.length} →</span>
+              </button>
+            )}
           </div>
         )}
       </div>

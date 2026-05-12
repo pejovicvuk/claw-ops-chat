@@ -263,16 +263,23 @@ export function ChatLayout({
     </ErrorBoundary>
   ));
 
-  /* ── Swipe-right to open sidebar (mobile) ── */
+  /* ── Swipe-right to open sidebar (mobile) ──
+   *
+   * Handlers attach to a dedicated invisible edge strip (rendered in
+   * the mobile JSX below) rather than the outer wrapper. The strip is
+   * `touch-action: none`, which tells the browser up-front not to
+   * scroll for touches that begin there — so a diagonal swipe doesn't
+   * race us and let the chat commit to vertical scroll before we read
+   * intent. Strip width (`SWIPE_EDGE_PX`) is the authoritative edge
+   * zone; the old `clientX < 30` JS check is redundant once the
+   * handlers can only fire from the strip itself. */
+  const SWIPE_EDGE_PX = 32;
   const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
   const swipeOverlayRef = useRef<HTMLDivElement>(null);
 
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
     const touch = e.touches[0];
-    // Only track swipes starting from left edge (first 30px)
-    if (touch.clientX < 30) {
-      touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
-    }
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
   }, []);
 
   const handleTouchMove = useCallback(
@@ -359,12 +366,33 @@ export function ChatLayout({
       // home indicator until you rotate, producing the visible dark
       // gap users report as "won't reach the bottom." 100vh is the
       // only unit that's correct from first paint in standalone PWA.
-      <div
-        className="flex flex-col h-screen overflow-hidden"
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
-      >
+      <div className="flex flex-col h-screen overflow-hidden">
+        {/* Left-edge swipe catcher.
+         *
+         * Invisible vertical strip pinned to the left edge whose only
+         * job is to claim horizontal swipes for the sidebar gesture.
+         * `touch-action: none` tells the browser NOT to scroll for
+         * touches starting here — that's what fixes the "I tried to
+         * swipe open but the chat scrolled instead" bug. Without it,
+         * any vertical component in the swipe lets the browser commit
+         * to vertical scroll before our handlers can read intent. The
+         * strip is only mounted while the drawer is closed; once it's
+         * open, the drawer's own swipe-left handler takes over and
+         * this strip would be redundant. */}
+        {!sidebarOpen && !sidebarClosing && (
+          <div
+            aria-hidden="true"
+            className="fixed inset-y-0 left-0"
+            style={{
+              width: SWIPE_EDGE_PX,
+              zIndex: 15,
+              touchAction: "none",
+            }}
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+          />
+        )}
         {/* Swipe hint overlay */}
         <div
           ref={swipeOverlayRef}

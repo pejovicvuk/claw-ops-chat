@@ -61,6 +61,48 @@ export function ChatLayout({
   const { params, setParam, setParamMulti } = useUrlState();
   const { toast } = useToast();
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Mirrors `sidebarOpen` for the exit animation: when the drawer is
+  // dismissed we flip `sidebarClosing` true, swap the slide-out class
+  // in, and only flip `sidebarOpen` false (unmounting the drawer) once
+  // the keyframe duration elapses. Without this the drawer would just
+  // vanish on dismiss — the `animate-sidebar-out` class would never
+  // get a chance to play. Duration must stay in sync with the CSS
+  // `.animate-sidebar-out` animation length in globals.css.
+  const [sidebarClosing, setSidebarClosing] = useState(false);
+  const closeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const SIDEBAR_OUT_MS = 260;
+
+  const openSidebar = useCallback(() => {
+    // Cancel any in-flight close so a quick close→open ping doesn't
+    // unmount the drawer mid-reopen.
+    if (closeTimeoutRef.current) {
+      clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = null;
+    }
+    setSidebarClosing(false);
+    setSidebarOpen(true);
+  }, []);
+
+  const closeSidebar = useCallback(() => {
+    setSidebarOpen((open) => {
+      if (!open) return open;
+      setSidebarClosing(true);
+      if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+      closeTimeoutRef.current = setTimeout(() => {
+        setSidebarOpen(false);
+        setSidebarClosing(false);
+        closeTimeoutRef.current = null;
+      }, SIDEBAR_OUT_MS);
+      return open; // stays mounted; the timeout flips it false
+    });
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current);
+    },
+    [],
+  );
 
   // On mobile, opening Settings (?settings=…) should auto-close the
   // sessions drawer — otherwise the two full-screen overlays stack and
@@ -68,13 +110,8 @@ export function ChatLayout({
   const settingsParam = params.get("settings");
   useEffect(() => {
     if (!isMobile || !settingsParam) return;
-    // Defer the state update so it doesn't synchronously cascade mid-
-    // render — the lint rule `react-hooks/immutability` flags synchronous
-    // setState inside an effect. A single microtask is imperceptible to
-    // the user but lets React finish the current commit first.
-    const t = setTimeout(() => setSidebarOpen(false), 0);
-    return () => clearTimeout(t);
-  }, [isMobile, settingsParam]);
+    closeSidebar();
+  }, [isMobile, settingsParam, closeSidebar]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   // URL-driven: ?files=1 = open, absent/0 = closed
   const filesPanelOpen = params.get("files") === "1";
@@ -255,24 +292,62 @@ export function ChatLayout({
     [sidebarOpen],
   );
 
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (!touchStartRef.current) return;
-    const touch = e.changedTouches[0];
-    const dx = touch.clientX - touchStartRef.current.x;
-    const dy = Math.abs(touch.clientY - touchStartRef.current.y);
-    const elapsed = Date.now() - touchStartRef.current.time;
+  const handleTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      if (!touchStartRef.current) return;
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - touchStartRef.current.x;
+      const dy = Math.abs(touch.clientY - touchStartRef.current.y);
+      const elapsed = Date.now() - touchStartRef.current.time;
 
-    // Swipe detected: mostly horizontal, >60px distance or fast flick
-    if (dx > 60 && dx > dy * 1.5 && elapsed < 500) {
-      setSidebarOpen(true);
-    }
+      // Swipe detected: mostly horizontal, >60px distance or fast flick
+      if (dx > 60 && dx > dy * 1.5 && elapsed < 500) {
+        openSidebar();
+      }
 
-    touchStartRef.current = null;
-    if (swipeOverlayRef.current) {
-      swipeOverlayRef.current.style.display = "none";
-      swipeOverlayRef.current.style.opacity = "0";
-    }
+      touchStartRef.current = null;
+      if (swipeOverlayRef.current) {
+        swipeOverlayRef.current.style.display = "none";
+        swipeOverlayRef.current.style.opacity = "0";
+      }
+    },
+    [openSidebar],
+  );
+
+  /* ── Swipe-left on the open drawer to close it ──
+   *
+   * Mirror of the edge-swipe-to-open gesture above, scoped to the
+   * drawer element itself so it doesn't fight with vertical scrolling
+   * elsewhere. Start anywhere on the drawer; if the finger ends > 60 px
+   * to the left of its start within 500 ms AND the motion was mostly
+   * horizontal (dx outweighs dy by 1.5×), dismiss. The horizontal
+   * dominance check is what lets the session list still scroll
+   * vertically — a vertical drag has dy >> |dx|, so it never qualifies
+   * as a close gesture. */
+  const drawerTouchStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+
+  const handleDrawerTouchStart = useCallback((e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    drawerTouchStartRef.current = { x: touch.clientX, y: touch.clientY, time: Date.now() };
   }, []);
+
+  const handleDrawerTouchEnd = useCallback(
+    (e: React.TouchEvent) => {
+      if (!drawerTouchStartRef.current) return;
+      const touch = e.changedTouches[0];
+      const dx = touch.clientX - drawerTouchStartRef.current.x;
+      const adx = Math.abs(dx);
+      const dy = Math.abs(touch.clientY - drawerTouchStartRef.current.y);
+      const elapsed = Date.now() - drawerTouchStartRef.current.time;
+
+      if (dx < -60 && adx > dy * 1.5 && elapsed < 500) {
+        closeSidebar();
+      }
+
+      drawerTouchStartRef.current = null;
+    },
+    [closeSidebar],
+  );
 
   /* ── MOBILE ── */
 
@@ -303,11 +378,11 @@ export function ChatLayout({
             overlay handles legibility by frosting that band. */}
         <div className="flex min-h-0 flex-1 flex-col">
           {params.get("view") === "projects" ? (
-            <ProjectsMainPane onOpenSessions={() => setSidebarOpen(true)} />
+            <ProjectsMainPane onOpenSessions={openSidebar} />
           ) : params.get("view") === "reports" ? (
-            <ReportsMainPane onOpenSessions={() => setSidebarOpen(true)} />
+            <ReportsMainPane onOpenSessions={openSidebar} />
           ) : params.get("view") === "agents" ? (
-            <AgentsMainPane onOpenSessions={() => setSidebarOpen(true)} />
+            <AgentsMainPane onOpenSessions={openSidebar} />
           ) : params.get("view") === "chats" ? (
             <ChatsMainPane
               sessions={sessions}
@@ -318,14 +393,14 @@ export function ChatLayout({
               onRefreshSessions={onRefreshSessions}
               runningSessionIds={runningSessionIds}
               onDeleteSession={onDeleteSession}
-              onOpenSessions={() => setSidebarOpen(true)}
+              onOpenSessions={openSidebar}
             />
           ) : (
             <ChatView
               sessionId={sessionId}
               resumeSessionId={selectedSessionId}
               onSessionCreated={onSessionCreated}
-              onOpenSessions={() => setSidebarOpen(true)}
+              onOpenSessions={openSidebar}
               onOpenFiles={() => setFilesPanelOpen(true)}
               onNewChat={onNewChat}
               headerless
@@ -333,19 +408,25 @@ export function ChatLayout({
           )}
         </div>
 
-        {sidebarOpen && (
+        {(sidebarOpen || sidebarClosing) && (
           <>
             <div
-              className="fixed inset-0 bg-black/30 backdrop-blur-[3px]"
-              style={{ zIndex: Z_INDEX.MODAL, transition: "opacity 300ms ease" }}
-              onClick={() => setSidebarOpen(false)}
+              className={`fixed inset-0 bg-black/30 backdrop-blur-[3px] ${
+                sidebarClosing ? "animate-backdrop-out" : "animate-backdrop-in"
+              }`}
+              style={{ zIndex: Z_INDEX.MODAL }}
+              onClick={closeSidebar}
             />
             <div
-              className="animate-sidebar-in fixed inset-y-0 left-0 w-[300px] bg-canvas-bg shadow-2xl"
+              className={`fixed inset-y-0 left-0 w-[300px] bg-canvas-bg shadow-2xl ${
+                sidebarClosing ? "animate-sidebar-out" : "animate-sidebar-in"
+              }`}
               style={{
                 zIndex: Z_INDEX.MODAL + 1,
                 borderRight: "1px solid var(--canvas-border)",
               }}
+              onTouchStart={handleDrawerTouchStart}
+              onTouchEnd={handleDrawerTouchEnd}
             >
               <div
                 className="flex h-full flex-col"
@@ -367,16 +448,16 @@ export function ChatLayout({
                   sessionsLoading={sessionsLoading}
                   onSelectSession={(sid) => {
                     onSelectSession(sid);
-                    setSidebarOpen(false);
+                    closeSidebar();
                   }}
                   onNewChat={() => {
                     onNewChat();
-                    setSidebarOpen(false);
+                    closeSidebar();
                   }}
                   onRefreshSessions={onRefreshSessions}
                   runningSessionIds={runningSessionIds}
                   onDeleteSession={onDeleteSession}
-                  onAfterNavigate={() => setSidebarOpen(false)}
+                  onAfterNavigate={closeSidebar}
                 />
               </div>
             </div>

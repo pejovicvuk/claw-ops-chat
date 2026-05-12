@@ -17,7 +17,7 @@ export function AgentsMainPane({ onOpenSessions }: AgentsMainPaneProps): ReactNo
   return (
     <div className="flex h-full flex-col">
       {onOpenSessions && (
-        <header className="flex h-12 shrink-0 items-center border-b border-canvas-border px-3 md:hidden">
+        <header className="pt-safe-top flex shrink-0 items-center border-b border-canvas-border px-3 pb-2 md:hidden">
           <button
             type="button"
             onClick={onOpenSessions}

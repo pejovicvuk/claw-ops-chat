@@ -94,6 +94,10 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
   const wsRef = useRef<WebSocket | null>(null);
   const currentAssistantRef = useRef<string | null>(null);
   const currentThinkingRef = useRef<string | null>(null);
+  // Mirror of currentAssistantRef as React state so consumers (e.g. the
+  // assistant bubble) can render a tail caret on the actively-streaming
+  // message without subscribing to every text_delta.
+  const [streamingAssistantId, setStreamingAssistantId] = useState<string | null>(null);
   /**
    * Accumulates every text_delta in the current turn, mutated SYNCHRONOUSLY
    * in the event handler (not inside a `setMessages` updater). Used by the
@@ -144,6 +148,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       }
       const id = crypto.randomUUID();
       currentAssistantRef.current = id;
+      setStreamingAssistantId(id);
       return [
         ...prev,
         {
@@ -231,6 +236,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         // tracker so the next turn's `result` dedup compares against a
         // clean buffer.
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         currentThinkingRef.current = null;
         streamedTurnTextRef.current = "";
         setActiveTool(null);
@@ -328,6 +334,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "tool_use_start") {
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         currentThinkingRef.current = null;
         setActiveTool({ name: evt.name as string, callId: evt.id as string });
         setStatus("tool_running");
@@ -420,6 +427,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
           return;
         }
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         setStatus("awaiting_permission");
         setMessages((prev) => {
           if (prev.some((m) => m.permissionId === reqId)) return prev;
@@ -497,6 +505,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
           return;
         }
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         setStatus("awaiting_permission");
         setMessages((prev) => {
           if (prev.some((m) => m.planId === planId)) return prev;
@@ -519,6 +528,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "ask_question") {
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         setStatus("awaiting_input");
         setMessages((prev) => {
           if (prev.some((m) => m.askId === (evt.id as string))) return prev;
@@ -549,6 +559,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         // message-creating updater yet.
         const streamedSnapshot = streamedTurnTextRef.current;
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         currentThinkingRef.current = null;
         streamedTurnTextRef.current = "";
         setActiveTool(null);
@@ -609,6 +620,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
         // Claude Code overlay and auth from the sidebar) rather than
         // chasing a non-existent bug.
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         currentThinkingRef.current = null;
         setActiveTool(null);
         setStatus("idle");
@@ -623,6 +635,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "setup_required") {
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         currentThinkingRef.current = null;
         setActiveTool(null);
         setStatus("idle");
@@ -632,6 +645,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
 
       if (type === "error") {
         currentAssistantRef.current = null;
+        setStreamingAssistantId(null);
         currentThinkingRef.current = null;
         setActiveTool(null);
         setStatus("idle");
@@ -759,6 +773,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     setAuthRequired(null);
     setSetupRequired(false);
     currentAssistantRef.current = null;
+    setStreamingAssistantId(null);
     currentThinkingRef.current = null;
   }
 
@@ -875,6 +890,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
       ]);
 
       currentAssistantRef.current = null;
+      setStreamingAssistantId(null);
       currentThinkingRef.current = null;
       setActiveTool(null);
       setStatus("thinking");
@@ -1110,6 +1126,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     setStatus("idle");
     setActiveTool(null);
     currentAssistantRef.current = null;
+    setStreamingAssistantId(null);
     currentThinkingRef.current = null;
   }, [sendToServer]);
 
@@ -1119,6 +1136,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
     messages,
     status,
     activeTool,
+    streamingAssistantId,
     claudeSessionId,
     setupRequired,
     authRequired,

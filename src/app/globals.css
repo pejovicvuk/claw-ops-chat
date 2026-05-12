@@ -679,6 +679,31 @@ html:not(.dark) .lg-bubble:focus-within {
   }
 }
 
+/* ── Streaming caret ──
+ * Subtle vertical bar appended at the tail of the actively-streaming
+ * assistant message. Conveys "still typing" without a per-token animation
+ * cost. Uses `currentColor` so it picks up the surrounding text colour. */
+@keyframes caretBlink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.15;
+  }
+}
+
+.streaming-caret {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background-color: currentColor;
+  border-radius: 1px;
+  animation: caretBlink 1s var(--ease-std) infinite;
+}
+
 /* ── Sub-page cross-fade ──
  * Tiny opacity-only entrance for swapping content INSIDE an already-open
  * surface (e.g. settings sub-page navigation). Deliberately smaller than

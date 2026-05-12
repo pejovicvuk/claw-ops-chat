@@ -150,6 +150,7 @@ export function ChatView({
     messages,
     status,
     activeTool,
+    streamingAssistantId,
     claudeSessionId,
     sendMessage,
     stopGeneration,
@@ -775,6 +776,7 @@ export function ChatView({
                           <MessageBubble
                             message={msg}
                             isLatestToolUse={msg.type === "tool_use" && msg.id === latestToolUseId}
+                            isStreaming={msg.id === streamingAssistantId}
                             siblingToolUse={
                               msg.type === "tool_result" && msg.toolCallId
                                 ? toolUseByCallId.get(msg.toolCallId)

@@ -44,14 +44,20 @@ export function ImagePreview({ src, alt, large }: ImagePreviewProps) {
 
   const sizeClass = large ? "max-h-[480px] w-full max-w-2xl" : "max-h-64 max-w-full";
 
+  // Stack the skeleton + img so the image can fade in over the skeleton
+  // (200 ms opacity) instead of snapping in on `onLoad`. The skeleton stays
+  // beneath via `absolute inset-0` and the img sits relative on top.
   return (
     <button
       type="button"
       onClick={() => open({ src: resolved, alt })}
-      className={`${sizeClass} my-2 block overflow-hidden rounded-lg border border-canvas-border bg-canvas-surface-hover cursor-zoom-in`}
+      className={`${sizeClass} relative my-2 block overflow-hidden rounded-lg border border-canvas-border bg-canvas-surface-hover cursor-zoom-in`}
     >
       {status === "loading" && (
-        <div className={`${sizeClass} animate-pulse bg-canvas-bg`} aria-hidden="true" />
+        <div
+          className={`${sizeClass} absolute inset-0 animate-pulse bg-canvas-bg`}
+          aria-hidden="true"
+        />
       )}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
@@ -61,7 +67,9 @@ export function ImagePreview({ src, alt, large }: ImagePreviewProps) {
         decoding="async"
         onLoad={() => setStatus("ok")}
         onError={() => setStatus("error")}
-        className={`${sizeClass} block object-contain ${status === "loading" ? "hidden" : ""}`}
+        className={`${sizeClass} relative block object-contain transition-opacity duration-300 ${
+          status === "ok" ? "opacity-100" : "opacity-0"
+        }`}
       />
     </button>
   );

@@ -5,6 +5,7 @@ import { FiSettings, FiX, FiLogOut, FiArrowLeft } from "react-icons/fi";
 import { authFetch, clearAuth } from "@/lib/auth";
 import { clearAccessToken } from "@/lib/apiClient";
 import { useUrlState } from "@/lib/use-url-state";
+import { useExitAnimation } from "@/lib/use-exit-animation";
 import { Z_INDEX } from "@/lib/z-index";
 import { SettingsMainPage } from "./pages/settings-main-page";
 import { SettingsConnectionsPage } from "./pages/settings-connections-page";
@@ -132,6 +133,14 @@ export function SettingsOverlay() {
   const page = parsePage(rawPage);
   const memoryProjectSlug = parseMemoryProjectSlug(rawPage);
   const open = page !== null;
+  const { mounted, state } = useExitAnimation(open, 200);
+  const exiting = state === "exiting";
+  // While exiting the URL has already lost ?settings=, so `page` flips to null
+  // — keep the last seen page around so we can render the same content during
+  // the exit animation rather than blanking the modal mid-fade.
+  const lastPageRef = useRef<PageKey | null>(page);
+  if (page !== null) lastPageRef.current = page;
+  const renderPage = page ?? lastPageRef.current;
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const close = useCallback(() => {
@@ -172,21 +181,22 @@ export function SettingsOverlay() {
     window.location.href = `${BASE}/login`;
   }, []);
 
-  if (!open || !page) return null;
+  if (!mounted || !renderPage) return null;
 
-  const info = PAGES[page];
+  const info = PAGES[renderPage];
   // The Memory landing's parent is "main"; drill-in adds a logical layer
   // back to "memory" but the static `info.parent` doesn't capture that, so
   // hasBack must also be true when we're on a project drill-in.
   const hasBack = info.parent !== null || memoryProjectSlug !== null;
   const wide = info.wide === true;
+  const modalEnter = exiting ? "animate-modal-out" : "animate-modal-in";
   const modalClasses = wide
-    ? "animate-modal-in flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(800px,90vh)] sm:w-[min(960px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl"
-    : "animate-modal-in flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(640px,85vh)] sm:w-[min(760px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl";
+    ? `${modalEnter} flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(800px,90vh)] sm:w-[min(960px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl`
+    : `${modalEnter} flex h-full w-full flex-col overflow-hidden border border-canvas-border bg-canvas-bg shadow-2xl sm:h-auto sm:max-h-[min(640px,85vh)] sm:w-[min(760px,calc(100vw-48px))] sm:max-w-none sm:rounded-2xl`;
 
   return (
     <div
-      className="fixed inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[6px] sm:p-6"
+      className={`fixed inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[6px] sm:p-6 ${exiting ? "animate-backdrop-out" : "animate-backdrop-in"}`}
       style={{ zIndex: Z_INDEX.MODAL }}
       onClick={close}
       role="dialog"
@@ -226,25 +236,25 @@ export function SettingsOverlay() {
 
         {/* Page content */}
         <div className="flex-1 overflow-y-auto px-5 py-5">
-          {page === "main" && <SettingsMainPage />}
-          {page === "connections" && <SettingsConnectionsPage />}
-          {page === "connections/claude" && <SettingsClaudePage />}
-          {page === "connections/google" && <SettingsGooglePage />}
-          {page === "connections/microsoft" && <SettingsMicrosoftPage />}
-          {page === "connections/github" && <SettingsGithubPage />}
-          {page === "connections/atlassian" && <SettingsAtlassianPage />}
-          {page === "connections/slack" && <SettingsSlackPage />}
-          {page === "connections/linear" && <SettingsLinearPage />}
-          {page === "connections/notion" && <SettingsNotionPage />}
-          {page === "connections/trello" && <SettingsTrelloPage />}
-          {page === "agent" && <SettingsAgentPage />}
-          {page === "agent/skills" && <SettingsAgentSkillsPage />}
-          {page === "agent/subagents" && <SettingsAgentSubagentsPage />}
-          {page === "terminal" && <SettingsTerminalPage />}
-          {page === "notifications" && <SettingsNotificationsPage />}
-          {page === "voice" && <SettingsVoicePage />}
-          {page === "monitoring" && <SettingsMonitoringPage />}
-          {page === "memory" &&
+          {renderPage === "main" && <SettingsMainPage />}
+          {renderPage === "connections" && <SettingsConnectionsPage />}
+          {renderPage === "connections/claude" && <SettingsClaudePage />}
+          {renderPage === "connections/google" && <SettingsGooglePage />}
+          {renderPage === "connections/microsoft" && <SettingsMicrosoftPage />}
+          {renderPage === "connections/github" && <SettingsGithubPage />}
+          {renderPage === "connections/atlassian" && <SettingsAtlassianPage />}
+          {renderPage === "connections/slack" && <SettingsSlackPage />}
+          {renderPage === "connections/linear" && <SettingsLinearPage />}
+          {renderPage === "connections/notion" && <SettingsNotionPage />}
+          {renderPage === "connections/trello" && <SettingsTrelloPage />}
+          {renderPage === "agent" && <SettingsAgentPage />}
+          {renderPage === "agent/skills" && <SettingsAgentSkillsPage />}
+          {renderPage === "agent/subagents" && <SettingsAgentSubagentsPage />}
+          {renderPage === "terminal" && <SettingsTerminalPage />}
+          {renderPage === "notifications" && <SettingsNotificationsPage />}
+          {renderPage === "voice" && <SettingsVoicePage />}
+          {renderPage === "monitoring" && <SettingsMonitoringPage />}
+          {renderPage === "memory" &&
             (memoryProjectSlug ? (
               <SettingsMemoryProjectPage slug={memoryProjectSlug} />
             ) : (
@@ -253,7 +263,7 @@ export function SettingsOverlay() {
         </div>
 
         {/* Footer — only on main page */}
-        {page === "main" && (
+        {renderPage === "main" && (
           <div
             className="flex shrink-0 items-center justify-end border-t border-canvas-border px-5 py-3"
             style={{ paddingBottom: "max(env(safe-area-inset-bottom, 0px), 12px)" }}

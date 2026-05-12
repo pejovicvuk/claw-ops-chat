@@ -758,7 +758,10 @@ html:not(.dark) .lg-bubble:focus-within {
   animation-delay: 0.4s;
 }
 
-/* ── Mobile file sheet slide-up ── */
+/* ── Mobile file sheet slide-up / -down ──
+ * Mirror of the sidebar curve — same iOS-native decel coming in, slightly
+ * faster going out so a swipe-down dismiss feels snappy without the entrance
+ * feeling sluggish in comparison. */
 
 @keyframes sheetSlideUp {
   from {
@@ -769,8 +772,21 @@ html:not(.dark) .lg-bubble:focus-within {
   }
 }
 
+@keyframes sheetSlideDown {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
 .animate-sheet-up {
   animation: sheetSlideUp 250ms cubic-bezier(0.32, 0.72, 0, 1) both;
+}
+
+.animate-sheet-down {
+  animation: sheetSlideDown 200ms cubic-bezier(0.32, 0.72, 0, 1) both;
 }
 
 /* ── Session sidebar slide (mobile) ──

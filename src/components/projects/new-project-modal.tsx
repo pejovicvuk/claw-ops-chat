@@ -9,6 +9,8 @@ import { Z_INDEX } from "@/lib/z-index";
 interface NewProjectModalProps {
   onClose: () => void;
   onCreated: (project: ProjectMeta) => void;
+  /** Drives enter/exit animation classes — supplied by a parent useExitAnimation. */
+  animationState?: "entering" | "open" | "exiting";
 }
 
 /**
@@ -17,7 +19,12 @@ interface NewProjectModalProps {
  * validation hint mirrors `validateDisplayName` so client and server
  * agree on what's acceptable.
  */
-export function NewProjectModal({ onClose, onCreated }: NewProjectModalProps) {
+export function NewProjectModal({
+  onClose,
+  onCreated,
+  animationState = "open",
+}: NewProjectModalProps) {
+  const exiting = animationState === "exiting";
   const [name, setName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -64,10 +71,10 @@ export function NewProjectModal({ onClose, onCreated }: NewProjectModalProps) {
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+        className={`absolute inset-0 bg-black/40 backdrop-blur-[2px] ${exiting ? "animate-backdrop-out" : "animate-backdrop-in"}`}
       />
       <div
-        className="animate-modal-in relative w-full max-w-md rounded-xl border border-canvas-border bg-canvas-bg p-5 shadow-2xl"
+        className={`relative w-full max-w-md rounded-xl border border-canvas-border bg-canvas-bg p-5 shadow-2xl ${exiting ? "animate-modal-out" : "animate-modal-in"}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="new-project-heading"

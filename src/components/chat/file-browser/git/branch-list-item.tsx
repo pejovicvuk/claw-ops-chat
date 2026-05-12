@@ -4,6 +4,7 @@ import { useState } from "react";
 import { FiCheck, FiUsers } from "react-icons/fi";
 import type { GitBranch } from "@/lib/git/types";
 import type { SessionBranchSnapshot } from "@/lib/session-branches";
+import { useExitAnimation } from "@/lib/use-exit-animation";
 import { BranchCheckoutConfirm } from "./branch-checkout-confirm";
 
 interface BranchListItemProps {
@@ -22,6 +23,7 @@ export function BranchListItem({
   isCurrentChatBranch = false,
 }: BranchListItemProps) {
   const [confirming, setConfirming] = useState(false);
+  const { mounted: confirmingMounted, state: confirmingAnim } = useExitAnimation(confirming, 200);
 
   // Other-chat conflict: at least one session is on this branch but it
   // isn't the one currently open in the UI, AND it isn't the user's
@@ -89,7 +91,7 @@ export function BranchListItem({
           </span>
         )}
       </button>
-      {confirming && (
+      {confirmingMounted && (
         <BranchCheckoutConfirm
           branchName={branch.name}
           sessions={sessionsOnBranch}
@@ -98,6 +100,7 @@ export function BranchListItem({
             onClick();
           }}
           onCancel={() => setConfirming(false)}
+          animationState={confirmingAnim}
         />
       )}
     </>

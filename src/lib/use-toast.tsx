@@ -28,7 +28,11 @@ export interface ToastItem {
   message: string;
   /** Optional click action — wires the whole toast as a button when set. */
   onClick?: () => void;
+  /** True while the row is playing its exit animation before unmount. */
+  exiting?: boolean;
 }
+
+const EXIT_ANIM_MS = 120;
 
 export interface ToastOptions {
   /** Click action; the toast still auto-dismisses on its own timer. */
@@ -82,10 +86,19 @@ function push(kind: ToastKind, message: string, options?: ToastOptions): string 
 }
 
 function dismiss(id: string): void {
-  const next = items.filter((t) => t.id !== id);
-  if (next.length === items.length) return;
-  items = next;
+  const target = items.find((t) => t.id === id);
+  if (!target || target.exiting) return;
+  items = items.map((t) => (t.id === id ? { ...t, exiting: true } : t));
   emit();
+  if (typeof window !== "undefined") {
+    window.setTimeout(() => {
+      items = items.filter((t) => t.id !== id);
+      emit();
+    }, EXIT_ANIM_MS);
+  } else {
+    items = items.filter((t) => t.id !== id);
+    emit();
+  }
 }
 
 /** Public push API. Stable references so callers can drop into effect deps. */
@@ -128,7 +141,7 @@ function ToastRow({ item }: { item: ToastItem }) {
 
   return (
     <div
-      className={`animate-menu-in flex min-w-0 max-w-[380px] items-center rounded-full shadow-xl ring-1 ring-black/10 ${color}`}
+      className={`flex min-w-0 max-w-[380px] items-center rounded-full shadow-xl ring-1 ring-black/10 ${color} ${item.exiting ? "animate-menu-out" : "animate-menu-in"}`}
     >
       <button
         type="button"

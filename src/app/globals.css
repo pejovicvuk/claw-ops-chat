@@ -414,7 +414,14 @@ html:not(.dark) .lg-bubble:focus-within {
  * blurring underneath.
  */
 .lg-menu {
-  position: relative;
+  /* No `position` declaration on purpose — every consumer (model + thinking
+     picker, permission-mode picker, mention popover) supplies its own
+     `absolute` / `fixed` positioning. This class is unlayered, so declaring
+     `position: relative` here beat Tailwind's layered `.absolute` utility
+     on the cascade and dragged the popovers back into document flow,
+     expanding the composer toolbar to fit them. `isolation: isolate` still
+     creates a clean stacking context for the backdrop-filter without
+     needing a `position` value. */
   isolation: isolate;
   backdrop-filter: blur(32px) saturate(175%);
   -webkit-backdrop-filter: blur(32px) saturate(175%);

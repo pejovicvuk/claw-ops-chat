@@ -65,7 +65,7 @@ declare global {
 export type DictationState = "idle" | "starting" | "recording";
 
 export interface UseDictationResult {
-  /** False on Firefox, iOS Safari, or during SSR — caller should hide the mic button. */
+  /** False on Firefox or during SSR — caller should hide the mic button. */
   supported: boolean;
   state: DictationState;
   /** Accumulated transcript since the current recording started, already
@@ -77,25 +77,8 @@ export interface UseDictationResult {
   stop(): void;
 }
 
-/**
- * iOS Safari (iPhone + iPad, including iPadOS that masquerades as
- * desktop MacIntel) exposes `webkitSpeechRecognition` but Apple gates
- * the underlying dictation service so `.start()` reliably fires
- * `onerror({error: "not-allowed"})` without ever prompting the user.
- * Treating iOS the same way we treat Firefox — feature-detect as
- * unsupported — keeps the UI clean.
- */
-function isIOS(): boolean {
-  if (typeof navigator === "undefined") return false;
-  if (/iPad|iPhone|iPod/.test(navigator.userAgent)) return true;
-  // iPadOS 13+ reports as desktop macOS but is the only "MacIntel"
-  // platform with a touch screen.
-  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
-}
-
 function getCtor(): SpeechRecognitionCtor | null {
   if (typeof window === "undefined") return null;
-  if (isIOS()) return null;
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 

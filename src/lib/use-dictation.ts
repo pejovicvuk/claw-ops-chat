@@ -125,12 +125,18 @@ function errorMessageFor(code: string): string {
  * as `transcript`, so the consumer can always treat the output as
  * Serbian Latin.
  *
- * The `onresult` handler walks only the new entries starting at
- * `event.resultIndex` and tracks finalized text in a sticky ref. This
- * is what keeps the transcript correct on Android Chrome (where each
- * interim refinement is appended rather than replaced) and across the
- * auto-restart loop in `onend` (where a fresh recognizer instance
- * resets `event.results`).
+ * Android-quirk defenses:
+ *   - Each finalized result is keyed by its `event.results` index in a
+ *     local Set; if Android Chrome re-fires `onresult` for the same
+ *     finalized index (or stalls `resultIndex` at 0), we skip duplicate
+ *     appends. This is what was causing "DanasDAnasDanas".
+ *   - Interim text is taken as the *latest* interim chunk only, not
+ *     concatenated across entries — Android Chrome sometimes appends
+ *     each refinement as a new interim entry.
+ *   - We do NOT auto-restart on `onend`. Continuous mode is requested
+ *     but Android ignores it; restart loops were re-recognizing the
+ *     trailing audio and contributing to duplicates. End-of-recognition
+ *     just transitions to idle and the user clicks the mic again.
  */
 export function useDictation(): UseDictationResult {
   // Lazy init: getCtor() runs once on first render, the result is stable
@@ -143,20 +149,18 @@ export function useDictation(): UseDictationResult {
   const [transcript, setTranscript] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Refs keep handler closures cheap and survive recognizer restarts.
+  // Refs keep handler closures cheap and outlive renders.
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const stateRef = useRef<DictationState>("idle");
-  // Sticky accumulator for finalized text across (a) interim refinements
-  // within a session and (b) auto-restarts triggered by `onend`. Reset
-  // only on a fresh user-initiated `start()`.
+  // Accumulator for text that has been moved out of `event.results`
+  // (finalized). Reset on each fresh user-initiated `start()`.
   const finalizedRef = useRef("");
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
-  // Tear down on unmount. We null the onend handler first so the
-  // restart-on-end loop doesn't fire mid-cleanup.
+  // Tear down on unmount.
   useEffect(() => {
     return () => {
       const rec = recognitionRef.current;
@@ -183,62 +187,56 @@ export function useDictation(): UseDictationResult {
     finalizedRef.current = "";
     setState("starting");
 
-    // Build a fresh recognizer instance, wiring all handlers. The
-    // `onend` auto-restart calls back into this same factory so each
-    // restart gets a clean instance — Android Chrome occasionally
-    // mis-handles a reused instance's results array.
-    const createAndStart = (): void => {
-      const rec = new Ctor();
-      rec.lang = "sr-RS";
-      rec.continuous = true;
-      rec.interimResults = true;
+    const rec = new Ctor();
+    rec.lang = "sr-RS";
+    rec.continuous = true;
+    rec.interimResults = true;
 
-      rec.onstart = () => {
-        if (stateRef.current !== "recording") setState("recording");
-      };
+    // Indices in `event.results` we've already pulled into finalizedRef.
+    // Skips re-appending the same word on Android Chrome, which sometimes
+    // re-fires `onresult` for already-finalized indices and/or returns a
+    // `resultIndex` that doesn't advance past them.
+    const consumedFinalIndices = new Set<number>();
 
-      rec.onresult = (event) => {
-        let interim = "";
-        for (let i = event.resultIndex; i < event.results.length; i++) {
-          const result = event.results[i];
-          if (result.length === 0) continue;
-          const chunk = result[0].transcript;
-          if (result.isFinal) {
-            finalizedRef.current += chunk;
-          } else {
-            interim += chunk;
-          }
-        }
-        setTranscript(cyrillicToLatin(finalizedRef.current + interim));
-      };
-
-      rec.onerror = (event) => {
-        // `aborted` fires when we stop()/abort() programmatically — silent.
-        if (event.error === "aborted") return;
-        setError(errorMessageFor(event.error));
-      };
-
-      rec.onend = () => {
-        // Chromium-on-Android auto-stops on silence. If the user hasn't
-        // pressed stop, spin up a fresh recognizer so dictation feels
-        // continuous. The finalized text persists via finalizedRef.
-        if (stateRef.current === "recording") {
-          try {
-            createAndStart();
-            return;
-          } catch {
-            /* fall through to idle */
-          }
-        }
-        setState("idle");
-      };
-
-      recognitionRef.current = rec;
-      rec.start();
+    rec.onstart = () => {
+      setState("recording");
     };
 
+    rec.onresult = (event) => {
+      let lastInterim = "";
+      for (let i = 0; i < event.results.length; i++) {
+        const result = event.results[i];
+        if (result.length === 0) continue;
+        const chunk = result[0].transcript;
+        if (result.isFinal) {
+          if (consumedFinalIndices.has(i)) continue;
+          consumedFinalIndices.add(i);
+          finalizedRef.current += chunk;
+        } else {
+          // Take the latest interim only — Android Chrome appends each
+          // refinement as a new entry rather than mutating in place.
+          lastInterim = chunk;
+        }
+      }
+      setTranscript(cyrillicToLatin(finalizedRef.current + lastInterim));
+    };
+
+    rec.onerror = (event) => {
+      // `aborted` fires when we stop()/abort() programmatically — silent.
+      if (event.error === "aborted") return;
+      setError(errorMessageFor(event.error));
+    };
+
+    rec.onend = () => {
+      // No auto-restart. Continuous mode is honored on desktop but
+      // ignored on Android; restart loops there re-recognized trailing
+      // audio. Caller re-clicks the mic for another utterance.
+      setState("idle");
+    };
+
+    recognitionRef.current = rec;
     try {
-      createAndStart();
+      rec.start();
     } catch (err) {
       setState("idle");
       setError(err instanceof Error ? err.message : "Could not start dictation.");
@@ -249,8 +247,6 @@ export function useDictation(): UseDictationResult {
   const stop = useCallback(() => {
     const rec = recognitionRef.current;
     if (!rec) return;
-    // Flip state BEFORE calling stop() so the onend handler's
-    // restart-loop check sees "not recording" and falls through to idle.
     setState("idle");
     try {
       rec.stop();

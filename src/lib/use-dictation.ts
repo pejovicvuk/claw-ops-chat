@@ -25,6 +25,11 @@ interface SpeechRecognitionResultList {
 
 interface SpeechRecognitionEvent extends Event {
   readonly results: SpeechRecognitionResultList;
+  /** Index into `results` where the new entries for this event start.
+   *  Critical on Android Chrome: each interim refinement is appended
+   *  as a new entry rather than mutating an existing one, so naive
+   *  full-array concatenation produces duplicates ("DaDanDanas"). */
+  readonly resultIndex: number;
 }
 
 interface SpeechRecognitionErrorEvent extends Event {
@@ -60,7 +65,7 @@ declare global {
 export type DictationState = "idle" | "starting" | "recording";
 
 export interface UseDictationResult {
-  /** False on Firefox or during SSR — caller should hide the mic button. */
+  /** False on Firefox, iOS Safari, or during SSR — caller should hide the mic button. */
   supported: boolean;
   state: DictationState;
   /** Accumulated transcript since the current recording started, already
@@ -72,8 +77,25 @@ export interface UseDictationResult {
   stop(): void;
 }
 
+/**
+ * iOS Safari (iPhone + iPad, including iPadOS that masquerades as
+ * desktop MacIntel) exposes `webkitSpeechRecognition` but Apple gates
+ * the underlying dictation service so `.start()` reliably fires
+ * `onerror({error: "not-allowed"})` without ever prompting the user.
+ * Treating iOS the same way we treat Firefox — feature-detect as
+ * unsupported — keeps the UI clean.
+ */
+function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent)) return true;
+  // iPadOS 13+ reports as desktop macOS but is the only "MacIntel"
+  // platform with a touch screen.
+  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
 function getCtor(): SpeechRecognitionCtor | null {
   if (typeof window === "undefined") return null;
+  if (isIOS()) return null;
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
@@ -97,15 +119,18 @@ function errorMessageFor(code: string): string {
 
 /**
  * Live dictation hook backed by `window.SpeechRecognition` (Chrome,
- * Edge) or `window.webkitSpeechRecognition` (Safari). Hardcoded to
- * Serbian (`sr-RS`); whatever the recognizer returns (typically
+ * Edge) or `window.webkitSpeechRecognition` (desktop Safari). Hardcoded
+ * to Serbian (`sr-RS`); whatever the recognizer returns (typically
  * Cyrillic) is passed through `cyrillicToLatin` before being exposed
  * as `transcript`, so the consumer can always treat the output as
  * Serbian Latin.
  *
- * Caller pattern: snapshot the textarea content when `state` flips to
- * `"recording"`, then on every `transcript` update set the textarea
- * to `snapshot + " " + transcript`.
+ * The `onresult` handler walks only the new entries starting at
+ * `event.resultIndex` and tracks finalized text in a sticky ref. This
+ * is what keeps the transcript correct on Android Chrome (where each
+ * interim refinement is appended rather than replaced) and across the
+ * auto-restart loop in `onend` (where a fresh recognizer instance
+ * resets `event.results`).
  */
 export function useDictation(): UseDictationResult {
   // Lazy init: getCtor() runs once on first render, the result is stable
@@ -118,10 +143,14 @@ export function useDictation(): UseDictationResult {
   const [transcript, setTranscript] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  // Keep recognition instance + state in refs so the event handlers
-  // see fresh values without re-creating the recognizer on every render.
+  // Refs keep handler closures cheap and survive recognizer restarts.
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const stateRef = useRef<DictationState>("idle");
+  // Sticky accumulator for finalized text across (a) interim refinements
+  // within a session and (b) auto-restarts triggered by `onend`. Reset
+  // only on a fresh user-initiated `start()`.
+  const finalizedRef = useRef("");
+
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
@@ -151,50 +180,65 @@ export function useDictation(): UseDictationResult {
 
     setError(null);
     setTranscript("");
+    finalizedRef.current = "";
     setState("starting");
 
-    const rec = new Ctor();
-    rec.lang = "sr-RS";
-    rec.continuous = true;
-    rec.interimResults = true;
+    // Build a fresh recognizer instance, wiring all handlers. The
+    // `onend` auto-restart calls back into this same factory so each
+    // restart gets a clean instance — Android Chrome occasionally
+    // mis-handles a reused instance's results array.
+    const createAndStart = (): void => {
+      const rec = new Ctor();
+      rec.lang = "sr-RS";
+      rec.continuous = true;
+      rec.interimResults = true;
 
-    rec.onstart = () => {
-      setState("recording");
-    };
+      rec.onstart = () => {
+        if (stateRef.current !== "recording") setState("recording");
+      };
 
-    rec.onresult = (event) => {
-      let combined = "";
-      for (let i = 0; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.length > 0) combined += result[0].transcript;
-      }
-      setTranscript(cyrillicToLatin(combined));
-    };
-
-    rec.onerror = (event) => {
-      // `aborted` fires when we stop()/abort() programmatically — silent.
-      if (event.error === "aborted") return;
-      setError(errorMessageFor(event.error));
-    };
-
-    rec.onend = () => {
-      // Chrome on Android auto-stops on silence. If the user hasn't
-      // pressed stop, transparently restart the recognizer so the
-      // dictation session feels continuous.
-      if (stateRef.current === "recording") {
-        try {
-          rec.start();
-          return;
-        } catch {
-          /* fall through to idle */
+      rec.onresult = (event) => {
+        let interim = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.length === 0) continue;
+          const chunk = result[0].transcript;
+          if (result.isFinal) {
+            finalizedRef.current += chunk;
+          } else {
+            interim += chunk;
+          }
         }
-      }
-      setState("idle");
+        setTranscript(cyrillicToLatin(finalizedRef.current + interim));
+      };
+
+      rec.onerror = (event) => {
+        // `aborted` fires when we stop()/abort() programmatically — silent.
+        if (event.error === "aborted") return;
+        setError(errorMessageFor(event.error));
+      };
+
+      rec.onend = () => {
+        // Chromium-on-Android auto-stops on silence. If the user hasn't
+        // pressed stop, spin up a fresh recognizer so dictation feels
+        // continuous. The finalized text persists via finalizedRef.
+        if (stateRef.current === "recording") {
+          try {
+            createAndStart();
+            return;
+          } catch {
+            /* fall through to idle */
+          }
+        }
+        setState("idle");
+      };
+
+      recognitionRef.current = rec;
+      rec.start();
     };
 
-    recognitionRef.current = rec;
     try {
-      rec.start();
+      createAndStart();
     } catch (err) {
       setState("idle");
       setError(err instanceof Error ? err.message : "Could not start dictation.");

@@ -43,7 +43,7 @@ Also relevant:
 | [`docs/architecture/api-routes.md`](../docs/architecture/api-routes.md)     | Adding/modifying any HTTP route — every `route.ts` grouped by feature       |
 | [`docs/architecture/runtime.md`](../docs/architecture/runtime.md)           | Touching `server.ts`, WebSocket, SessionManager, SDK loop, or boot order    |
 | [`docs/architecture/subsystems.md`](../docs/architecture/subsystems.md)     | Audit / push / monitoring / reports / projects / proxy / git / files / auth |
-| [`docs/architecture/integrations.md`](../docs/architecture/integrations.md) | Spring backend / SDK / Bitbucket MCP / OAuth providers / STT / Web Push     |
+| [`docs/architecture/integrations.md`](../docs/architecture/integrations.md) | Spring backend / SDK / Bitbucket MCP / OAuth providers / Web Push           |
 
 ## Where things live (cheat sheet)
 

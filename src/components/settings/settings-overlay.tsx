@@ -23,7 +23,6 @@ import { SettingsAgentPage } from "./pages/settings-agent-page";
 import { SettingsAgentSkillsPage } from "./pages/settings-agent-skills-page";
 import { SettingsAgentSubagentsPage } from "./pages/settings-agent-subagents-page";
 import { SettingsNotificationsPage } from "./pages/settings-notifications-page";
-import { SettingsVoicePage } from "./pages/settings-voice-page";
 import { SettingsMemoryPage } from "./pages/settings-memory-page";
 import { SettingsMemoryProjectPage } from "./pages/settings-memory-project-page";
 import { SettingsMonitoringPage } from "@/components/monitoring/settings-monitoring-page";
@@ -47,7 +46,6 @@ type PageKey =
   | "agent/subagents"
   | "terminal"
   | "notifications"
-  | "voice"
   | "monitoring"
   | "memory";
 
@@ -77,7 +75,6 @@ const PAGES: Record<PageKey, PageInfo> = {
   "agent/subagents": { title: "Subagents", parent: "agent" },
   terminal: { title: "Terminal", parent: "main", wide: true },
   notifications: { title: "Notifications", parent: "main" },
-  voice: { title: "Voice input", parent: "main" },
   monitoring: { title: "Monitoring", parent: "main", wide: true },
   memory: { title: "Memory", parent: "main" },
 };
@@ -268,7 +265,6 @@ export function SettingsOverlay() {
           {renderPage === "agent/subagents" && <SettingsAgentSubagentsPage />}
           {renderPage === "terminal" && <SettingsTerminalPage />}
           {renderPage === "notifications" && <SettingsNotificationsPage />}
-          {renderPage === "voice" && <SettingsVoicePage />}
           {renderPage === "monitoring" && <SettingsMonitoringPage />}
           {renderPage === "memory" &&
             (memoryProjectSlug ? (

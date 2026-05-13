@@ -14,7 +14,7 @@ For day-to-day commands and conventions, see the root [`CLAUDE.md`](../../CLAUDE
 | [runtime.md](./runtime.md)               | You're touching `server.ts`, the chat WebSocket, the SessionManager, the SDK loop, or boot order. |
 | [subsystems.md](./subsystems.md)         | You're working on audit, push, monitoring, reports, projects, proxy, git, file system, or auth.   |
 | [preview-stream.md](./preview-stream.md) | You're touching the headless-Chromium preview pipeline (WebRTC / MSE / JPEG, audit, heartbeat).   |
-| [integrations.md](./integrations.md)     | You're connecting an external service: Spring backend, OAuth provider, MCP server, STT, Web Push. |
+| [integrations.md](./integrations.md)     | You're connecting an external service: Spring backend, OAuth provider, MCP server, Web Push.      |
 
 ## Task-to-doc cheat sheet
 

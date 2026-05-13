@@ -61,12 +61,10 @@ documented separately in [api-routes.md](./api-routes.md).
 | -------------------------------- | --------------------------------------------------------------- |
 | `chat-layout.tsx`                | Main 3-pane layout: sidebar, file browser, editor, chat         |
 | `chat-view.tsx`                  | Message list renderer                                           |
-| `chat-input.tsx`                 | Input box (mentions, attachments, voice)                        |
+| `chat-input.tsx`                 | Input box (mentions, attachments)                               |
 | `chat-input/attachment-pill.tsx` | Attachment chip                                                 |
 | `chat-input/attachment-row.tsx`  | Attachment row container                                        |
 | `chat-input/mention-popover.tsx` | `@mention` autocomplete                                         |
-| `chat-input/voice-recorder.tsx`  | Voice recording UI                                              |
-| `chat-input/voice-wave.tsx`      | Audio waveform animation                                        |
 | `markdown-renderer.tsx`          | Markdown → JSX, file-card/pill detection, syntax highlight glue |
 | `message-bubble.tsx`             | User/assistant message rendering                                |
 | `empty-state.tsx`                | "Start a new conversation" placeholder                          |
@@ -212,7 +210,7 @@ documented separately in [api-routes.md](./api-routes.md).
 `google-custom-wizard`, `settings-microsoft-page`, `settings-jira-page`,
 `settings-linear-page`, `settings-bitbucket-page`, `settings-notion-page`,
 `settings-trello-page`, `settings-slack-page`, `settings-terminal-page`,
-`settings-voice-page`, `settings-notifications-page`.
+`settings-notifications-page`.
 
 ### `sidebar/`
 
@@ -273,12 +271,6 @@ MCP & integrations
 - `mcp-auth-sessions.ts` — OAuth sessions for MCP servers
 - `agent-config.ts` — load/save agent system prompt + rules + skills
 - Integration configs: `google-custom-config.ts`, `google-custom-oauth-state.ts`, `google-custom-scopes.ts`, `google-workspace-mcp-tokens.ts`, `github-custom-config.ts`, `microsoft-custom-config.ts`, `microsoft-custom-scopes.ts`, `bitbucket-custom-config.ts`, `jira-custom-config.ts`, `linear-custom-config.ts`, `notion-custom-config.ts`, `trello-custom-config.ts`
-
-STT
-
-- `stt-providers.ts` — provider registry
-- `stt-custom-config.ts` — provider configuration
-- `stt-defaults.ts` — defaults
 
 Domain types & helpers
 
@@ -435,7 +427,7 @@ Reference deployment files (env, compose) — not consumed by the build.
 | `api-routes.md`   | Every API route                             |
 | `runtime.md`      | `server.ts` deep dive                       |
 | `subsystems.md`   | Audit / push / monitoring / reports / proxy |
-| `integrations.md` | Spring / SDK / MCP / OAuth / STT / Web Push |
+| `integrations.md` | Spring / SDK / MCP / OAuth / Web Push       |
 
 ## Tests (47 files)
 
@@ -450,7 +442,7 @@ Notable test areas:
 - Proxy: `ssrf-guard`, `unfurl-parser`
 - Projects: `store`, `validation`
 - Git: `parse-status`, `derive-status`
-- Misc: `model-pricing`, `nav-urls`, `cron-humanize`, `detect-file-paths`, `format-relative-time`, `fuzzy-score`, `mcp-register`, `account-rate-limits`, `rate-limit-probe`, `agent-config`, `google-custom-config`, `stt-custom-config`, `session-status-store`, `sdk-query`, `file-preview/pick-renderer`
+- Misc: `model-pricing`, `nav-urls`, `cron-humanize`, `detect-file-paths`, `format-relative-time`, `fuzzy-score`, `mcp-register`, `account-rate-limits`, `rate-limit-probe`, `agent-config`, `google-custom-config`, `session-status-store`, `sdk-query`, `file-preview/pick-renderer`
 - React hooks: `use-git-diff`, `use-commit-diff`, `use-exit-animation`
 - API routes: `git/diff`, `git/commit-diff`, `sessions/branches`
 - Components: `chat/markdown-renderer`, `chat/file-browser.click-swap`, `lib/chat-files-context`

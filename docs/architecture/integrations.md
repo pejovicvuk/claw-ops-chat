@@ -156,22 +156,6 @@ provider above), `mcp-auth-sessions.ts` brokers the OAuth flow:
 
 ---
 
-## Speech-to-text (STT)
-
-**Source:** `src/lib/stt-providers.ts`, `stt-custom-config.ts`, `stt-defaults.ts`.
-
-Pluggable provider model — each provider exposes the same `transcribe(audio)`
-contract. Configuration is per-user via `/api/stt/settings`. Default provider
-in `stt-defaults.ts`.
-
-**API:** `/api/stt/transcribe` (consume audio buffer → text), `/api/stt/settings`
-(get/set provider config). See [api-routes.md#stt-speech-to-text](./api-routes.md#stt-speech-to-text).
-
-**UI:** `src/components/chat/chat-input/voice-recorder.tsx` (record + submit),
-`src/components/settings/pages/settings-voice-page.tsx` (provider config).
-
----
-
 ## Web Push (browser → server)
 
 The browser-side half of the [push subsystem](./subsystems.md#push-notifications).
@@ -213,5 +197,4 @@ Used by the monitoring subsystem; not user-facing.
 
 1. **OAuth-style with a SaaS API:** clone the shape of `src/lib/jira-custom-config.ts` (token-based) or `microsoft-custom-config.ts` (device flow). Add `/api/{provider}-custom/credentials` + `/status` routes. Add a settings page under `src/components/settings/pages/`. Register the MCP server (if any) via `mcp-register.ts`.
 2. **MCP server (no OAuth):** write a small `<thing>-mcp.ts` next to `bitbucket-mcp.ts`, register tools via `McpServer.registerTool()`. Add to the `mcpServers` config produced by `loadMcpServers()` (called per turn in `server.ts`). Document the tools here.
-3. **STT provider:** add a row to `stt-providers.ts`, implement `transcribe()`, expose its options via `stt-custom-config.ts`.
-4. **Always:** state-changing routes wrap with `withAudit(...)`, file paths go through `safePath()`, and credentials never enter the audit log (see `scrub.ts`).
+3. **Always:** state-changing routes wrap with `withAudit(...)`, file paths go through `safePath()`, and credentials never enter the audit log (see `scrub.ts`).

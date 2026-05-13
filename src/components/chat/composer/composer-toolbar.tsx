@@ -3,7 +3,6 @@
 import type { RefObject, ChangeEvent, ReactNode } from "react";
 import { FiArrowUp, FiPlus, FiSquare } from "react-icons/fi";
 import type { ContextUsage } from "@/lib/use-claude-chat";
-import { VoiceRecorder } from "../chat-input/voice-recorder";
 import type { ModeValue } from "./composer-constants";
 import { ModePicker } from "./mode-picker";
 import { ModelThinkingPicker } from "./model-thinking-picker";
@@ -26,11 +25,6 @@ interface ComposerToolbarProps {
   setEffort: (v: string | null) => void;
   contextUsage: ContextUsage | null;
 
-  // Voice
-  voiceDisabled: boolean;
-  onTranscribed: (transcript: string) => void;
-  onRecordingChange: (recording: boolean) => void;
-
   // Send / stop
   isActive: boolean;
   canSend: boolean;
@@ -45,7 +39,7 @@ interface ComposerToolbarProps {
 /**
  * The bottom row of the composer pill. Lays out, left to right:
  *
- *   + attach    Mode    [flex spacer]    Model · Thinking    🎤    ⬆
+ *   + attach    Mode    [flex spacer]    Model · Thinking    ⬆
  *
  * The attach `<label>`-wraps the hidden `<input type="file">` so the
  * native picker opens on a real user gesture without needing JS — same
@@ -67,9 +61,6 @@ export function ComposerToolbar({
   effort,
   setEffort,
   contextUsage,
-  voiceDisabled,
-  onTranscribed,
-  onRecordingChange,
   isActive,
   canSend,
   hasPendingUpload,
@@ -107,12 +98,6 @@ export function ComposerToolbar({
         setEffort={setEffort}
         contextUsage={contextUsage}
         compact={isMobile}
-      />
-
-      <VoiceRecorder
-        onTranscribed={onTranscribed}
-        onRecordingChange={onRecordingChange}
-        disabled={voiceDisabled}
       />
 
       {isActive ? (

@@ -218,13 +218,6 @@ Full route list: `github-custom`, `bitbucket-custom`, `jira-custom`,
 | `/api/proxy/image`  | GET     | S    | Fetch + cache external images (10 MB cap, 7 d TTL, SSRF-guarded)     |
 | `/api/proxy/unfurl` | POST    | S    | Fetch + parse + cache OG metadata (2 MB cap, 24 h TTL, SSRF-guarded) |
 
-## STT (speech-to-text)
-
-| Route                 | Methods   | Auth | Purpose                                  |
-| --------------------- | --------- | ---- | ---------------------------------------- |
-| `/api/stt/transcribe` | POST      | S    | Transcribe audio via configured provider |
-| `/api/stt/settings`   | GET / PUT | S    | Get / update provider settings           |
-
 ## Infra & status
 
 | Route                            | Methods | Auth | Purpose                                                       |

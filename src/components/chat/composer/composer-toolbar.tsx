@@ -1,8 +1,9 @@
 "use client";
 
 import type { RefObject, ChangeEvent, ReactNode } from "react";
-import { FiArrowUp, FiPlus, FiSquare } from "react-icons/fi";
+import { FiArrowUp, FiMic, FiPlus, FiSquare } from "react-icons/fi";
 import type { ContextUsage } from "@/lib/use-claude-chat";
+import type { DictationState } from "@/lib/use-dictation";
 import type { ModeValue } from "./composer-constants";
 import { ModePicker } from "./mode-picker";
 import { ModelThinkingPicker } from "./model-thinking-picker";
@@ -32,6 +33,15 @@ interface ComposerToolbarProps {
   onSend: () => void;
   onStop: () => void;
 
+  // Dictation — when the composer is empty and the browser supports
+  // Web Speech, the right-most slot morphs from send → mic.
+  dictationSupported: boolean;
+  dictationState: DictationState;
+  dictationError: string | null;
+  composerEmpty: boolean;
+  onStartDictation: () => void;
+  onStopDictation: () => void;
+
   /** Narrow viewport — collapses pickers to icon-only labels. */
   isMobile?: boolean;
 }
@@ -39,7 +49,7 @@ interface ComposerToolbarProps {
 /**
  * The bottom row of the composer pill. Lays out, left to right:
  *
- *   + attach    Mode    [flex spacer]    Model · Thinking    ⬆
+ *   + attach    Mode    [flex spacer]    Model · Thinking    🎤/⬆
  *
  * The attach `<label>`-wraps the hidden `<input type="file">` so the
  * native picker opens on a real user gesture without needing JS — same
@@ -66,8 +76,16 @@ export function ComposerToolbar({
   hasPendingUpload,
   onSend,
   onStop,
+  dictationSupported,
+  dictationState,
+  dictationError,
+  composerEmpty,
+  onStartDictation,
+  onStopDictation,
   isMobile,
 }: ComposerToolbarProps): ReactNode {
+  const isDictating = dictationState !== "idle";
+  const showMic = !isActive && !canSend && composerEmpty && dictationSupported && !isDictating;
   return (
     <div className="flex items-center gap-1.5">
       <label
@@ -109,6 +127,47 @@ export function ComposerToolbar({
         >
           <FiSquare size={12} className="text-white" fill="white" />
         </button>
+      ) : isDictating ? (
+        <div className="relative flex shrink-0 items-center">
+          <button
+            type="button"
+            onClick={onStopDictation}
+            className="btn-press flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-500 transition-all duration-200 hover:bg-red-600"
+            title="Stop dictation"
+            aria-label="Stop dictation"
+          >
+            <FiSquare size={12} className="text-white" fill="white" />
+          </button>
+          {dictationError && (
+            <span
+              role="alert"
+              className="pointer-events-none absolute -top-7 right-0 max-w-[220px] truncate rounded-md bg-red-500/10 px-2 py-1 text-[10px] text-red-500"
+            >
+              {dictationError}
+            </span>
+          )}
+        </div>
+      ) : showMic ? (
+        <div className="relative flex shrink-0 items-center">
+          <button
+            type="button"
+            onClick={onStartDictation}
+            className="btn-press flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-all duration-200"
+            style={{ backgroundColor: "var(--accent)" }}
+            title="Dictate in Serbian"
+            aria-label="Start dictation"
+          >
+            <FiMic size={15} className="text-white" />
+          </button>
+          {dictationError && (
+            <span
+              role="alert"
+              className="pointer-events-none absolute -top-7 right-0 max-w-[220px] truncate rounded-md bg-red-500/10 px-2 py-1 text-[10px] text-red-500"
+            >
+              {dictationError}
+            </span>
+          )}
+        </div>
       ) : (
         <button
           type="button"

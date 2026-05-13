@@ -1,7 +1,9 @@
 import { extractSession, unauthorized } from "@/lib/auth-server";
+import { withAudit } from "@/lib/audit/api-wrap";
 import { getScheduler } from "@/lib/reports/scheduler-singleton";
 import { getSessionManager } from "@/lib/reports/session-manager-singleton";
 import { listJobs } from "@/lib/reports/job-store";
+import { rebuildIndexFromSidecars } from "@/lib/reports/run-store";
 
 /**
  * Read-only diagnostics for the reports runtime. Use it to answer "why
@@ -52,3 +54,30 @@ export async function GET(request: Request) {
     now: new Date().toISOString(),
   });
 }
+
+/**
+ * Actions that mutate runtime state. Currently:
+ *   { action: "rebuild-index" } — recomputes /root/reports/.index.json
+ *     from the sidecars on disk. Use after manual disk surgery or when
+ *     the index has been deleted/corrupted.
+ */
+async function postHandler(request: Request) {
+  if (!extractSession(request)) return unauthorized();
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+  }
+  const action = (body as { action?: unknown })?.action;
+  if (action === "rebuild-index") {
+    const result = await rebuildIndexFromSidecars();
+    return Response.json({ ok: true, ...result });
+  }
+  return Response.json({ error: `Unknown action: ${String(action)}` }, { status: 400 });
+}
+
+export const POST = withAudit(
+  { route: "/api/reports/diagnostics", label: "Reports diagnostics action" },
+  postHandler,
+);

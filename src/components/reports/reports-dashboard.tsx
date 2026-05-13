@@ -2,29 +2,45 @@
 
 import { useCallback, useState } from "react";
 import { FiArrowLeft, FiPlus, FiRefreshCw } from "react-icons/fi";
-import { useReportJobs } from "@/lib/use-reports";
+import { useReportJobs, useReportRuns } from "@/lib/use-reports";
 import { useUrlState } from "@/lib/use-url-state";
-import { deleteJob, runJobNow } from "@/lib/reports-api";
+import { deleteJob, runJobNow, setJobEnabled } from "@/lib/reports-api";
 import { JobCard } from "./job-card";
 import { JobEditor } from "./job-editor";
 import { ReportsEmptyState } from "./reports-empty-state";
+import { ReportsList } from "./reports-list";
 
 interface ReportsDashboardProps {
   onOpenSessions?: () => void;
 }
 
+type TabKey = "reports" | "schedules";
+
 /**
- * The Reports dashboard — list of job cards + New Report trigger. Reuses
- * the job-editor drawer for both create and edit.
+ * The Reports landing page. Two tabs:
+ *
+ *   Reports (default)  — runs feed grouped by date (ReportsList)
+ *   Schedules          — JobCard grid for managing cron definitions
+ *
+ * Tab is URL-driven (?tab=schedules) so refreshes / shared links land on
+ * the same view. Reuses the existing JobEditor drawer for both create
+ * and edit, and the same useReport{Runs,Jobs} fast-poll while this view
+ * is mounted.
  */
 export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
   const { params, setParam } = useUrlState();
   // Dashboard is the frontmost UI for the reports feature — poll fast so
-  // the "Running" pill appears ~3s after a user triggers Run Now instead
-  // of the previous 30s wait.
-  const { jobs, loading, refresh } = useReportJobs({ fast: true });
+  // running pills and unread dots feel live.
+  const { jobs, loading: jobsLoading, refresh: refreshJobs } = useReportJobs({ fast: true });
+  const { feed, loading: runsLoading, refresh: refreshRuns } = useReportRuns({ fast: true });
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
   const isNew = params.get("newReport") === "1";
+
+  const tab: TabKey = params.get("tab") === "schedules" ? "schedules" : "reports";
+  const setTab = useCallback(
+    (next: TabKey) => setParam("tab", next === "reports" ? null : next),
+    [setParam],
+  );
 
   const closeEditor = useCallback(() => {
     setEditingSlug(null);
@@ -36,6 +52,11 @@ export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
     setEditingSlug(null);
   }, [setParam]);
 
+  const refreshAll = useCallback(() => {
+    refreshJobs();
+    refreshRuns();
+  }, [refreshJobs, refreshRuns]);
+
   const handleRun = useCallback(
     async (slug: string) => {
       try {
@@ -43,13 +64,13 @@ export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
         // Two-step refresh: immediate so the "Running" pill appears
         // within a tick, plus a follow-up at 1.5s in case the runner
         // hasn't written the sidecar yet on the first tick.
-        refresh();
-        setTimeout(refresh, 1500);
+        refreshAll();
+        setTimeout(refreshAll, 1500);
       } catch (err) {
         alert(`Failed to trigger run: ${(err as Error).message}`);
       }
     },
-    [refresh],
+    [refreshAll],
   );
 
   const handleDelete = useCallback(
@@ -57,13 +78,42 @@ export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
       if (!confirm(`Archive job '${slug}'? Past reports are preserved.`)) return;
       try {
         await deleteJob(slug, true);
-        refresh();
+        refreshAll();
       } catch (err) {
         alert(`Failed to archive: ${(err as Error).message}`);
       }
     },
-    [refresh],
+    [refreshAll],
   );
+
+  const handleTogglePause = useCallback(
+    async (slug: string, nextEnabled: boolean) => {
+      try {
+        await setJobEnabled(slug, nextEnabled);
+        refreshAll();
+      } catch (err) {
+        alert(`Failed to ${nextEnabled ? "resume" : "pause"}: ${(err as Error).message}`);
+      }
+    },
+    [refreshAll],
+  );
+
+  const handleOpenJob = useCallback(
+    (slug: string) => {
+      setParam("job", slug);
+    },
+    [setParam],
+  );
+
+  const handleOpenRun = useCallback(
+    (runId: string) => {
+      setParam("report", runId);
+    },
+    [setParam],
+  );
+
+  const hasJobs = jobs.length > 0;
+  const hasRuns = feed.runs.length > 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-canvas-bg">
@@ -84,12 +134,12 @@ export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
             activeJobs={jobs.filter((j) => j.enabled).length}
             runningJobs={jobs.filter((j) => j.running).length}
           />
-          <TotalsPill jobs={jobs} />
+          <UnreadPill unread={feed.unreadCount} />
         </div>
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={refresh}
+            onClick={refreshAll}
             className="btn-press flex h-9 w-9 items-center justify-center rounded-lg text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
             aria-label="Refresh"
           >
@@ -106,31 +156,47 @@ export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
         </div>
       </header>
 
+      <div className="flex shrink-0 items-center gap-1 border-b border-canvas-border px-4">
+        <TabButton active={tab === "reports"} onClick={() => setTab("reports")}>
+          Reports
+          {feed.unreadCount > 0 && (
+            <span
+              className="ml-1.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-none"
+              style={{ backgroundColor: "var(--accent)", color: "white" }}
+            >
+              {feed.unreadCount > 99 ? "99+" : feed.unreadCount}
+            </span>
+          )}
+        </TabButton>
+        <TabButton active={tab === "schedules"} onClick={() => setTab("schedules")}>
+          Schedules
+          {hasJobs && <span className="ml-1.5 text-[11px] text-canvas-muted">{jobs.length}</span>}
+        </TabButton>
+      </div>
+
       <div className="flex-1 overflow-y-auto px-4 py-4">
-        {loading && jobs.length === 0 && (
-          <div className="space-y-3">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div
-                key={i}
-                className="h-32 rounded-xl bg-canvas-surface-hover/50 animate-pulse"
-                style={{ animationDelay: `${i * 80}ms` }}
-              />
-            ))}
-          </div>
-        )}
-        {!loading && jobs.length === 0 && <ReportsEmptyState onCreate={openNew} />}
-        {jobs.length > 0 && (
-          <div className="mx-auto flex max-w-3xl flex-col gap-3">
-            {jobs.map((job) => (
-              <JobCard
-                key={job.slug}
-                job={job}
-                onEdit={() => setEditingSlug(job.slug)}
-                onRun={() => handleRun(job.slug)}
-                onDelete={() => handleDelete(job.slug)}
-              />
-            ))}
-          </div>
+        {tab === "reports" ? (
+          <ReportsPane
+            runs={feed.runs}
+            loading={runsLoading}
+            hasJobs={hasJobs}
+            jobsLoading={jobsLoading}
+            onSelect={handleOpenRun}
+            onCreate={openNew}
+            onViewSchedules={() => setTab("schedules")}
+          />
+        ) : (
+          <SchedulesPane
+            jobs={jobs}
+            loading={jobsLoading}
+            hasRuns={hasRuns}
+            onEdit={(slug) => setEditingSlug(slug)}
+            onOpen={handleOpenJob}
+            onRun={handleRun}
+            onDelete={handleDelete}
+            onTogglePause={handleTogglePause}
+            onCreate={openNew}
+          />
         )}
       </div>
 
@@ -139,10 +205,166 @@ export function ReportsDashboard({ onOpenSessions }: ReportsDashboardProps) {
           slug={editingSlug}
           onClose={() => {
             closeEditor();
-            refresh();
+            refreshAll();
           }}
         />
       )}
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`btn-press relative -mb-px flex items-center gap-1 px-3 py-2.5 text-[13px] font-medium transition-colors ${
+        active ? "text-canvas-fg" : "text-canvas-muted hover:text-canvas-fg"
+      }`}
+      aria-pressed={active}
+    >
+      {children}
+      {active && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-2 bottom-0 h-0.5 rounded-full"
+          style={{ backgroundColor: "var(--accent)" }}
+        />
+      )}
+    </button>
+  );
+}
+
+function ReportsPane({
+  runs,
+  loading,
+  hasJobs,
+  jobsLoading,
+  onSelect,
+  onCreate,
+  onViewSchedules,
+}: {
+  runs: ReturnType<typeof useReportRuns>["feed"]["runs"];
+  loading: boolean;
+  hasJobs: boolean;
+  jobsLoading: boolean;
+  onSelect: (runId: string) => void;
+  onCreate: () => void;
+  onViewSchedules: () => void;
+}) {
+  // Empty-state precedence:
+  //   1. Loading and nothing yet → skeleton.
+  //   2. No jobs configured at all → "create your first" call to action.
+  //   3. Jobs exist but haven't fired yet → hint pointing at the
+  //      Schedules tab so the user can verify the schedule.
+  //   4. Otherwise → the runs feed (ReportsList handles its own
+  //      grouped layout and empty-list rendering).
+  if (loading && jobsLoading && runs.length === 0) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-1.5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div
+            key={i}
+            className="h-12 rounded-lg bg-canvas-surface-hover/50 animate-pulse"
+            style={{ animationDelay: `${i * 80}ms` }}
+          />
+        ))}
+      </div>
+    );
+  }
+  if (!hasJobs && !jobsLoading) {
+    return <ReportsEmptyState onCreate={onCreate} />;
+  }
+  if (!loading && runs.length === 0) {
+    return (
+      <div className="mx-auto flex max-w-md flex-col items-center justify-center py-16 text-center">
+        <p className="text-[14px] font-medium text-canvas-fg">No reports yet</p>
+        <p className="mt-2 text-[12px] leading-relaxed text-canvas-muted">
+          Your scheduled jobs are configured — generated reports will appear here as soon as the
+          next cron tick fires. Use{" "}
+          <button
+            type="button"
+            onClick={onViewSchedules}
+            className="font-medium text-accent hover:underline"
+          >
+            Schedules
+          </button>{" "}
+          to verify the next-run time, or trigger a run manually from there.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div className="mx-auto max-w-3xl">
+      <ReportsList runs={runs} selectedRunId={null} onSelect={onSelect} loading={loading} />
+    </div>
+  );
+}
+
+function SchedulesPane({
+  jobs,
+  loading,
+  hasRuns,
+  onEdit,
+  onOpen,
+  onRun,
+  onDelete,
+  onTogglePause,
+  onCreate,
+}: {
+  jobs: ReturnType<typeof useReportJobs>["jobs"];
+  loading: boolean;
+  hasRuns: boolean;
+  onEdit: (slug: string) => void;
+  onOpen: (slug: string) => void;
+  onRun: (slug: string) => void;
+  onDelete: (slug: string) => void;
+  onTogglePause: (slug: string, nextEnabled: boolean) => void;
+  onCreate: () => void;
+}) {
+  if (loading && jobs.length === 0) {
+    return (
+      <div className="space-y-3">
+        {Array.from({ length: 3 }).map((_, i) => (
+          <div
+            key={i}
+            className="h-32 rounded-xl bg-canvas-surface-hover/50 animate-pulse"
+            style={{ animationDelay: `${i * 80}ms` }}
+          />
+        ))}
+      </div>
+    );
+  }
+  if (!loading && jobs.length === 0) {
+    return <ReportsEmptyState onCreate={onCreate} />;
+  }
+  return (
+    <div className="mx-auto flex max-w-3xl flex-col gap-3">
+      {!hasRuns && (
+        <p className="rounded-lg border border-dashed border-canvas-border px-4 py-3 text-center text-[11px] text-canvas-muted">
+          No runs have completed yet. Trigger a job manually with the play button below to verify
+          everything is wired up.
+        </p>
+      )}
+      {jobs.map((job) => (
+        <JobCard
+          key={job.slug}
+          job={job}
+          onEdit={() => onEdit(job.slug)}
+          onOpen={() => onOpen(job.slug)}
+          onRun={() => onRun(job.slug)}
+          onDelete={() => onDelete(job.slug)}
+          onTogglePause={() => onTogglePause(job.slug, !job.enabled)}
+        />
+      ))}
     </div>
   );
 }
@@ -163,35 +385,15 @@ function SchedulerPill({ activeJobs, runningJobs }: { activeJobs: number; runnin
   );
 }
 
-function TotalsPill({
-  jobs,
-}: {
-  jobs: Array<{ runCounts?: { total: number; success: number; error: number; running: number } }>;
-}) {
-  // Sum execution counts across all jobs — gives the user a feel for
-  // how hard the system is working without clicking into each card.
-  const totals = jobs.reduce(
-    (acc, j) => {
-      const c = j.runCounts ?? { total: 0, success: 0, error: 0, running: 0 };
-      return {
-        total: acc.total + c.total,
-        success: acc.success + c.success,
-        error: acc.error + c.error,
-        running: acc.running + c.running,
-      };
-    },
-    { total: 0, success: 0, error: 0, running: 0 },
-  );
-  if (totals.total === 0) return null;
-  const completed = totals.total - totals.running;
-  const successRate = completed > 0 ? Math.round((totals.success / completed) * 100) : 0;
+function UnreadPill({ unread }: { unread: number }) {
+  if (unread === 0) return null;
   return (
     <span
-      className="hidden rounded-full bg-canvas-surface-hover px-2 py-0.5 text-[10px] font-medium text-canvas-muted sm:inline-block"
-      title="Aggregate execution counts across all jobs"
+      className="hidden rounded-full px-2 py-0.5 text-[10px] font-medium sm:inline-block"
+      style={{ backgroundColor: "var(--accent)", color: "white" }}
+      title="Unread reports"
     >
-      {totals.total} run{totals.total === 1 ? "" : "s"}
-      {completed > 0 && ` · ${successRate}% success`}
+      {unread > 99 ? "99+" : unread} unread
     </span>
   );
 }

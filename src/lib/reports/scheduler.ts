@@ -308,8 +308,8 @@ export class ReportScheduler {
             ? `Cron job ${job.slug} ran in ${Math.round((Date.now() - startedAt) / 1000)}s.`
             : run.errorMessage?.slice(0, 120) || `Cron job ${job.slug} did not complete.`,
         kind: "cronComplete",
-        url: navUrls.report(job.slug),
-        tagKey: job.slug,
+        url: navUrls.report(run.runId),
+        tagKey: run.runId,
       },
       "cronComplete",
     );

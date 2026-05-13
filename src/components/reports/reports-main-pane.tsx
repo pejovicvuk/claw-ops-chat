@@ -6,6 +6,7 @@ import { useUrlState } from "@/lib/use-url-state";
 import { ReportsDashboard } from "./reports-dashboard";
 import { ReportViewer } from "./report-viewer";
 import { LiveRunViewer } from "./live-run-viewer";
+import { JobDetail } from "./job-detail";
 
 interface ReportsMainPaneProps {
   onOpenSessions?: () => void;
@@ -25,9 +26,17 @@ interface ReportsMainPaneProps {
 export function ReportsMainPane({ onOpenSessions }: ReportsMainPaneProps) {
   const { params } = useUrlState();
   const reportId = params.get("report");
+  const jobSlug = params.get("job");
 
+  // ?report takes precedence — the viewer can be opened from any context
+  // (dashboard, job detail, push notification deep link) and its back
+  // arrow simply clears ?report, which falls through to whichever view
+  // the user came from (dashboard or job detail).
   if (reportId) {
     return <ReportRouter runId={reportId} onOpenSessions={onOpenSessions} />;
+  }
+  if (jobSlug) {
+    return <JobDetail slug={jobSlug} onOpenSessions={onOpenSessions} />;
   }
   return <ReportsDashboard onOpenSessions={onOpenSessions} />;
 }

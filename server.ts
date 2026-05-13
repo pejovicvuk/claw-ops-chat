@@ -2128,15 +2128,42 @@ class SessionManager {
           message: `Claude did not respond for ${secs} seconds. The Anthropic API may be temporarily unreachable — please try again.`,
         });
       } else {
-        const rawMessage0 = err instanceof Error ? err.message : "Unknown error";
+        const rawMessage = err instanceof Error ? err.message : "Unknown error";
+        const errnoErr = err as NodeJS.ErrnoException;
+        const lowered = rawMessage.toLowerCase();
+
+        // Detect Anthropic / Claude-Code auth failures specifically. The
+        // SDK surfaces these as a plain Error whose message contains the
+        // JSON body from api.anthropic.com — something like:
+        //   API Error: 401 {"type":"error","error":{
+        //       "type":"authentication_error",
+        //       "message":"Invalid authentication credentials"}}
+        // When we see that shape, emit a dedicated auth-required event so
+        // the UI can pop the "sign in to Claude" flow instead of showing
+        // the raw 401 blob as a generic error bubble.
+        //
+        // Computed BEFORE the resume-retry branch below so that expired
+        // credentials never trigger an infinite "open new chat and retry"
+        // loop — the SDK wraps 401 responses in a "query returned an
+        // error result" envelope that would otherwise match the regex.
+        const authError =
+          lowered.includes("authentication_error") ||
+          lowered.includes("invalid authentication credentials") ||
+          lowered.includes("failed to authenticate") ||
+          /\b401\b/.test(rawMessage) ||
+          lowered.includes("unauthorized");
+
         // Resume-not-found surfaces here when the SDK throws DURING the
         // for-await loop (rather than yielding a result message with
         // is_error=true). Recover by wiping claudeSessionId and rerunning
         // handleUserMessage — the user sees one spinner cycle, not a
-        // cryptic "No conversation found" error bubble.
+        // cryptic "No conversation found" error bubble. Skip for auth
+        // failures: retrying with a fresh conversation just re-hits the
+        // same 401 and spawns ghost chats until retryCount > 2.
         if (
-          rawMessage0.toLowerCase().includes("no conversation found") ||
-          /returned an error result/i.test(rawMessage0)
+          !authError &&
+          (lowered.includes("no conversation found") ||
+            /returned an error result/i.test(rawMessage))
         ) {
           // Same fix as the result path above: update the old sdk-uuid's
           // status file to "idle" BEFORE wiping claudeSessionId, so the
@@ -2155,8 +2182,6 @@ class SessionManager {
         }
 
         session.accumulatedText = "";
-        const rawMessage = rawMessage0;
-        const errnoErr = err as NodeJS.ErrnoException;
         // Dump the full error to the container log so operators have
         // errno/code/syscall/path/stack. This app runs in a single-user
         // trusted context — hiding paths behind 'Internal server error'
@@ -2173,29 +2198,12 @@ class SessionManager {
         // Treat ENOENT / EACCES / executable-not-found as "setup required"
         // so the UI can nudge the user towards reinstalling instead of
         // showing a generic error.
-        const lowered = rawMessage.toLowerCase();
         const setupRequired =
           errnoErr.code === "ENOENT" ||
           errnoErr.code === "EACCES" ||
           lowered.includes("executable not found") ||
           lowered.includes("native binary not found") ||
           lowered.includes("no such file");
-
-        // Detect Anthropic / Claude-Code auth failures specifically. The
-        // SDK surfaces these as a plain Error whose message contains the
-        // JSON body from api.anthropic.com — something like:
-        //   API Error: 401 {"type":"error","error":{
-        //       "type":"authentication_error",
-        //       "message":"Invalid authentication credentials"}}
-        // When we see that shape, emit a dedicated auth-required event so
-        // the UI can pop the "sign in to Claude" flow instead of showing
-        // the raw 401 blob as a generic error bubble.
-        const authError =
-          lowered.includes("authentication_error") ||
-          lowered.includes("invalid authentication credentials") ||
-          lowered.includes("failed to authenticate") ||
-          /\b401\b/.test(rawMessage) ||
-          lowered.includes("unauthorized");
 
         // Distinguish a subscription/billing problem from a plain token expiry
         // so the UI can show a "check your plan" message instead of "sign in again".

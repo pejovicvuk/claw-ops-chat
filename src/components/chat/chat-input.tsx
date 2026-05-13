@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useIsMobile } from "@/lib/use-is-mobile";
 import { useMentions } from "@/lib/use-mentions";
+import { useDictation } from "@/lib/use-dictation";
 import type { ClaudeStatus } from "@/lib/types";
 import type { ContextUsage } from "@/lib/use-claude-chat";
 import { preloadMarkdown } from "./message-bubble";
@@ -74,6 +75,11 @@ export function ChatInput({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const popoverRef = useRef<MentionPopoverHandle>(null);
+  // Snapshot of the composer text at the moment dictation starts, so the
+  // live transcript is appended to whatever the user already typed.
+  const baseTextRef = useRef("");
+
+  const dictation = useDictation();
 
   const mention = useMentions(text, caret);
   const popoverOpen =
@@ -139,6 +145,29 @@ export function ChatInput({
     }
   }, [canSend, text, attachments, onSend, onClearAttachments]);
 
+  // Snapshot the current composer content, then start dictation. The
+  // baseTextRef snapshot lets the transcript-apply effect append the
+  // recognized speech without clobbering anything the user typed first.
+  const handleStartDictation = useCallback(() => {
+    baseTextRef.current = text;
+    dictation.start();
+  }, [text, dictation]);
+
+  // While recording, rebuild composer text on every transcript update:
+  // baseText + (space if needed) + live transliterated transcript.
+  useEffect(() => {
+    if (dictation.state !== "recording") return;
+    const base = baseTextRef.current;
+    const sep = base.length > 0 && !base.endsWith(" ") ? " " : "";
+    setText(base + sep + dictation.transcript);
+    queueMicrotask(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, COMPOSER_MAX_HEIGHT)}px`;
+    });
+  }, [dictation.transcript, dictation.state]);
+
   /** Replace the active `@…` range with a completed token. */
   const handleAcceptMention = useCallback(
     (token: string, isDirectory: boolean) => {
@@ -167,6 +196,13 @@ export function ChatInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Typing takes priority over dictation: any non-modifier key stops
+      // the recognizer so the user can edit/extend the text by hand.
+      if (dictation.state !== "idle") {
+        const isModifier =
+          e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta";
+        if (!isModifier) dictation.stop();
+      }
       if (popoverOpen && popoverRef.current?.handleKeyDown(e)) {
         e.preventDefault();
         return;
@@ -176,7 +212,7 @@ export function ChatInput({
         handleSend();
       }
     },
-    [handleSend, popoverOpen],
+    [handleSend, popoverOpen, dictation],
   );
 
   const syncCaret = useCallback(() => {
@@ -271,6 +307,12 @@ export function ChatInput({
               onSend={handleSend}
               onStop={onStop}
               isMobile={isMobile}
+              dictationSupported={dictation.supported}
+              dictationState={dictation.state}
+              dictationError={dictation.error}
+              composerEmpty={text.trim().length === 0 && attachments.length === 0}
+              onStartDictation={handleStartDictation}
+              onStopDictation={dictation.stop}
             />
           </div>
         </div>

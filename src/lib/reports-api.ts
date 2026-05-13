@@ -17,6 +17,7 @@ export interface JobRunCounts {
   error: number;
   running: number;
   lastRunAt: number | null;
+  lastRunStatus: ReportRun["status"] | null;
 }
 
 export interface JobWithMeta extends ReportJob {
@@ -157,4 +158,33 @@ export async function validateJobMarkdown(markdown: string) {
     errors?: Array<{ field: string; message: string }>;
     job?: ReportJob;
   }>("/validate", { method: "POST", body: JSON.stringify({ markdown }) });
+}
+
+/**
+ * Toggle a job's `enabled` flag without re-serialising the full markdown.
+ * Calls the lightweight POST /jobs/<slug>/enable endpoint.
+ */
+export async function setJobEnabled(
+  slug: string,
+  enabled: boolean,
+): Promise<{ ok: boolean; enabled: boolean }> {
+  return request(`/jobs/${encodeURIComponent(slug)}/enable`, {
+    method: "POST",
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+/**
+ * Rebuild /root/reports/.index.json from the sidecar files on disk.
+ * Returns counts of entries added (new) and pruned (orphaned).
+ */
+export async function rebuildReportsIndex(): Promise<{
+  ok: boolean;
+  added: number;
+  pruned: number;
+}> {
+  return request("/diagnostics", {
+    method: "POST",
+    body: JSON.stringify({ action: "rebuild-index" }),
+  });
 }

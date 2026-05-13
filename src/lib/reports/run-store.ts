@@ -100,6 +100,8 @@ export interface RunCountStats {
   running: number;
   /** ms epoch of the most-recent run's startedAt, or null if no runs. */
   lastRunAt: number | null;
+  /** Status of the most-recent run (by startedAt), or null if no runs. */
+  lastRunStatus: RunStatus | null;
 }
 
 /**
@@ -117,6 +119,7 @@ export async function countRunsForJob(slug: string): Promise<RunCountStats> {
     error: 0,
     running: 0,
     lastRunAt: null,
+    lastRunStatus: null,
   };
   if (!existsSync(dir)) return stats;
   const entries = await readdir(dir).catch(() => [] as string[]);
@@ -131,6 +134,7 @@ export async function countRunsForJob(slug: string): Promise<RunCountStats> {
       else stats.error += 1;
       if (!stats.lastRunAt || run.startedAt > stats.lastRunAt) {
         stats.lastRunAt = run.startedAt;
+        stats.lastRunStatus = run.status;
       }
     } catch {
       /* skip corrupt */
@@ -245,6 +249,66 @@ export async function reconcileCrashedRuns(staleMs = 30 * 60 * 1000): Promise<nu
     }
   }
   return repaired;
+}
+
+/**
+ * Recompute the read/unread index from the sidecar files on disk.
+ *
+ * Use this when the index is corrupt, has been deleted, or has drifted
+ * from the underlying sidecars (e.g. the 1000-entry cap silently dropped
+ * older runs that the user still wants to see). Walks every sidecar in
+ * RUNS_DIR/<slug>/<runId>.json, sorts newest-first, caps at
+ * MAX_INDEX_ENTRIES, and preserves the `readAt` of any prior index entry
+ * whose sidecar still exists.
+ *
+ * Returns counts so callers can show a "rebuilt N entries" toast.
+ */
+export async function rebuildIndexFromSidecars(): Promise<{ added: number; pruned: number }> {
+  await ensureReportsTree();
+
+  const prior = await readIndex();
+  const priorReadAt = new Map<string, number | null>();
+  for (const entry of prior.runs) {
+    priorReadAt.set(entry.runId, entry.readAt);
+  }
+
+  const slugs = await readdir(RUNS_DIR).catch(() => [] as string[]);
+  const entries: ReportsIndexEntry[] = [];
+  for (const slug of slugs) {
+    if (!SLUG_RE.test(slug)) continue;
+    const runs = await listRunsForJob(slug).catch(() => [] as ReportRun[]);
+    for (const run of runs) {
+      entries.push({
+        runId: run.runId,
+        jobId: run.jobId,
+        // jobName isn't on the sidecar — use the slug as a sensible
+        // fallback. Live writes via upsertIndexEntry will overwrite this
+        // with the real name on the next run.
+        jobName: run.jobId,
+        createdAt: run.startedAt,
+        reportPath: run.reportPath,
+        status: run.status,
+        readAt: priorReadAt.has(run.runId) ? (priorReadAt.get(run.runId) ?? null) : null,
+      });
+    }
+  }
+  entries.sort((a, b) => b.createdAt - a.createdAt);
+  const capped = entries.slice(0, MAX_INDEX_ENTRIES);
+
+  const next: ReportsIndex = { version: 1, runs: capped };
+  await atomicWrite(INDEX_PATH, JSON.stringify(next, null, 2));
+
+  // "pruned" = entries that were in the old index but no longer have a
+  // sidecar on disk. "added" = entries written to the new index that
+  // weren't in the old one.
+  const newIds = new Set(capped.map((e) => e.runId));
+  const oldIds = new Set(prior.runs.map((e) => e.runId));
+  let added = 0;
+  for (const id of newIds) if (!oldIds.has(id)) added += 1;
+  let pruned = 0;
+  for (const id of oldIds) if (!newIds.has(id)) pruned += 1;
+
+  return { added, pruned };
 }
 
 export const __INTERNAL = { MAX_INDEX_ENTRIES, SLUG_RE, RUN_ID_RE };

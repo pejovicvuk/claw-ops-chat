@@ -6,33 +6,46 @@ import MarkdownRenderer from "@/components/chat/markdown-renderer";
 import {
   deleteRun,
   fetchReportContent,
+  fetchRunLog,
   markRead,
   runJobNow,
   type ReportContentResponse,
+  type RunLogResponse,
 } from "@/lib/reports-api";
 import { useUrlState } from "@/lib/use-url-state";
+import { RunTimeline } from "./run-timeline";
 
 interface ReportViewerProps {
   runId: string;
   onOpenSessions?: () => void;
 }
 
+type ViewerTab = "report" | "log";
+
 /**
  * Renders a generated report's markdown inside the main pane. Marks the
  * run as read after 800ms so a fat-fingered back-tap doesn't silently
  * clear the unread dot.
+ *
+ * Adds a "Report" / "Activity log" toggle that swaps the markdown body
+ * for the structured event timeline (same one LiveRunViewer uses while
+ * the run is in progress). The activity log is lazy-fetched — it only
+ * hits the network when the user opens that tab.
  */
 export function ReportViewer({ runId, onOpenSessions }: ReportViewerProps) {
-  const { setParam } = useUrlState();
+  const { params, setParam } = useUrlState();
   const [state, setState] = useState<{
     loading: boolean;
     data: ReportContentResponse | null;
     error: string | null;
   }>({ loading: true, data: null, error: null });
 
-  // Load the report when runId changes. Kept as an effect that spawns an
-  // async task rather than calling the loader synchronously inside the
-  // effect body so the lint rule "set-state-in-effect" stays happy.
+  const tab: ViewerTab = params.get("v") === "log" ? "log" : "report";
+  const setTab = useCallback(
+    (next: ViewerTab) => setParam("v", next === "report" ? null : next),
+    [setParam],
+  );
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -64,7 +77,11 @@ export function ReportViewer({ runId, onOpenSessions }: ReportViewerProps) {
   }, [runId]);
 
   const handleBack = useCallback(() => {
+    // Clear both `report` and the viewer-tab — keeps `job` intact so
+    // back-from-viewer returns to the JobDetail page if that's where
+    // the user came from.
     setParam("report", null);
+    setParam("v", null);
   }, [setParam]);
 
   const handleDelete = useCallback(async () => {
@@ -72,6 +89,7 @@ export function ReportViewer({ runId, onOpenSessions }: ReportViewerProps) {
     try {
       await deleteRun(runId);
       setParam("report", null);
+      setParam("v", null);
     } catch (err) {
       alert(`Failed to delete: ${(err as Error).message}`);
     }
@@ -82,7 +100,7 @@ export function ReportViewer({ runId, onOpenSessions }: ReportViewerProps) {
     if (!jobId) return;
     try {
       await runJobNow(jobId);
-      alert("Re-run triggered — check the sidebar for progress.");
+      alert("Re-run triggered — check the Reports tab for progress.");
     } catch (err) {
       alert(`Failed to re-run: ${(err as Error).message}`);
     }
@@ -140,46 +158,157 @@ export function ReportViewer({ runId, onOpenSessions }: ReportViewerProps) {
         </div>
       </header>
 
+      <div className="flex shrink-0 items-center gap-1 border-b border-canvas-border px-4">
+        <TabButton active={tab === "report"} onClick={() => setTab("report")}>
+          Report
+        </TabButton>
+        <TabButton active={tab === "log"} onClick={() => setTab("log")}>
+          Activity log
+        </TabButton>
+      </div>
+
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl px-4 py-6">
-          {state.loading && (
-            <div className="space-y-2">
-              <div className="h-6 w-2/3 animate-pulse rounded bg-canvas-surface-hover" />
-              <div className="h-4 w-full animate-pulse rounded bg-canvas-surface-hover" />
-              <div className="h-4 w-5/6 animate-pulse rounded bg-canvas-surface-hover" />
-              <div className="h-4 w-3/4 animate-pulse rounded bg-canvas-surface-hover" />
-            </div>
-          )}
-          {state.error && (
-            <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-[13px] text-red-900">
-              Failed to load report: {state.error}
-            </div>
-          )}
-          {!state.loading && state.data && !state.data.content && (
-            <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-[13px] text-yellow-900">
-              No report file was produced by this run.
-              {state.data.run?.errorMessage && (
-                <p className="mt-2 font-mono text-[12px]">{state.data.run.errorMessage}</p>
-              )}
-            </div>
-          )}
-          {state.data?.truncated && (
-            <div className="mb-4 rounded-lg border border-canvas-border bg-canvas-surface-hover p-3 text-[11px] text-canvas-muted">
-              Showing first 1 MB of a {(state.data.sizeBytes / 1024 / 1024).toFixed(1)} MB report.{" "}
-              <button
-                type="button"
-                onClick={handleDownload}
-                className="font-semibold text-accent hover:underline"
-              >
-                Download full file
-              </button>
-              .
-            </div>
-          )}
-          {state.data?.content && <MarkdownRenderer text={state.data.content} variant="document" />}
-        </div>
+        {tab === "report" ? (
+          <ReportTab state={state} onDownload={handleDownload} />
+        ) : (
+          <LogTab runId={runId} />
+        )}
       </div>
     </div>
+  );
+}
+
+function ReportTab({
+  state,
+  onDownload,
+}: {
+  state: { loading: boolean; data: ReportContentResponse | null; error: string | null };
+  onDownload: () => void;
+}) {
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-6">
+      {state.loading && (
+        <div className="space-y-2">
+          <div className="h-6 w-2/3 animate-pulse rounded bg-canvas-surface-hover" />
+          <div className="h-4 w-full animate-pulse rounded bg-canvas-surface-hover" />
+          <div className="h-4 w-5/6 animate-pulse rounded bg-canvas-surface-hover" />
+          <div className="h-4 w-3/4 animate-pulse rounded bg-canvas-surface-hover" />
+        </div>
+      )}
+      {state.error && (
+        <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-[13px] text-red-900">
+          Failed to load report: {state.error}
+        </div>
+      )}
+      {!state.loading && state.data && !state.data.content && (
+        <div className="rounded-lg border border-yellow-300 bg-yellow-50 p-4 text-[13px] text-yellow-900">
+          No report file was produced by this run.
+          {state.data.run?.errorMessage && (
+            <p className="mt-2 font-mono text-[12px]">{state.data.run.errorMessage}</p>
+          )}
+        </div>
+      )}
+      {state.data?.truncated && (
+        <div className="mb-4 rounded-lg border border-canvas-border bg-canvas-surface-hover p-3 text-[11px] text-canvas-muted">
+          Showing first 1 MB of a {(state.data.sizeBytes / 1024 / 1024).toFixed(1)} MB report.{" "}
+          <button
+            type="button"
+            onClick={onDownload}
+            className="font-semibold text-accent hover:underline"
+          >
+            Download full file
+          </button>
+          .
+        </div>
+      )}
+      {state.data?.content && <MarkdownRenderer text={state.data.content} variant="document" />}
+    </div>
+  );
+}
+
+function LogTab({ runId }: { runId: string }) {
+  const [log, setLog] = useState<{
+    loading: boolean;
+    data: RunLogResponse | null;
+    error: string | null;
+  }>({ loading: true, data: null, error: null });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchRunLog(runId);
+        if (!cancelled) setLog({ loading: false, data, error: null });
+      } catch (err) {
+        if (!cancelled) {
+          setLog({
+            loading: false,
+            data: null,
+            error: err instanceof Error ? err.message : "Failed to load activity log",
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [runId]);
+
+  return (
+    <div className="mx-auto max-w-3xl px-4 py-4">
+      {log.loading && (
+        <div className="space-y-1.5">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div
+              key={i}
+              className="h-10 rounded-lg bg-canvas-surface-hover/50 animate-pulse"
+              style={{ animationDelay: `${i * 60}ms` }}
+            />
+          ))}
+        </div>
+      )}
+      {log.error && (
+        <div className="rounded-lg border border-red-300 bg-red-50 p-3 text-[12px] text-red-900">
+          {log.error}
+        </div>
+      )}
+      {!log.loading && log.data && log.data.events.length === 0 && (
+        <p className="py-8 text-center text-[12px] text-canvas-muted">
+          No structured events were captured for this run.
+        </p>
+      )}
+      {log.data && log.data.events.length > 0 && <RunTimeline events={log.data.events} />}
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`btn-press relative -mb-px px-3 py-2 text-[12px] font-medium transition-colors ${
+        active ? "text-canvas-fg" : "text-canvas-muted hover:text-canvas-fg"
+      }`}
+      aria-pressed={active}
+    >
+      {children}
+      {active && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-x-2 bottom-0 h-0.5 rounded-full"
+          style={{ backgroundColor: "var(--accent)" }}
+        />
+      )}
+    </button>
   );
 }
 

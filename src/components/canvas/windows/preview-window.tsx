@@ -1,27 +1,19 @@
 "use client";
 
-import { useContext, useEffect, useRef, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import {
   FiAlertTriangle,
-  FiArrowLeft,
-  FiArrowRight,
   FiChevronDown,
   FiChevronUp,
   FiExternalLink,
   FiLoader,
   FiPlay,
-  FiRefreshCw,
   FiSquare,
-  FiVolume2,
-  FiVolumeX,
-  FiX,
 } from "react-icons/fi";
 import type { WindowDescriptor } from "../canvas-types";
 import { ItemContext } from "../item-context";
 import { useDevServer } from "@/lib/dev-server/use-dev-server";
 import { frameworkLabel } from "@/lib/dev-server/framework-label";
-import { usePreviewStream } from "@/lib/preview-stream/use-preview-stream";
-import { ZOOM_DEFAULT, clampZoom, formatZoomPercent } from "@/lib/preview-stream/zoom-steps";
 
 interface PreviewWindowProps {
   descriptor: WindowDescriptor;
@@ -29,55 +21,46 @@ interface PreviewWindowProps {
   onPortChange: (port: number) => void;
   /** Persist a new path back into the canvas store. */
   onPathChange: (path: string) => void;
-  /** Persist a new streaming-quality preset back into the canvas store. */
+  /**
+   * Phase 2: removed. Kept on the interface so `window-host.tsx` keeps
+   * compiling unchanged. Streaming-quality state is no longer surfaced
+   * in the UI; the field stays in `descriptor.state` but is ignored.
+   */
   onQualityChange: (quality: "performance" | "balanced" | "quality") => void;
-  /** Phase 3a (#126): persist the user's mute preference. */
+  /** Phase 2: removed. See `onQualityChange`. */
   onMutedChange: (muted: boolean) => void;
-  /** Phase 5b (#132): persist the user's zoom factor (1.0 = 100%). */
+  /** Phase 2: removed. See `onQualityChange`. */
   onZoomChange: (zoom: number) => void;
 }
 
 /**
- * Live preview of a localhost dev server, rendered server-side by a
- * headless Chromium tab and streamed to the user's browser as JPEG
- * frames over WebSocket.
+ * Launcher for a localhost dev server, paired with the path-based
+ * reverse proxy at `${BASE_PATH}/preview/<port>/`. The user clicks
+ * Start to spawn `npm run dev`, then clicks "Open in browser" to view
+ * the running app in a new tab via the proxy.
  *
- * Three subsystems:
+ * Two subsystems:
  *   1. Dev-server lifecycle (Start / Stop) — `useDevServer` hook
- *   2. Chromium screencast — `usePreviewStream` hook drives the canvas
- *   3. Item-scoped cwd — `ItemContext` tells us which folder to spawn in
+ *   2. Item-scoped cwd — `ItemContext` tells us which folder to spawn in
  *
- * The PR #108 reverse-proxy iframe path is preserved for the "open in
- * new tab" link, so the user can pop the preview into a real browser
- * tab if they need browser-native features (downloads, devtools).
+ * Phase 1 removed the in-app Chromium streaming preview; the proxy URL
+ * is the only viewing surface. The streaming code under
+ * `src/lib/preview-stream/` is dead and slated for Phase 2 deletion.
  */
 
 const PORT_MIN = 1024;
 const PORT_MAX = 65535;
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "/chat";
 
-export function PreviewWindow({
-  descriptor,
-  onPortChange,
-  onPathChange,
-  onQualityChange,
-  onMutedChange,
-  onZoomChange,
-}: PreviewWindowProps) {
+export function PreviewWindow({ descriptor, onPortChange, onPathChange }: PreviewWindowProps) {
   if (descriptor.state.kind !== "preview") return null;
-  const { port, path, quality, muted, zoom } = descriptor.state;
+  const { port, path } = descriptor.state;
   return (
     <PreviewWindowBody
       port={port}
       path={path ?? "/"}
-      quality={quality ?? "balanced"}
-      muted={muted ?? true}
-      zoom={clampZoom(zoom ?? ZOOM_DEFAULT)}
       onPortChange={onPortChange}
       onPathChange={onPathChange}
-      onQualityChange={onQualityChange}
-      onMutedChange={onMutedChange}
-      onZoomChange={onZoomChange}
     />
   );
 }
@@ -85,25 +68,13 @@ export function PreviewWindow({
 function PreviewWindowBody({
   port,
   path,
-  quality,
-  muted,
-  zoom,
   onPortChange,
   onPathChange,
-  onQualityChange,
-  onMutedChange,
-  onZoomChange,
 }: {
   port: number;
   path: string;
-  quality: "performance" | "balanced" | "quality";
-  muted: boolean;
-  zoom: number;
   onPortChange: (port: number) => void;
   onPathChange: (path: string) => void;
-  onQualityChange: (quality: "performance" | "balanced" | "quality") => void;
-  onMutedChange: (muted: boolean) => void;
-  onZoomChange: (zoom: number) => void;
 }) {
   const item = useContext(ItemContext);
   const projectSlug = item?.projectSlug ?? "";
@@ -115,69 +86,22 @@ function PreviewWindowBody({
     port,
   });
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const isRunning = status === "running";
-  const stream = usePreviewStream({
-    projectSlug,
-    itemSlug,
-    port,
-    canvasRef,
-    videoRef,
-    enabled: isRunning,
-    quality,
-    muted,
-    zoom,
-    onZoomChange,
-  });
 
   const [draftPort, setDraftPort] = useState(String(port));
   const [portError, setPortError] = useState<string | null>(null);
   const [draftPath, setDraftPath] = useState(path);
-  /**
-   * While the path input is focused we don't sync from the page's
-   * actual URL — otherwise mid-typing the input value gets clobbered
-   * by an incoming `url_changed`. On blur the live URL takes over again.
-   */
-  const pathFocusedRef = useRef(false);
   const [logsOpen, setLogsOpen] = useState(false);
 
   // Sync drafts when the descriptor changes externally (e.g. canvas
-  // hydration). Don't fight the user's keystrokes.
+  // hydration). Phase 1: no in-page navigation reconciliation, so
+  // path can't change mid-typing — sync unconditionally.
   useEffect(() => {
     setDraftPort(String(port));
   }, [port]);
   useEffect(() => {
-    if (!pathFocusedRef.current) setDraftPath(path);
+    setDraftPath(path);
   }, [path]);
-
-  // Reconcile descriptor.path ↔ Chromium's actual URL. Two cases:
-  //   • Just-connected: page is at `/` (acquirePage's default) but
-  //     descriptor remembers `/about` → tell Chromium to navigate.
-  //   • Already running: user clicked a link → page URL changed →
-  //     update the persisted path to match.
-  // `reconciledRef` separates the two so the initial server-side
-  // `/` doesn't clobber the persisted `/about`.
-  const reconciledRef = useRef(false);
-  useEffect(() => {
-    if (stream.status !== "ready") {
-      reconciledRef.current = false;
-      return;
-    }
-    if (!stream.currentPath) return;
-    if (!reconciledRef.current) {
-      // First url_changed after ready — navigate to persisted path if needed.
-      if (path !== "/" && stream.currentPath !== path) {
-        stream.navigate(path);
-      }
-      reconciledRef.current = true;
-      return;
-    }
-    // Subsequent updates: in-page navigation; persist the new URL.
-    if (stream.currentPath !== path) {
-      onPathChange(stream.currentPath);
-    }
-  }, [stream.status, stream.currentPath, path, onPathChange, stream]);
 
   const commitPort = () => {
     const trimmed = draftPort.trim();
@@ -196,10 +120,19 @@ function PreviewWindowBody({
     if (!p.startsWith("/")) p = "/" + p;
     if (p !== draftPath) setDraftPath(p);
     if (p !== path) onPathChange(p);
-    if (isRunning) stream.navigate(p);
   };
 
-  const previewUrl = `${BASE_PATH}/preview/${port}/`;
+  // URL derived from draftPath (not committed `path`) so the user can
+  // type and click Open without first blurring the input. The input's
+  // onBlur=commitPath still fires on the click and persists the path.
+  const normalizedPath = (() => {
+    let p = draftPath.trim();
+    if (!p) return "/";
+    if (!p.startsWith("/")) p = "/" + p;
+    return p;
+  })();
+  const openUrl = `${BASE_PATH}/preview/${port}${normalizedPath}`;
+
   const startDisabled =
     !item || status === "starting" || status === "running" || status === "stopping";
   const stopDisabled = !runningServer || status === "stopping";
@@ -281,34 +214,7 @@ function PreviewWindowBody({
           </span>
         )}
 
-        {/* Phase 5a (#131): back/forward navigation. Disabled when the
-            previewed page has no history in that direction (driven by
-            CDP `Page.getNavigationHistory` on every framenavigated). */}
-        <button
-          type="button"
-          onClick={() => stream.goBack()}
-          disabled={!isRunning || stream.status !== "ready" || !stream.canGoBack}
-          title="Go back"
-          aria-label="Go back"
-          className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
-        >
-          <FiArrowLeft size={12} />
-        </button>
-        <button
-          type="button"
-          onClick={() => stream.goForward()}
-          disabled={!isRunning || stream.status !== "ready" || !stream.canGoForward}
-          title="Go forward"
-          aria-label="Go forward"
-          className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
-        >
-          <FiArrowRight size={12} />
-        </button>
-
-        {/* Path input — type a route (e.g. /about, /users/42) and press
-            Enter or blur to navigate. Auto-syncs from the page's actual
-            URL when not focused, so clicking a Link in the previewed
-            app updates this. */}
+        {/* Path input — appended to the proxy URL when the user clicks Open. */}
         <span className="text-[11px] font-medium text-canvas-muted">/</span>
         <input
           id={`preview-path-${port}`}
@@ -316,13 +222,7 @@ function PreviewWindowBody({
           value={draftPath === "/" ? "" : draftPath.replace(/^\//, "")}
           placeholder="path/to/page"
           onChange={(e) => setDraftPath("/" + e.target.value.replace(/^\//, ""))}
-          onFocus={() => {
-            pathFocusedRef.current = true;
-          }}
-          onBlur={() => {
-            pathFocusedRef.current = false;
-            commitPath();
-          }}
+          onBlur={commitPath}
           onKeyDown={(e) => {
             if (e.key === "Enter") {
               e.preventDefault();
@@ -334,136 +234,26 @@ function PreviewWindowBody({
           aria-label="Page path"
         />
 
-        <div className="w-2" />
-
-        {/* Quality preset — trades bandwidth for fidelity. Changing
-            this re-opens the WS so the new preset takes effect on the
-            next frame. */}
-        <select
-          value={quality}
-          onChange={(e) =>
-            onQualityChange(e.target.value as "performance" | "balanced" | "quality")
-          }
-          aria-label="Streaming quality"
-          title="Streaming quality (trades bandwidth for fidelity)"
-          className="h-6 rounded border border-canvas-border bg-canvas-bg px-1 text-[11px] font-medium text-canvas-fg focus:border-accent focus:outline-none"
-        >
-          <option value="performance">Low</option>
-          <option value="balanced">Med</option>
-          <option value="quality">High</option>
-        </select>
-
-        {/* Phase 5b (#132): zoom indicator — clickable to reset to 100%.
-            Hidden at the default zoom to keep the toolbar quiet; only
-            appears once the user has zoomed in or out. */}
-        {zoom !== ZOOM_DEFAULT && (
-          <button
-            type="button"
-            onClick={() => onZoomChange(ZOOM_DEFAULT)}
-            disabled={!isRunning || stream.status !== "ready"}
-            title={`Zoom: ${formatZoomPercent(zoom)} — click to reset (Ctrl+0)`}
-            aria-label={`Zoom ${formatZoomPercent(zoom)}, click to reset`}
-            className="btn-press flex h-6 items-center rounded border border-canvas-border bg-canvas-bg px-1.5 font-mono text-[11px] text-canvas-fg hover:bg-canvas-surface-hover disabled:opacity-40"
-          >
-            {formatZoomPercent(zoom)}
-          </button>
-        )}
-
-        {/* Mute toggle — only shown when the active stream actually
-            carries audio (Phase 3a). Defaults to muted because the
-            browser blocks autoplay-with-sound until the user clicks. */}
-        {stream.audioAvailable && (
-          <button
-            type="button"
-            onClick={() => onMutedChange(!muted)}
-            disabled={!isRunning || stream.status !== "ready"}
-            title={muted ? "Unmute preview" : "Mute preview"}
-            aria-label={muted ? "Unmute preview" : "Mute preview"}
-            aria-pressed={!muted}
-            className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
-          >
-            {muted ? <FiVolumeX size={12} /> : <FiVolume2 size={12} />}
-          </button>
-        )}
-
-        {/* Reload (only meaningful while connected) */}
-        <button
-          type="button"
-          onClick={() => stream.reload()}
-          disabled={!isRunning || stream.status !== "ready"}
-          title="Reload preview"
-          aria-label="Reload preview"
-          className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
-        >
-          <FiRefreshCw size={12} />
-        </button>
-
-        {/* Open in real browser tab via the iframe proxy (PR #108). */}
+        {/* Open in browser — primary action. Disabled until the dev
+            server is running; click forwards to the path-based proxy
+            in a new tab. */}
         <a
-          href={previewUrl}
+          href={openUrl}
           target="_blank"
           rel="noreferrer"
-          title="Open in new tab"
-          aria-label="Open in new tab"
-          className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
+          aria-disabled={!isRunning || undefined}
+          onClick={(e) => {
+            if (!isRunning) e.preventDefault();
+          }}
+          title={isRunning ? "Open the dev server in a new tab" : "Start the dev server first"}
+          className="btn-press flex h-6 items-center gap-1 rounded bg-accent px-2 text-[11px] font-semibold text-white aria-disabled:pointer-events-none aria-disabled:opacity-40"
         >
-          <FiExternalLink size={12} />
+          <FiExternalLink size={11} />
+          Open in browser
         </a>
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        {/* Phase 4 (#130): WebRTC remote stream uses the same <video>
-            element as the H.264 / MSE path — only the upstream pipe
-            differs. JPEG fallback still renders to <canvas>.
-            `stream.mode` is driven by capability detection + sticky
-            runtime fallback. */}
-        {stream.mode === "video-rtc" || stream.mode === "video" ? (
-          <video
-            ref={videoRef}
-            className="h-full w-full cursor-default bg-white outline-none touch-none select-none"
-            autoPlay
-            muted
-            playsInline
-            tabIndex={0}
-            aria-label={`Live preview on port ${port}`}
-          />
-        ) : (
-          <canvas
-            ref={canvasRef}
-            className="h-full w-full cursor-default bg-white outline-none touch-none select-none"
-            tabIndex={0}
-            aria-label={`Live preview on port ${port}`}
-          />
-        )}
-        {/* Phase 3c (#128): blue overlay shown while a file is dragged
-            over the preview. pointer-events-none lets the underlying
-            <video>/<canvas> still receive the drag events; the hook
-            owns the actual drop handling. */}
-        {stream.dragOver && (
-          <div
-            className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center bg-blue-500/15 ring-2 ring-inset ring-dashed ring-blue-400"
-            aria-hidden="true"
-          >
-            <p className="rounded-md bg-blue-500/90 px-3 py-1.5 text-[12px] font-semibold text-white shadow-lg">
-              Drop file to upload
-            </p>
-          </div>
-        )}
-        {/* Phase 5c (#133): floating find-in-page bar. Top-right
-            position matches the standard Chrome chrome. Stays above
-            drag overlays + start gates via z-20. Pointer events are
-            on (this is interactive UI, not a HUD). */}
-        {stream.findState.open && (
-          <FindBar
-            query={stream.findState.query}
-            count={stream.findState.count}
-            currentIndex={stream.findState.currentIndex}
-            onQuery={stream.findQuery}
-            onNext={stream.findNext}
-            onPrev={stream.findPrev}
-            onClose={stream.findClose}
-          />
-        )}
         {!isRunning && (
           <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas-bg/95 px-6 text-center">
             {status === "starting" ? (
@@ -502,19 +292,28 @@ function PreviewWindowBody({
             )}
           </div>
         )}
-        {isRunning && stream.status !== "ready" && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas-bg/85 px-6 text-center">
-            <FiLoader size={20} className="animate-spin text-accent" />
-            <p className="text-[13px] font-medium text-canvas-fg">
-              {stream.status === "connecting"
-                ? "Connecting Chromium…"
-                : stream.status === "error"
-                  ? "Stream error"
-                  : "Waiting for first frame…"}
+        {isRunning && (
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-canvas-bg px-6 text-center">
+            <FiExternalLink size={24} className="text-accent" />
+            <p className="text-[13px] font-medium text-canvas-fg">Dev server running on :{port}</p>
+            <a
+              href={openUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="btn-press rounded-md bg-accent px-4 py-2 text-[12px] font-semibold text-white hover:opacity-90"
+            >
+              Open in browser
+            </a>
+            <code className="rounded bg-canvas-surface px-2 py-1 font-mono text-[11px] text-canvas-muted">
+              {openUrl}
+            </code>
+            <p className="max-w-xs text-[11px] text-canvas-muted">
+              HMR works automatically in the opened tab. Hot reload routes through the same proxy at{" "}
+              <code className="font-mono">
+                {BASE_PATH}/preview/{port}/
+              </code>
+              .
             </p>
-            {stream.lastError && (
-              <p className="text-[11px] text-canvas-muted">{stream.lastError}</p>
-            )}
           </div>
         )}
       </div>
@@ -556,101 +355,5 @@ function StatusDot({ status }: { status: "idle" | "starting" | "running" | "stop
       title={status}
       className={`inline-block h-2 w-2 rounded-full ${color} ${pulse ? "animate-pulse" : ""}`}
     />
-  );
-}
-
-/**
- * Phase 5c (#133): floating find-in-page bar. Style matches the
- * Chrome chrome — top-right, light surface, count chip, prev/next
- * arrows, close button. The input is auto-focused on mount; Enter
- * advances, Shift+Enter retreats, Esc closes.
- */
-function FindBar({
-  query,
-  count,
-  currentIndex,
-  onQuery,
-  onNext,
-  onPrev,
-  onClose,
-}: {
-  query: string;
-  count: number;
-  currentIndex: number;
-  onQuery: (q: string) => void;
-  onNext: () => void;
-  onPrev: () => void;
-  onClose: () => void;
-}) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
-  const noMatches = query.length > 0 && count === 0;
-  return (
-    <div
-      role="search"
-      aria-label="Find in page"
-      className="absolute right-2 top-2 z-20 flex h-8 items-center gap-1 rounded border border-canvas-border bg-canvas-surface px-1.5 shadow-md"
-      onMouseDown={(e) => e.stopPropagation()}
-      onClick={(e) => e.stopPropagation()}
-    >
-      <input
-        ref={inputRef}
-        type="text"
-        value={query}
-        placeholder="Find"
-        onChange={(e) => onQuery(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            if (e.shiftKey) onPrev();
-            else onNext();
-          } else if (e.key === "Escape") {
-            e.preventDefault();
-            onClose();
-          }
-        }}
-        aria-label="Search query"
-        className={`h-6 w-40 rounded border bg-canvas-bg px-1.5 font-mono text-[12px] focus:outline-none ${
-          noMatches
-            ? "border-red-400 text-red-500 focus:border-red-500"
-            : "border-canvas-border text-canvas-fg focus:border-accent"
-        }`}
-      />
-      <span className="select-none px-1 font-mono text-[11px] text-canvas-muted" aria-live="polite">
-        {count === 0 ? "0/0" : `${currentIndex + 1}/${count}`}
-      </span>
-      <button
-        type="button"
-        onClick={onPrev}
-        disabled={count === 0}
-        title="Previous match (Shift+Enter)"
-        aria-label="Previous match"
-        className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
-      >
-        <FiChevronUp size={12} />
-      </button>
-      <button
-        type="button"
-        onClick={onNext}
-        disabled={count === 0}
-        title="Next match (Enter)"
-        aria-label="Next match"
-        className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg disabled:opacity-40"
-      >
-        <FiChevronDown size={12} />
-      </button>
-      <button
-        type="button"
-        onClick={onClose}
-        title="Close (Esc)"
-        aria-label="Close find"
-        className="btn-press flex h-6 w-6 items-center justify-center rounded text-canvas-muted hover:bg-canvas-surface-hover hover:text-canvas-fg"
-      >
-        <FiX size={12} />
-      </button>
-    </div>
   );
 }

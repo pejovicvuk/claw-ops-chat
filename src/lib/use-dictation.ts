@@ -82,6 +82,15 @@ function getCtor(): SpeechRecognitionCtor | null {
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
+/** Detect iOS (iPhone, iPod, iPadOS-masquerading-as-MacIntel-with-touch).
+ *  Used only to tailor the permission-denied error — the mic button
+ *  itself stays visible. */
+function isIOS(): boolean {
+  if (typeof navigator === "undefined") return false;
+  if (/iPad|iPhone|iPod/.test(navigator.userAgent)) return true;
+  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
+}
+
 /**
  * Merge a freshly-arrived transcript chunk with the text we've already
  * accepted. Handles the three Android Chrome behaviors we've observed:
@@ -114,7 +123,12 @@ function errorMessageFor(code: string): string {
   switch (code) {
     case "not-allowed":
     case "service-not-allowed":
-      return "Microphone permission denied.";
+      // On iOS the most common cause isn't site-level mic permission —
+      // it's the OS Dictation toggle being off, which the user can only
+      // fix from iOS Settings.
+      return isIOS()
+        ? "Enable iOS Dictation: Settings → General → Keyboard → Enable Dictation."
+        : "Microphone permission denied.";
     case "no-speech":
       return "No speech detected.";
     case "audio-capture":
@@ -148,6 +162,14 @@ function errorMessageFor(code: string): string {
  *     but Android ignores it; restart loops were re-recognizing the
  *     trailing audio. End-of-recognition just transitions to idle and
  *     the user clicks the mic again.
+ *
+ * iOS-quirk defenses:
+ *   - Safari's `webkitSpeechRecognition.start()` does NOT trigger the
+ *     mic permission prompt on its own — it just fires `not-allowed`
+ *     immediately if permission is undecided. We work around it with a
+ *     short-lived `getUserMedia({audio: true})` warmup that DOES prompt;
+ *     once granted, the recognizer can start. The tracks are stopped
+ *     right away — we only needed the permission, not the stream.
  */
 export function useDictation(): UseDictationResult {
   // Lazy init: getCtor() runs once on first render, the result is stable
@@ -198,57 +220,87 @@ export function useDictation(): UseDictationResult {
     finalizedRef.current = "";
     setState("starting");
 
-    const rec = new Ctor();
-    rec.lang = "sr-RS";
-    rec.continuous = true;
-    rec.interimResults = true;
+    const beginRecognition = () => {
+      const rec = new Ctor();
+      rec.lang = "sr-RS";
+      rec.continuous = true;
+      rec.interimResults = true;
 
-    rec.onstart = () => {
-      setState("recording");
-    };
+      rec.onstart = () => {
+        setState("recording");
+      };
 
-    rec.onresult = (event) => {
-      let lastInterim = "";
-      for (let i = 0; i < event.results.length; i++) {
-        const result = event.results[i];
-        if (result.length === 0) continue;
-        const chunk = result[0].transcript;
-        if (result.isFinal) {
-          finalizedRef.current = reconcileChunk(finalizedRef.current, chunk);
-        } else {
-          // Take the latest interim only — interim entries are sometimes
-          // appended (Android) rather than mutated in place.
-          lastInterim = chunk;
+      rec.onresult = (event) => {
+        let lastInterim = "";
+        for (let i = 0; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result.length === 0) continue;
+          const chunk = result[0].transcript;
+          if (result.isFinal) {
+            finalizedRef.current = reconcileChunk(finalizedRef.current, chunk);
+          } else {
+            // Take the latest interim only — interim entries are sometimes
+            // appended (Android) rather than mutated in place.
+            lastInterim = chunk;
+          }
         }
+        // Treat interim with the same cumulative-vs-append logic so
+        // mid-utterance ticks don't double-print the phrase.
+        const withInterim = lastInterim
+          ? reconcileChunk(finalizedRef.current, lastInterim)
+          : finalizedRef.current;
+        setTranscript(cyrillicToLatin(withInterim));
+      };
+
+      rec.onerror = (event) => {
+        // `aborted` fires when we stop()/abort() programmatically — silent.
+        if (event.error === "aborted") return;
+        setError(errorMessageFor(event.error));
+      };
+
+      rec.onend = () => {
+        // No auto-restart. Continuous mode is honored on desktop but
+        // ignored on Android; restart loops there re-recognized trailing
+        // audio. Caller re-clicks the mic for another utterance.
+        setState("idle");
+      };
+
+      recognitionRef.current = rec;
+      try {
+        rec.start();
+      } catch (err) {
+        setState("idle");
+        setError(err instanceof Error ? err.message : "Could not start dictation.");
+        recognitionRef.current = null;
       }
-      // Treat interim with the same cumulative-vs-append logic so
-      // mid-utterance ticks don't double-print the phrase.
-      const withInterim = lastInterim
-        ? reconcileChunk(finalizedRef.current, lastInterim)
-        : finalizedRef.current;
-      setTranscript(cyrillicToLatin(withInterim));
     };
 
-    rec.onerror = (event) => {
-      // `aborted` fires when we stop()/abort() programmatically — silent.
-      if (event.error === "aborted") return;
-      setError(errorMessageFor(event.error));
-    };
-
-    rec.onend = () => {
-      // No auto-restart. Continuous mode is honored on desktop but
-      // ignored on Android; restart loops there re-recognized trailing
-      // audio. Caller re-clicks the mic for another utterance.
-      setState("idle");
-    };
-
-    recognitionRef.current = rec;
-    try {
-      rec.start();
-    } catch (err) {
-      setState("idle");
-      setError(err instanceof Error ? err.message : "Could not start dictation.");
-      recognitionRef.current = null;
+    // iOS Safari quirk: webkitSpeechRecognition.start() does not trigger
+    // the mic permission prompt on its own — it silently fires
+    // `not-allowed`. A getUserMedia warmup DOES prompt; once permission
+    // is granted, the recognizer rides on the same grant. We stop the
+    // tracks immediately because we don't need the stream itself.
+    // Harmless on Chrome/Edge/desktop Safari — the permission is shared.
+    if (typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia) {
+      navigator.mediaDevices
+        .getUserMedia({ audio: true })
+        .then((stream) => {
+          stream.getTracks().forEach((t) => t.stop());
+          if (stateRef.current === "starting") beginRecognition();
+        })
+        .catch((err: unknown) => {
+          setState("idle");
+          const name = err instanceof Error ? err.name : "";
+          if (name === "NotAllowedError" || name === "SecurityError") {
+            setError(errorMessageFor("not-allowed"));
+          } else if (name === "NotFoundError") {
+            setError(errorMessageFor("audio-capture"));
+          } else {
+            setError("Could not access microphone.");
+          }
+        });
+    } else {
+      beginRecognition();
     }
   }, [Ctor]);
 

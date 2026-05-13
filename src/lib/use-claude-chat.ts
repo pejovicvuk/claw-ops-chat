@@ -585,13 +585,49 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
           if (!shouldShowStoppedPill(evt.text as string, streamedSnapshot)) {
             return;
           }
+          // TEMPORARY DIAGNOSTIC: the dedup is letting a duplicate gray pill
+          // through in some scenarios. Log the two strings (and a few useful
+          // shape hints) so we can see whether it's the multi-block /
+          // tool-turn case (streamed has a prefix or extra content the result
+          // doesn't) or an empty-streamed reconnect-replay case. Remove once
+          // the root cause is fixed. See PR for context.
+          const resultText = evt.text as string;
+          const stripWs = (s: string) => s.replace(/\s+/g, "");
+          const r = stripWs(resultText);
+          const s = stripWs(streamedSnapshot);
+          let firstDiff = -1;
+          const minLen = Math.min(r.length, s.length);
+          for (let i = 0; i < minLen; i++) {
+            if (r[i] !== s[i]) {
+              firstDiff = i;
+              break;
+            }
+          }
+          if (firstDiff === -1 && r.length !== s.length) firstDiff = minLen;
+           
+          console.warn("[duplicate-stopped-pill]", {
+            streamedEmpty: streamedSnapshot.length === 0,
+            resultLen: resultText.length,
+            streamedLen: streamedSnapshot.length,
+            normalizedResultLen: r.length,
+            normalizedStreamedLen: s.length,
+            resultIsSuffixOfStreamed: s.endsWith(r),
+            resultIsPrefixOfStreamed: s.startsWith(r),
+            streamedIsSuffixOfResult: r.endsWith(s),
+            streamedIsPrefixOfResult: r.startsWith(s),
+            firstNonWhitespaceDiffIndex: firstDiff,
+            resultHead: resultText.slice(0, 200),
+            resultTail: resultText.slice(-200),
+            streamedHead: streamedSnapshot.slice(0, 200),
+            streamedTail: streamedSnapshot.slice(-200),
+          });
           setMessages((prev) => [
             ...prev,
             {
               id: crypto.randomUUID(),
               role: "system" as const,
               type: "stopped" as const,
-              content: evt.text as string,
+              content: resultText,
               timestamp: Date.now(),
             },
           ]);

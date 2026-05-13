@@ -8,10 +8,7 @@ import {
 export async function GET(request: Request): Promise<Response> {
   if (!extractSession(request)) return unauthorized();
 
-  const [creds, registered] = await Promise.all([
-    loadCredentials(),
-    isMcpServerRegistered(),
-  ]);
+  const [creds, registered] = await Promise.all([loadCredentials(), isMcpServerRegistered()]);
 
   if (!creds) {
     return Response.json({

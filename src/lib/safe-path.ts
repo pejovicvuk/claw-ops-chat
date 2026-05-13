@@ -64,11 +64,7 @@ export async function safePath(userPath: string): Promise<string> {
   // root-as-base as "accept any absolute path".
   const normalizedBase = await getBaseDir();
   const isRootBase = normalizedBase === sep;
-  if (
-    !isRootBase &&
-    !resolved.startsWith(normalizedBase + sep) &&
-    resolved !== normalizedBase
-  ) {
+  if (!isRootBase && !resolved.startsWith(normalizedBase + sep) && resolved !== normalizedBase) {
     throw new SafePathError(`Access denied: path is outside the allowed directory`);
   }
 

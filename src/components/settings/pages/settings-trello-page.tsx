@@ -124,8 +124,8 @@ export function SettingsTrelloPage() {
             )}{" "}
             Claude sees your boards via the{" "}
             <code className="rounded bg-canvas-bg px-1 py-0.5">TRELLO_API_KEY</code> /{" "}
-            <code className="rounded bg-canvas-bg px-1 py-0.5">TRELLO_TOKEN</code> env vars
-            injected on every query.
+            <code className="rounded bg-canvas-bg px-1 py-0.5">TRELLO_TOKEN</code> env vars injected
+            on every query.
           </p>
         </div>
 
@@ -156,13 +156,11 @@ export function SettingsTrelloPage() {
       <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
         <div className="mb-2 flex items-center gap-2">
           <SiTrello size={14} className="text-canvas-fg" />
-          <span className="text-[13px] font-medium text-canvas-fg">
-            Connect a Trello account
-          </span>
+          <span className="text-[13px] font-medium text-canvas-fg">Connect a Trello account</span>
         </div>
         <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
-          Trello API auth is a two-step key + token handshake. Create a Power-Up (just a
-          credential holder, no code) at{" "}
+          Trello API auth is a two-step key + token handshake. Create a Power-Up (just a credential
+          holder, no code) at{" "}
           <a
             href="https://trello.com/power-ups/admin"
             target="_blank"
@@ -256,11 +254,11 @@ export function SettingsTrelloPage() {
       </div>
 
       <p className="text-[10px] text-canvas-muted">
-        Credentials stored at <code>~/.claude/custom-trello/credentials.json</code> (mode 0600)
-        and injected as <code>TRELLO_API_KEY</code> and <code>TRELLO_TOKEN</code> into the
-        Claude Agent SDK subprocess on every query. No MCP server is registered by default —
-        drop your preferred Trello MCP or skill into <code>~/.claude.json</code> /{" "}
-        <code>/opt/skills/</code> and it&apos;ll pick up the env vars automatically.
+        Credentials stored at <code>~/.claude/custom-trello/credentials.json</code> (mode 0600) and
+        injected as <code>TRELLO_API_KEY</code> and <code>TRELLO_TOKEN</code> into the Claude Agent
+        SDK subprocess on every query. No MCP server is registered by default — drop your preferred
+        Trello MCP or skill into <code>~/.claude.json</code> / <code>/opt/skills/</code> and
+        it&apos;ll pick up the env vars automatically.
       </p>
     </div>
   );

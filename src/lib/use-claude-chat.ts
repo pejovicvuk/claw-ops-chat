@@ -604,7 +604,7 @@ export function useClaudeChat(sessionId: string | null, sessionCwd?: string | nu
             }
           }
           if (firstDiff === -1 && r.length !== s.length) firstDiff = minLen;
-           
+
           console.warn("[duplicate-stopped-pill]", {
             streamedEmpty: streamedSnapshot.length === 0,
             resultLen: resultText.length,

@@ -124,11 +124,11 @@ export function SettingsNotionPage() {
           <p className="text-[12px] text-canvas-muted">
             {workspaceName ? (
               <>
-                Workspace:{" "}
-                <span className="font-mono text-canvas-fg">{workspaceName}</span>
+                Workspace: <span className="font-mono text-canvas-fg">{workspaceName}</span>
                 {botName && (
                   <>
-                    {" "}— integration <span className="font-mono text-canvas-fg">{botName}</span>
+                    {" "}
+                    — integration <span className="font-mono text-canvas-fg">{botName}</span>
                   </>
                 )}
                 .
@@ -143,9 +143,9 @@ export function SettingsNotionPage() {
         <div className="flex items-start gap-2 rounded-xl border border-canvas-border bg-canvas-surface p-3">
           <FiInfo size={14} className="mt-0.5 shrink-0 text-canvas-muted" />
           <p className="text-[11px] leading-relaxed text-canvas-muted">
-            Notion integrations only see pages and databases that have been explicitly shared
-            with them. Open a page, click ••• → Connections, and add this integration — otherwise
-            Claude will see an empty workspace.
+            Notion integrations only see pages and databases that have been explicitly shared with
+            them. Open a page, click ••• → Connections, and add this integration — otherwise Claude
+            will see an empty workspace.
           </p>
         </div>
 
@@ -193,9 +193,9 @@ export function SettingsNotionPage() {
           >
             notion.so/my-integrations <FiExternalLink size={10} />
           </a>
-          , then share the pages you want Claude to access with that integration (open a page →
-          ••• → Connections → add your integration). Read capability is the minimum; grant
-          update/insert if you want Claude to edit.
+          , then share the pages you want Claude to access with that integration (open a page → •••
+          → Connections → add your integration). Read capability is the minimum; grant update/insert
+          if you want Claude to edit.
         </p>
 
         <div className="space-y-3">
@@ -253,8 +253,8 @@ export function SettingsNotionPage() {
       </div>
 
       <p className="text-[10px] text-canvas-muted">
-        Token stored at <code>~/.claude/custom-notion/credentials.json</code> (mode 0600) and
-        passed to the official <code>@notionhq/notion-mcp-server</code> via the
+        Token stored at <code>~/.claude/custom-notion/credentials.json</code> (mode 0600) and passed
+        to the official <code>@notionhq/notion-mcp-server</code> via the
         <code> OPENAPI_MCP_HEADERS</code> env var (the contract that server expects). Only the
         validation probe to <code>api.notion.com/v1/users/me</code> leaves this server.
       </p>

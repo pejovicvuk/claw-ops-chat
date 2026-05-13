@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   FiAlertTriangle,
   FiFolder,
@@ -119,9 +119,9 @@ export function SessionList({
   // Capture the session IDs present in the FIRST non-empty render so the
   // cascade entrance only plays on that snapshot. Items added later (new
   // chats, polling updates) just appear without re-cascading the whole list.
-  const initialSessionIdsRef = useRef<Set<string> | null>(null);
-  if (initialSessionIdsRef.current === null && sessions.length > 0) {
-    initialSessionIdsRef.current = new Set(sessions.map((s) => s.sessionId));
+  const [initialSessionIds, setInitialSessionIds] = useState<Set<string> | null>(null);
+  if (initialSessionIds === null && sessions.length > 0) {
+    setInitialSessionIds(new Set(sessions.map((s) => s.sessionId)));
   }
 
   // ─── Context menu state ─────────────────────────────────────────
@@ -297,7 +297,7 @@ export function SessionList({
               // weren't in the initial render (new chats, polled additions)
               // skip the animation so the list doesn't restagger on every
               // status update.
-              const isInitial = initialSessionIdsRef.current?.has(session.sessionId) === true;
+              const isInitial = initialSessionIds?.has(session.sessionId) === true;
               const staggerIdx = isInitial ? sessionIndex : -1;
               // Prefer the live status from the polling hook; fall back to
               // the legacy `runningSessionIds` boolean so any caller that

@@ -52,9 +52,7 @@ export function setSessionStatus(sessionId: string, status: SessionStatus): void
     // Opt-in log so operators can confirm the status pipeline is alive
     // when users report "no indicators". Keep behind an env flag so prod
     // isn't drowning in tiny writes.
-    console.log(
-      `[status] ${sessionId.slice(0, 8)}… → ${status} (total=${store.size})`,
-    );
+    console.log(`[status] ${sessionId.slice(0, 8)}… → ${status} (total=${store.size})`);
   }
 }
 

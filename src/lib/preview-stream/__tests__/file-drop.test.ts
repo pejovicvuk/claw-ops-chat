@@ -130,7 +130,7 @@ describe("buildInjectedFileDropScript", () => {
   it("contains the iframe-piercing helper", () => {
     const s = buildInjectedFileDropScript();
     expect(s).toContain("deepElementFromPoint");
-    expect(s).toContain('IFRAME');
+    expect(s).toContain("IFRAME");
     expect(s).toContain("contentWindow");
   });
 

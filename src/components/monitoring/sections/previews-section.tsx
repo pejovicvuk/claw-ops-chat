@@ -37,7 +37,8 @@ export function PreviewsSection() {
 
   const active = data?.active ?? 0;
   const max = data?.maxActive ?? 0;
-  const capStatus = max === 0 ? "info" : active >= max ? "critical" : active > 0 ? "healthy" : "info";
+  const capStatus =
+    max === 0 ? "info" : active >= max ? "critical" : active > 0 ? "healthy" : "info";
 
   return (
     <div className="space-y-4 p-4">
@@ -56,14 +57,8 @@ export function PreviewsSection() {
           label="Chromium RAM"
           value={data?.chromium.memBytes != null ? formatBytes(data.chromium.memBytes) : "—"}
         />
-        <MetricCard
-          label="Frames sent"
-          value={data ? formatNumber(data.totalFramesSent) : "—"}
-        />
-        <MetricCard
-          label="Bytes sent"
-          value={data ? formatBytes(data.totalBytesSent) : "—"}
-        />
+        <MetricCard label="Frames sent" value={data ? formatNumber(data.totalFramesSent) : "—"} />
+        <MetricCard label="Bytes sent" value={data ? formatBytes(data.totalBytesSent) : "—"} />
         <MetricCard
           label="Restarts"
           value={data ? formatNumber(data.totalRestartCount) : "—"}

@@ -165,9 +165,7 @@ function RateLimitPopup({ label, window, sublabel, now }: RateLimitPopupProps) {
       {!window ? (
         <>
           <p className="text-[12px] font-medium text-canvas-fg">{label}: no data yet</p>
-          <p className="mt-0.5 text-[11px] text-canvas-muted">
-            Refreshes after the next API call.
-          </p>
+          <p className="mt-0.5 text-[11px] text-canvas-muted">Refreshes after the next API call.</p>
         </>
       ) : (
         <>

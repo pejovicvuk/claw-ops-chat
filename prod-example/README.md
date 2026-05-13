@@ -111,7 +111,7 @@ If you installed without certs and want to switch to HTTPS later:
 
    It will detect the new certs, rewrite `docker-compose.yml` with the 443
    port + cert mount, swap nginx to the HTTPS template, and `docker
-   compose up -d` to apply.
+compose up -d` to apply.
 
 Certbot renewals: run
 `sudo docker compose -f /opt/claw-chat/docker-compose.yml exec nginx nginx -s reload`

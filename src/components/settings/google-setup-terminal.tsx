@@ -97,7 +97,11 @@ export function GoogleSetupTerminal({
       term.loadAddon(fit);
       term.loadAddon(new WebLinksAddon());
       term.open(hostRef.current);
-      try { fit.fit(); } catch { /* layout not ready */ }
+      try {
+        fit.fit();
+      } catch {
+        /* layout not ready */
+      }
       term.focus();
 
       const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -115,7 +119,9 @@ export function GoogleSetupTerminal({
         setErrorMsg(null);
         try {
           ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
         // Type the command ONE TIME. Small delay lets the shell print its prompt
         // first so users can visually confirm the command they're about to run.
         if (!initialCommandSent) {
@@ -154,7 +160,11 @@ export function GoogleSetupTerminal({
       });
 
       const onResize = () => {
-        try { fit.fit(); } catch { /* layout not ready */ }
+        try {
+          fit.fit();
+        } catch {
+          /* layout not ready */
+        }
         if (ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
         }
@@ -164,7 +174,11 @@ export function GoogleSetupTerminal({
 
       cleanup = () => {
         ro.disconnect();
-        try { ws.close(); } catch { /* ignore */ }
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
         term.dispose();
       };
     })().catch((err) => {
@@ -204,8 +218,8 @@ export function GoogleSetupTerminal({
       <div className="mb-3 shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-canvas-muted">
         <p className="mb-1 font-medium text-amber-400">Before you click the auth URL:</p>
         <p className="mb-1.5">
-          Add this redirect URI to your OAuth client in Google Cloud Console (APIs &amp;
-          Services → Credentials → your OAuth 2.0 Client):
+          Add this redirect URI to your OAuth client in Google Cloud Console (APIs &amp; Services →
+          Credentials → your OAuth 2.0 Client):
         </p>
         <div className="flex items-center gap-2 rounded-md bg-black/40 px-2 py-1 font-mono text-[11px] text-canvas-fg">
           <span className="min-w-0 flex-1 truncate">{callbackUrl}</span>

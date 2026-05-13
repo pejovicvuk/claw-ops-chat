@@ -45,9 +45,7 @@ export async function POST(request: Request): Promise<Response> {
   } catch (err) {
     return Response.json(
       {
-        error: `Could not reach Microsoft: ${
-          err instanceof Error ? err.message : "network error"
-        }`,
+        error: `Could not reach Microsoft: ${err instanceof Error ? err.message : "network error"}`,
       },
       { status: 502 },
     );
@@ -79,13 +77,11 @@ export async function POST(request: Request): Promise<Response> {
         "Use 'common' for personal + org accounts, or paste your tenant's GUID from " +
         "Azure Portal → Microsoft Entra ID → Overview.";
     } else {
-      friendly = desc || code || `Microsoft returned HTTP ${upstream.status} without a device code.`;
+      friendly =
+        desc || code || `Microsoft returned HTTP ${upstream.status} without a device code.`;
     }
 
-    return Response.json(
-      { error: friendly },
-      { status: upstream.ok ? 502 : upstream.status },
-    );
+    return Response.json({ error: friendly }, { status: upstream.ok ? 502 : upstream.status });
   }
 
   return Response.json({

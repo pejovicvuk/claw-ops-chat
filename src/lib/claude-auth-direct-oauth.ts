@@ -22,17 +22,25 @@ import { homedir } from "os";
 // Anthropic endpoints / constants (verified against bundled CLI)
 // ────────────────────────────────────────────────────────────────
 
-// The CLI splits OAuth concerns across two hosts: the browser-facing
-// authorize / callback pages live on platform.claude.com and
-// claude.com, but the BACKEND endpoints (token exchange, profile,
-// API-key creation) are on api.anthropic.com. My first draft pointed
-// token + profile at platform.claude.com — same host as the
-// authorize URL, looked consistent — and got a 400
-// "Invalid request format" back from what must have been some other
-// endpoint living at that path. Fixed per the CLI's `iI$` config
-// block in the bundled binary.
+// The CLI splits OAuth concerns across two hosts. Browser-facing
+// authorize / callback pages live on claude.com (login flow start),
+// the OAuth TOKEN endpoint lives on platform.claude.com, and the
+// remaining BACKEND endpoints (profile, API-key creation) live on
+// api.anthropic.com.
+//
+// Endpoints re-verified against the bundled `claude.exe` strings on
+// 2026-05-13 — the binary contains 159 occurrences of
+// `platform.claude.com` and zero of `api.anthropic.com/v1/oauth`,
+// confirming Anthropic migrated the token endpoint off
+// `api.anthropic.com`. The old path is now returning 500
+// `api_error` ("Internal server error") for both initial code
+// exchanges AND refresh-token grants, which manifested as users
+// being unable to sign in and tokens silently expiring after their
+// initial ~8 h lifetime (no refresh path because the binary refreshes
+// against platform.claude.com, but our tokens were minted by an
+// endpoint that no longer accepts them).
 export const AUTHORIZE_URL = "https://claude.com/cai/oauth/authorize";
-export const TOKEN_ENDPOINT = "https://api.anthropic.com/v1/oauth/token";
+export const TOKEN_ENDPOINT = "https://platform.claude.com/v1/oauth/token";
 export const PROFILE_ENDPOINT = "https://api.anthropic.com/api/oauth/profile";
 export const CREATE_API_KEY_ENDPOINT =
   "https://api.anthropic.com/api/oauth/claude_cli/create_api_key";
@@ -379,4 +387,166 @@ export async function createLongLivedApiKey(opts: { accessToken: string }): Prom
   } catch {
     return null;
   }
+}
+
+// ────────────────────────────────────────────────────────────────
+// Refresh-token rotation
+// ────────────────────────────────────────────────────────────────
+
+/**
+ * Refresh-window threshold. We attempt a refresh when fewer than this
+ * many milliseconds remain until `expiresAt`. 30 minutes gives plenty
+ * of margin for clock skew and a slow refresh round-trip while still
+ * leaving the access token usable until success.
+ */
+const REFRESH_THRESHOLD_MS = 30 * 60 * 1000;
+
+/** Singleton in-flight refresh so concurrent callers coalesce. */
+let inFlightRefresh: Promise<RefreshOutcome> | null = null;
+
+export interface RefreshOutcome {
+  /** "ok" if we made a successful refresh + write; "fresh" if we skipped (token still has plenty of time); "skipped" if there's nothing to refresh; "error" on any failure. */
+  status: "ok" | "fresh" | "skipped" | "error";
+  /** New expiresAt (ms epoch) when status==="ok"; existing expiresAt for "fresh"; null otherwise. */
+  expiresAt: number | null;
+  /** Set on status==="error" so callers can surface it. Never contains the refresh_token itself. */
+  error?: string;
+}
+
+/**
+ * Read the credentials file and refresh the access token if it's within
+ * `REFRESH_THRESHOLD_MS` of expiry (or already expired). Atomic write
+ * preserves every other field (`apiKey`, `oauthAccount`, `organizationUuid`,
+ * `subscriptionType`, `scopes`). Tolerates a rotated refresh token —
+ * Anthropic may return a new one and we replace it; if they don't, we
+ * keep the existing one.
+ *
+ * Why we own this instead of leaving it to the SDK: the bundled CLI
+ * binary does refresh against `platform.claude.com`, but only as a
+ * lazy side-effect of an outgoing request. If the access token expires
+ * outside an active turn (the common case — overnight, between report
+ * cron ticks), the next turn fires with the dead token and the binary
+ * surfaces a 401 before its own refresh logic kicks in. Proactively
+ * refreshing on a 15-minute heartbeat keeps the credentials file warm
+ * so that never happens.
+ *
+ * Idempotent + safe under concurrent calls via the in-flight singleton.
+ */
+export async function refreshAccessTokenIfNeeded(opts?: {
+  /** Force a refresh even if the token still has plenty of time. */
+  force?: boolean;
+}): Promise<RefreshOutcome> {
+  if (inFlightRefresh) return inFlightRefresh;
+  inFlightRefresh = (async (): Promise<RefreshOutcome> => {
+    try {
+      return await doRefresh(opts?.force === true);
+    } finally {
+      inFlightRefresh = null;
+    }
+  })();
+  return inFlightRefresh;
+}
+
+async function doRefresh(force: boolean): Promise<RefreshOutcome> {
+  if (!existsSync(CREDENTIALS_PATH)) {
+    return { status: "skipped", expiresAt: null };
+  }
+  let parsed: Partial<ClaudeCredentialsFile>;
+  try {
+    parsed = JSON.parse(
+      await readFile(CREDENTIALS_PATH, "utf-8"),
+    ) as Partial<ClaudeCredentialsFile>;
+  } catch (err) {
+    return {
+      status: "error",
+      expiresAt: null,
+      error: `Could not parse credentials: ${err instanceof Error ? err.message : "unknown"}`,
+    };
+  }
+  const oauth = parsed.claudeAiOauth;
+  if (!oauth?.refreshToken) {
+    // Nothing to refresh — either logged out or only an apiKey is set.
+    return { status: "skipped", expiresAt: null };
+  }
+  const expiresAt = typeof oauth.expiresAt === "number" ? oauth.expiresAt : 0;
+  const msRemaining = expiresAt - Date.now();
+  if (!force && msRemaining > REFRESH_THRESHOLD_MS) {
+    return { status: "fresh", expiresAt };
+  }
+
+  // OAuth 2.0 refresh-token grant. Same JSON-body convention as the
+  // initial code exchange — `application/json`, not form-encoded.
+  // `state` is intentionally omitted; it's only relevant for the
+  // authorization_code grant.
+  const res = await fetch(TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      grant_type: "refresh_token",
+      refresh_token: oauth.refreshToken,
+      client_id: CLIENT_ID,
+    }),
+  }).catch((err): null => {
+    console.warn(
+      `[claude-auth] refresh network error: ${err instanceof Error ? err.message : err}`,
+    );
+    return null;
+  });
+  if (!res) {
+    return { status: "error", expiresAt, error: "network failure" };
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    return {
+      status: "error",
+      expiresAt,
+      error: `Refresh failed (${res.status}): ${text.slice(0, 300)}`,
+    };
+  }
+  let data: Record<string, unknown>;
+  try {
+    data = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return { status: "error", expiresAt, error: "Refresh response was not JSON" };
+  }
+  const newAccess = typeof data.access_token === "string" ? data.access_token : "";
+  if (!newAccess) {
+    return { status: "error", expiresAt, error: "Refresh response missing access_token" };
+  }
+  const newRefresh =
+    typeof data.refresh_token === "string" && data.refresh_token
+      ? data.refresh_token
+      : oauth.refreshToken;
+  const newExpiresIn = typeof data.expires_in === "number" ? data.expires_in : 28800;
+  const newExpiresAt = Date.now() + newExpiresIn * 1000;
+  const newScopes =
+    typeof data.scope === "string"
+      ? data.scope.split(/\s+/).filter(Boolean)
+      : (oauth.scopes ?? [...SCOPES]);
+
+  // Preserve every other field in the file. We only mutate the OAuth
+  // block; apiKey / oauthAccount / organizationUuid / subscriptionType
+  // are untouched.
+  const merged: ClaudeCredentialsFile = {
+    ...(parsed as ClaudeCredentialsFile),
+    claudeAiOauth: {
+      accessToken: newAccess,
+      refreshToken: newRefresh,
+      expiresAt: newExpiresAt,
+      scopes: newScopes,
+      ...(oauth.subscriptionType ? { subscriptionType: oauth.subscriptionType } : {}),
+    },
+    oauthAccount: parsed.oauthAccount ?? { emailAddress: "" },
+  };
+
+  await mkdir(dirname(CREDENTIALS_PATH), { recursive: true });
+  const tmp = `${CREDENTIALS_PATH}.tmp`;
+  await writeFile(tmp, JSON.stringify(merged, null, 2), "utf-8");
+  try {
+    await chmod(tmp, 0o600);
+  } catch {
+    /* Windows dev — ignore. */
+  }
+  await rename(tmp, CREDENTIALS_PATH);
+  return { status: "ok", expiresAt: newExpiresAt };
 }

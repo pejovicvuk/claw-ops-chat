@@ -30,6 +30,7 @@ import {
   type SessionStatus,
 } from "./src/lib/session-status-store";
 import { setRuntimeAuthFailed } from "./src/lib/claude-auth-runtime-state";
+import { refreshAccessTokenIfNeeded } from "./src/lib/claude-auth-direct-oauth";
 import {
   loadAllSessions,
   persistSession,
@@ -1186,6 +1187,18 @@ class SessionManager {
       session.messageQueue = [];
       return;
     }
+
+    // Pre-emptively refresh the Claude OAuth access token if it's
+    // within the refresh window. Most calls return "fresh" in O(1)
+    // (file read + expiresAt check) without hitting the network. We
+    // only block on the actual refresh when the token is close to
+    // expiry, which guarantees the SDK never spawns its CLI child
+    // with a dead token. Failures here are non-fatal — let the SDK
+    // try with whatever's on disk and surface its own 401 through
+    // the existing auth-failed path.
+    await refreshAccessTokenIfNeeded().catch((err) => {
+      console.warn(`[claude-auth] lazy refresh threw: ${(err as Error).message}`);
+    });
 
     session.isProcessing = true;
     session.accumulatedText = "";
@@ -2916,6 +2929,50 @@ const consolidationScheduler = new ConsolidationScheduler();
     bootstrapMonitoring();
   } catch (err) {
     console.warn(`!! Could not initialize monitoring: ${(err as Error).message}`);
+  }
+})();
+
+// Claude OAuth access-token refresh heartbeat. Tokens last ~8 h; the
+// bundled CLI binary only refreshes lazily inside an active turn,
+// which means a token that expires overnight (or between report
+// cron ticks) takes the next request down with a 401 before its own
+// refresh logic can fire. We pre-emptively refresh on a 15-minute
+// timer, plus one sweep at boot so a restart that lands close to
+// expiry catches up immediately. The helper is idempotent + skips
+// the network entirely when the token still has >30 min left, so
+// the steady-state cost is one stat + one JSON parse per tick.
+(async () => {
+  try {
+    const initial = await refreshAccessTokenIfNeeded();
+    if (initial.status === "ok") {
+      console.log(
+        `> Claude credentials refreshed at boot (expires ${new Date(initial.expiresAt!).toISOString()})`,
+      );
+    } else if (initial.status === "error") {
+      console.warn(`!! Claude credentials refresh at boot failed: ${initial.error}`);
+    }
+    cron.schedule(
+      "*/15 * * * *",
+      () => {
+        refreshAccessTokenIfNeeded()
+          .then((outcome) => {
+            if (outcome.status === "ok") {
+              console.log(
+                `> Claude credentials refreshed (expires ${new Date(outcome.expiresAt!).toISOString()})`,
+              );
+            } else if (outcome.status === "error") {
+              console.warn(`[claude-auth] scheduled refresh failed: ${outcome.error}`);
+            }
+          })
+          .catch((err) => {
+            console.warn(`[claude-auth] scheduled refresh threw: ${(err as Error).message}`);
+          });
+      },
+      { timezone: "UTC" },
+    );
+    console.log(`> Claude credentials refresh scheduled (every 15 min, refresh window 30 min)`);
+  } catch (err) {
+    console.warn(`!! Could not initialize Claude credentials refresh: ${(err as Error).message}`);
   }
 })();
 

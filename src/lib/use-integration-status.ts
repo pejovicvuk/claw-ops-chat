@@ -26,6 +26,14 @@ interface BitbucketStatus {
   displayName: string | null;
 }
 
+interface AtlassianStatusBody {
+  bitbucket: {
+    connected?: boolean;
+    displayName?: string | null;
+    registered?: boolean;
+  } | null;
+}
+
 async function fetchGithub(): Promise<GithubStatus> {
   try {
     const res = await fetch("/chat/api/github-custom/status");
@@ -43,13 +51,15 @@ async function fetchGithub(): Promise<GithubStatus> {
 
 async function fetchBitbucket(): Promise<BitbucketStatus> {
   try {
-    const res = await fetch("/chat/api/bitbucket-custom/status");
+    const res = await fetch("/chat/api/atlassian-custom/status");
     if (!res.ok) return { saved: false, registered: false, displayName: null };
-    const body = (await res.json()) as Partial<BitbucketStatus>;
+    const body = (await res.json()) as Partial<AtlassianStatusBody>;
+    const half = body.bitbucket;
+    if (!half) return { saved: false, registered: false, displayName: null };
     return {
-      saved: Boolean(body.saved),
-      registered: Boolean(body.registered),
-      displayName: typeof body.displayName === "string" ? body.displayName : null,
+      saved: Boolean(half.connected),
+      registered: Boolean(half.registered),
+      displayName: typeof half.displayName === "string" ? half.displayName : null,
     };
   } catch {
     return { saved: false, registered: false, displayName: null };

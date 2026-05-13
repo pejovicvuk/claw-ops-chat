@@ -99,6 +99,34 @@ function getCtor(): SpeechRecognitionCtor | null {
   return window.SpeechRecognition ?? window.webkitSpeechRecognition ?? null;
 }
 
+/**
+ * Merge a freshly-arrived transcript chunk with the text we've already
+ * accepted. Handles the three Android Chrome behaviors we've observed:
+ *
+ *   1. Cumulative — new chunk is a superset of current ("Danas sam"
+ *      arrives when current is "Danas"). Replace.
+ *   2. Re-fire / stale — new chunk is a substring of current ("Danas"
+ *      arrives again after "Danas sam" is already in). Keep current.
+ *   3. New utterance — neither is a prefix of the other ("zdravo" after
+ *      "Hello"). Append with a single separating space.
+ *
+ * Comparison is case-insensitive because the recognizer's casing wobbles
+ * between fires ("Danas" / "DAnas" / "danas").
+ */
+export function reconcileChunk(current: string, incoming: string): string {
+  if (!incoming) return current;
+  if (!current) return incoming;
+  const a = current.toLowerCase().trim();
+  const b = incoming.toLowerCase().trim();
+  // Case-insensitively identical — prefer incoming so refined casing
+  // from the recognizer's later passes wins.
+  if (a === b) return incoming;
+  if (b.startsWith(a)) return incoming; // cumulative
+  if (a.startsWith(b)) return current; // stale re-fire
+  const sep = current.endsWith(" ") || incoming.startsWith(" ") ? "" : " ";
+  return current + sep + incoming;
+}
+
 function errorMessageFor(code: string): string {
   switch (code) {
     case "not-allowed":
@@ -126,17 +154,17 @@ function errorMessageFor(code: string): string {
  * Serbian Latin.
  *
  * Android-quirk defenses:
- *   - Each finalized result is keyed by its `event.results` index in a
- *     local Set; if Android Chrome re-fires `onresult` for the same
- *     finalized index (or stalls `resultIndex` at 0), we skip duplicate
- *     appends. This is what was causing "DanasDAnasDanas".
- *   - Interim text is taken as the *latest* interim chunk only, not
- *     concatenated across entries — Android Chrome sometimes appends
- *     each refinement as a new interim entry.
+ *   - Android Chrome produces *cumulative* finalized results: each new
+ *     final entry contains the entire phrase so far ("Danas" → "Danas
+ *     sam" → "Danas sam bio"). Naive accumulation gives the user the
+ *     concatenation of all of those. We detect cumulation via a
+ *     case-insensitive prefix check and *replace* instead of appending
+ *     when the new chunk is a superset of what we have. Truly new
+ *     utterances (no prefix relationship) still append with spacing.
  *   - We do NOT auto-restart on `onend`. Continuous mode is requested
  *     but Android ignores it; restart loops were re-recognizing the
- *     trailing audio and contributing to duplicates. End-of-recognition
- *     just transitions to idle and the user clicks the mic again.
+ *     trailing audio. End-of-recognition just transitions to idle and
+ *     the user clicks the mic again.
  */
 export function useDictation(): UseDictationResult {
   // Lazy init: getCtor() runs once on first render, the result is stable
@@ -192,12 +220,6 @@ export function useDictation(): UseDictationResult {
     rec.continuous = true;
     rec.interimResults = true;
 
-    // Indices in `event.results` we've already pulled into finalizedRef.
-    // Skips re-appending the same word on Android Chrome, which sometimes
-    // re-fires `onresult` for already-finalized indices and/or returns a
-    // `resultIndex` that doesn't advance past them.
-    const consumedFinalIndices = new Set<number>();
-
     rec.onstart = () => {
       setState("recording");
     };
@@ -209,16 +231,19 @@ export function useDictation(): UseDictationResult {
         if (result.length === 0) continue;
         const chunk = result[0].transcript;
         if (result.isFinal) {
-          if (consumedFinalIndices.has(i)) continue;
-          consumedFinalIndices.add(i);
-          finalizedRef.current += chunk;
+          finalizedRef.current = reconcileChunk(finalizedRef.current, chunk);
         } else {
-          // Take the latest interim only — Android Chrome appends each
-          // refinement as a new entry rather than mutating in place.
+          // Take the latest interim only — interim entries are sometimes
+          // appended (Android) rather than mutated in place.
           lastInterim = chunk;
         }
       }
-      setTranscript(cyrillicToLatin(finalizedRef.current + lastInterim));
+      // Treat interim with the same cumulative-vs-append logic so
+      // mid-utterance ticks don't double-print the phrase.
+      const withInterim = lastInterim
+        ? reconcileChunk(finalizedRef.current, lastInterim)
+        : finalizedRef.current;
+      setTranscript(cyrillicToLatin(withInterim));
     };
 
     rec.onerror = (event) => {

@@ -502,6 +502,9 @@ export class H264Encoder extends EventEmitter {
 }
 
 /** Test-only export of the parser so harnesses can drive it without spawning ffmpeg. */
-export function _createFmp4Parser(): EventEmitter & { push: (b: Buffer) => void; reset: () => void } {
+export function _createFmp4Parser(): EventEmitter & {
+  push: (b: Buffer) => void;
+  reset: () => void;
+} {
   return new Fmp4Parser();
 }

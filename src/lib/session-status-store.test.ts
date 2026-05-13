@@ -62,9 +62,11 @@ describe("globalThis singleton", () => {
     // disappeared before the sidebar poll could see it. Pinning the Map
     // on globalThis makes the second load discover the same instance.
     setSessionStatus("anchor-check", "tool_running");
-    const anchored = (globalThis as unknown as {
-      __clawSessionStatusStore?: Map<string, { status: string }>;
-    }).__clawSessionStatusStore;
+    const anchored = (
+      globalThis as unknown as {
+        __clawSessionStatusStore?: Map<string, { status: string }>;
+      }
+    ).__clawSessionStatusStore;
     expect(anchored).toBeDefined();
     expect(anchored!.get("anchor-check")?.status).toBe("tool_running");
 

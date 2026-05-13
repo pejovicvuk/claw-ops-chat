@@ -28,7 +28,12 @@ describe("decodePngToRgb24", () => {
 
   it("strips alpha so RGBA inputs decode to packed RGB24", async () => {
     const rgba = await sharp({
-      create: { width: 4, height: 4, channels: 4, background: { r: 0, g: 128, b: 255, alpha: 0.5 } },
+      create: {
+        width: 4,
+        height: 4,
+        channels: 4,
+        background: { r: 0, g: 128, b: 255, alpha: 0.5 },
+      },
     })
       .png()
       .toBuffer();

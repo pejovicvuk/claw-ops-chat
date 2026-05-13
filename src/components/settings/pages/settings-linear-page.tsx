@@ -114,8 +114,7 @@ export function SettingsLinearPage() {
           <p className="text-[12px] text-canvas-muted">
             {name || email ? (
               <>
-                Signed in as{" "}
-                <span className="font-mono text-canvas-fg">{name || email}</span>.
+                Signed in as <span className="font-mono text-canvas-fg">{name || email}</span>.
               </>
             ) : (
               "Key saved and MCP server registered."
@@ -226,9 +225,9 @@ export function SettingsLinearPage() {
 
       <p className="text-[10px] text-canvas-muted">
         Key is stored locally in <code>~/.claude/custom-linear/credentials.json</code> (mode 0600)
-        and passed as <code>LINEAR_API_KEY</code> to the{" "}
-        <code>@tacticlaunch/mcp-linear</code> MCP server. Nothing is sent off this server other
-        than the validation probe to <code>api.linear.app/graphql</code>.
+        and passed as <code>LINEAR_API_KEY</code> to the <code>@tacticlaunch/mcp-linear</code> MCP
+        server. Nothing is sent off this server other than the validation probe to{" "}
+        <code>api.linear.app/graphql</code>.
       </p>
     </div>
   );

@@ -207,10 +207,7 @@ export async function closeDrop(entry: DropEntry): Promise<void> {
  * — replaces any prior timer for the same entry. Safe to call after
  * either successful CDP delivery or a failure.
  */
-export function scheduleCleanup(
-  drops: Map<string, DropEntry>,
-  entry: DropEntry,
-): void {
+export function scheduleCleanup(drops: Map<string, DropEntry>, entry: DropEntry): void {
   if (entry.ttlTimer) clearTimeout(entry.ttlTimer);
   entry.ttlTimer = setTimeout(() => {
     drops.delete(entry.start.dropId);
@@ -225,10 +222,7 @@ export function scheduleCleanup(
  * delete the file. Called on WS close while uploads are mid-flight,
  * size-cap violations, etc.
  */
-export async function cancelDrop(
-  drops: Map<string, DropEntry>,
-  dropId: string,
-): Promise<void> {
+export async function cancelDrop(drops: Map<string, DropEntry>, dropId: string): Promise<void> {
   const entry = drops.get(dropId);
   if (!entry) return;
   drops.delete(dropId);

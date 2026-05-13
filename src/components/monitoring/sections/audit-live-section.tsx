@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { FiAlertTriangle, FiDownload, FiRefreshCw, FiTrash2 } from "react-icons/fi";
 import { AuditDetailDrawer } from "@/components/audit/audit-detail-drawer";
 import { AuditFilterBar } from "@/components/audit/audit-filter-bar";
@@ -25,8 +25,8 @@ export function AuditLiveSection() {
   const [filter, setFilter] = useState<AuditFilter>({ limit: 100 });
   const [selected, setSelected] = useState<AuditEvent | null>(null);
   const [dialog, setDialog] = useState<null | { nuke: boolean }>(null);
-  const lastDialogRef = useRef<{ nuke: boolean } | null>(null);
-  if (dialog) lastDialogRef.current = dialog;
+  const [lastDialog, setLastDialog] = useState<{ nuke: boolean } | null>(null);
+  if (dialog && dialog !== lastDialog) setLastDialog(dialog);
   const { mounted: dialogMounted, state: dialogAnim } = useExitAnimation(dialog !== null, 200);
   const [autoRefreshSec, setAutoRefreshSec] = useState<number | null>(10);
 
@@ -159,9 +159,9 @@ export function AuditLiveSection() {
       </CollapsibleBlock>
 
       {selected ? <AuditDetailDrawer event={selected} onClose={() => setSelected(null)} /> : null}
-      {dialogMounted && lastDialogRef.current ? (
+      {dialogMounted && lastDialog ? (
         <BulkDeleteDialog
-          nuke={lastDialogRef.current.nuke}
+          nuke={lastDialog.nuke}
           onClose={() => setDialog(null)}
           onDone={onDialogDone}
           animationState={dialogAnim}

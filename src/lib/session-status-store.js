@@ -20,35 +20,35 @@ exports.setSessionStatus = setSessionStatus;
 exports.clearSessionStatus = clearSessionStatus;
 exports.getSessionStatus = getSessionStatus;
 exports.getAllSessionStatuses = getAllSessionStatuses;
-const store = globalThis.__clawSessionStatusStore ??
-    (globalThis.__clawSessionStatusStore = new Map());
+const store =
+  globalThis.__clawSessionStatusStore ?? (globalThis.__clawSessionStatusStore = new Map());
 function setSessionStatus(sessionId, status) {
-    store.set(sessionId, { status, lastActivityAt: Date.now() });
-    if (process.env.DEBUG_SESSION_STATUS === "1") {
-        // Opt-in log so operators can confirm the status pipeline is alive
-        // when users report "no indicators". Keep behind an env flag so prod
-        // isn't drowning in tiny writes.
-        console.log(`[status] ${sessionId.slice(0, 8)}… → ${status} (total=${store.size})`);
-    }
+  store.set(sessionId, { status, lastActivityAt: Date.now() });
+  if (process.env.DEBUG_SESSION_STATUS === "1") {
+    // Opt-in log so operators can confirm the status pipeline is alive
+    // when users report "no indicators". Keep behind an env flag so prod
+    // isn't drowning in tiny writes.
+    console.log(`[status] ${sessionId.slice(0, 8)}… → ${status} (total=${store.size})`);
+  }
 }
 function clearSessionStatus(sessionId) {
-    store.delete(sessionId);
+  store.delete(sessionId);
 }
 function getSessionStatus(sessionId) {
-    return store.get(sessionId);
+  return store.get(sessionId);
 }
 /**
  * Snapshot of every active session's status. Used by the
  * /api/sessions/status endpoint that the sidebar polls.
  */
 function getAllSessionStatuses() {
-    const out = {};
-    for (const [id, entry] of store) {
-        out[id] = entry;
-    }
-    if (process.env.DEBUG_SESSION_STATUS === "1") {
-        const active = Object.values(out).filter((e) => e.status !== "idle").length;
-        console.log(`[status] GET /sessions/status → ${store.size} entries, ${active} active`);
-    }
-    return out;
+  const out = {};
+  for (const [id, entry] of store) {
+    out[id] = entry;
+  }
+  if (process.env.DEBUG_SESSION_STATUS === "1") {
+    const active = Object.values(out).filter((e) => e.status !== "idle").length;
+    console.log(`[status] GET /sessions/status → ${store.size} entries, ${active} active`);
+  }
+  return out;
 }

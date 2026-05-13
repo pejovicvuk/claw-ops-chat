@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { FiSettings, FiX, FiLogOut, FiArrowLeft } from "react-icons/fi";
 import { authFetch, clearAuth } from "@/lib/auth";
 import { clearAccessToken } from "@/lib/apiClient";
@@ -135,9 +135,9 @@ export function SettingsOverlay() {
   // While exiting the URL has already lost ?settings=, so `page` flips to null
   // — keep the last seen page around so we can render the same content during
   // the exit animation rather than blanking the modal mid-fade.
-  const lastPageRef = useRef<PageKey | null>(page);
-  if (page !== null) lastPageRef.current = page;
-  const renderPage = page ?? lastPageRef.current;
+  const [lastPage, setLastPage] = useState<PageKey | null>(page);
+  if (page !== null && page !== lastPage) setLastPage(page);
+  const renderPage = page ?? lastPage;
   const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   const close = useCallback(() => {

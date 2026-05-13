@@ -65,12 +65,15 @@ export function ChatFilesProvider({
     setPaths(EMPTY_PATHS_INTERNAL);
   }
 
-  const reportPath = useCallback((path: string) => {
-    if (!path) return;
-    if (setHolder.set.has(path)) return;
-    setHolder.set.add(path);
-    setPaths(Array.from(setHolder.set).sort());
-  }, [setHolder]);
+  const reportPath = useCallback(
+    (path: string) => {
+      if (!path) return;
+      if (setHolder.set.has(path)) return;
+      setHolder.set.add(path);
+      setPaths(Array.from(setHolder.set).sort());
+    },
+    [setHolder],
+  );
 
   const value = useMemo<ChatFilesContextValue>(() => ({ paths, reportPath }), [paths, reportPath]);
 

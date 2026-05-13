@@ -39,13 +39,7 @@ export function RateLimitIndicator({ label, window, onClick, isOpen }: RateLimit
   // but utilization wasn't reported (the API headers carry status
   // without a number). That way the user still sees colour signal.
   const visualPct =
-    pct !== null
-      ? pct
-      : status === "rejected"
-        ? 100
-        : status === "allowed_warning"
-          ? 80
-          : 0;
+    pct !== null ? pct : status === "rejected" ? 100 : status === "allowed_warning" ? 80 : 0;
   const dashOffset = circumference * (1 - visualPct / 100);
 
   const arcColor = (() => {

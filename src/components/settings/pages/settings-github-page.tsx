@@ -109,7 +109,9 @@ export function SettingsGithubPage() {
           </div>
           <p className="text-[12px] text-canvas-muted">
             {login ? (
-              <>Signed in as <span className="font-mono text-canvas-fg">@{login}</span>.</>
+              <>
+                Signed in as <span className="font-mono text-canvas-fg">@{login}</span>.
+              </>
             ) : (
               "Token saved and MCP server registered."
             )}{" "}
@@ -147,7 +149,9 @@ export function SettingsGithubPage() {
       <div className="rounded-xl border border-canvas-border bg-canvas-surface p-4">
         <div className="mb-2 flex items-center gap-2">
           <FiGithub size={14} className="text-canvas-fg" />
-          <span className="text-[13px] font-medium text-canvas-fg">Paste a personal access token</span>
+          <span className="text-[13px] font-medium text-canvas-fg">
+            Paste a personal access token
+          </span>
         </div>
         <p className="mb-3 text-[11px] leading-relaxed text-canvas-muted">
           Generate a token at{" "}
@@ -163,8 +167,8 @@ export function SettingsGithubPage() {
           <code className="rounded bg-canvas-bg px-1 py-0.5">repo</code>{" "}
           <code className="rounded bg-canvas-bg px-1 py-0.5">read:user</code>{" "}
           <code className="rounded bg-canvas-bg px-1 py-0.5">read:org</code>{" "}
-          <code className="rounded bg-canvas-bg px-1 py-0.5">workflow</code>. Fine-grained
-          tokens work too — give them read+write on the repos you want Claude to touch.
+          <code className="rounded bg-canvas-bg px-1 py-0.5">workflow</code>. Fine-grained tokens
+          work too — give them read+write on the repos you want Claude to touch.
         </p>
 
         <div className="space-y-3">
@@ -222,12 +226,11 @@ export function SettingsGithubPage() {
       </div>
 
       <p className="text-[10px] text-canvas-muted">
-        Token is stored locally in a root-owned file inside the container
-        (<code>~/.claude/custom-github/credentials.json</code>, mode 0600) and
-        passed as <code>GITHUB_PERSONAL_ACCESS_TOKEN</code> to the{" "}
-        <code>@modelcontextprotocol/server-github</code> MCP server on every
-        chat query. Nothing is sent off this server other than the validation
-        probe to <code>api.github.com/user</code>.
+        Token is stored locally in a root-owned file inside the container (
+        <code>~/.claude/custom-github/credentials.json</code>, mode 0600) and passed as{" "}
+        <code>GITHUB_PERSONAL_ACCESS_TOKEN</code> to the{" "}
+        <code>@modelcontextprotocol/server-github</code> MCP server on every chat query. Nothing is
+        sent off this server other than the validation probe to <code>api.github.com/user</code>.
       </p>
     </div>
   );

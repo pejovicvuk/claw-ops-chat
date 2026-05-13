@@ -177,9 +177,7 @@ describe("preview-stream/health", () => {
       reg?.recordResourceKill("heartbeat_timeout");
       reg?.recordReconnect("heartbeat_timeout");
       expect(previewSpy).toHaveBeenCalledTimes(2);
-      const types = previewSpy.mock.calls.map(
-        (c) => (c[0] as { type: string }).type,
-      );
+      const types = previewSpy.mock.calls.map((c) => (c[0] as { type: string }).type);
       expect(types).toEqual(["resource_kill", "reconnect"]);
     });
 

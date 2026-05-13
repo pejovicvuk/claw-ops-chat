@@ -110,10 +110,7 @@
       "Bash(git push origin main)",
       "Bash(git push origin master)"
     ],
-    "additionalDirectories": [
-      "e:\\Reputeo\\claw-ops-chat",
-      "\\tmp"
-    ]
+    "additionalDirectories": ["e:\\Reputeo\\claw-ops-chat", "\\tmp"]
   },
   "hooks": {
     "PreToolUse": [

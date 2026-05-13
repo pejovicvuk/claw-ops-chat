@@ -22,28 +22,24 @@ const os_1 = require("os");
 const CREDENTIALS_DIR = (0, path_1.join)((0, os_1.homedir)(), ".claude", "custom-trello");
 const CREDENTIALS_FILE = (0, path_1.join)(CREDENTIALS_DIR, "credentials.json");
 async function saveCredentials(creds) {
-    await (0, promises_1.mkdir)(CREDENTIALS_DIR, { recursive: true });
-    await (0, promises_1.writeFile)(CREDENTIALS_FILE, JSON.stringify(creds, null, 2), "utf-8");
-    try {
-        await (0, promises_1.chmod)(CREDENTIALS_FILE, 0o600);
-    }
-    catch {
-        /* non-POSIX */
-    }
+  await (0, promises_1.mkdir)(CREDENTIALS_DIR, { recursive: true });
+  await (0, promises_1.writeFile)(CREDENTIALS_FILE, JSON.stringify(creds, null, 2), "utf-8");
+  try {
+    await (0, promises_1.chmod)(CREDENTIALS_FILE, 0o600);
+  } catch {
+    /* non-POSIX */
+  }
 }
 async function loadCredentials() {
-    if (!(0, fs_1.existsSync)(CREDENTIALS_FILE))
-        return null;
-    try {
-        const raw = await (0, promises_1.readFile)(CREDENTIALS_FILE, "utf-8");
-        const parsed = JSON.parse(raw);
-        if (!parsed.apiKey || !parsed.apiToken)
-            return null;
-        return parsed;
-    }
-    catch {
-        return null;
-    }
+  if (!(0, fs_1.existsSync)(CREDENTIALS_FILE)) return null;
+  try {
+    const raw = await (0, promises_1.readFile)(CREDENTIALS_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed.apiKey || !parsed.apiToken) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 /**
  * Sync variant used inside the query hot-path in server.ts. Re-read on
@@ -51,21 +47,18 @@ async function loadCredentials() {
  * container restart.
  */
 function loadCredentialsSync() {
-    if (!(0, fs_1.existsSync)(CREDENTIALS_FILE))
-        return null;
-    try {
-        const raw = (0, fs_1.readFileSync)(CREDENTIALS_FILE, "utf-8");
-        const parsed = JSON.parse(raw);
-        if (!parsed.apiKey || !parsed.apiToken)
-            return null;
-        return parsed;
-    }
-    catch {
-        return null;
-    }
+  if (!(0, fs_1.existsSync)(CREDENTIALS_FILE)) return null;
+  try {
+    const raw = (0, fs_1.readFileSync)(CREDENTIALS_FILE, "utf-8");
+    const parsed = JSON.parse(raw);
+    if (!parsed.apiKey || !parsed.apiToken) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 async function deleteCredentials() {
-    if ((0, fs_1.existsSync)(CREDENTIALS_FILE)) {
-        await (0, promises_1.unlink)(CREDENTIALS_FILE).catch(() => { });
-    }
+  if ((0, fs_1.existsSync)(CREDENTIALS_FILE)) {
+    await (0, promises_1.unlink)(CREDENTIALS_FILE).catch(() => {});
+  }
 }

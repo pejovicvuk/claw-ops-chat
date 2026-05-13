@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FiLoader } from "react-icons/fi";
 import type { AuditEvent } from "@/lib/audit/types";
 import { AuditRow } from "./audit-row";
@@ -23,9 +23,9 @@ export function AuditTable({ events, hasMore, loading, onLoadMore, onSelect }: A
   // Cascade in the first 8 rows of the FIRST non-empty render only. Events
   // that stream in via the IntersectionObserver pagination or live polling
   // don't restagger.
-  const initialIdsRef = useRef<Set<string> | null>(null);
-  if (initialIdsRef.current === null && events.length > 0) {
-    initialIdsRef.current = new Set(events.map(eventKey));
+  const [initialIds, setInitialIds] = useState<Set<string> | null>(null);
+  if (initialIds === null && events.length > 0) {
+    setInitialIds(new Set(events.map(eventKey)));
   }
 
   // IntersectionObserver sentinel — load more as the user scrolls to the
@@ -59,7 +59,7 @@ export function AuditTable({ events, hasMore, loading, onLoadMore, onSelect }: A
       <div className="max-h-[420px] overflow-y-auto">
         {events.map((event, eventIndex) => {
           const key = eventKey(event);
-          const isInitial = initialIdsRef.current?.has(key) === true;
+          const isInitial = initialIds?.has(key) === true;
           const staggerIdx = isInitial && eventIndex < 8 ? eventIndex : -1;
           return <AuditRow key={key} event={event} onSelect={onSelect} staggerIndex={staggerIdx} />;
         })}
